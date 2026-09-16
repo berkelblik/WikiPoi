@@ -203,7 +203,12 @@
     }
 
     const data = await response.json();
-    return parseSparqlResults(data);
+    // Eén Wikidata-item kan meerdere keren in de ruwe SPARQL-respons
+    // voorkomen — bijv. als het via meerdere routes in de klasse-
+    // hiërarchie aan het instanceOf-filter voldoet. Dedupliceren
+    // voorkomt dat de aanroeper (en uiteindelijk de CSV) hetzelfde punt
+    // dubbel krijgt.
+    return dedupeById(parseSparqlResults(data));
   }
 
   return {
