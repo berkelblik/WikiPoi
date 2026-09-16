@@ -91,6 +91,84 @@
   }
 
   /**
+   * Bouwt de URL voor de klassieke MediaWiki-actie-API met de
+   * TextExtracts-extensie (`prop=extracts`). In tegenstelling tot de
+   * REST /page/summary/-endpoint (die alleen de INLEIDENDE alinea vóór
+   * de eerste kop teruggeeft) telt `exsentences` hier door het HELE
+   * artikel heen, dus ook door tekst die onder kopjes als "Geschiedenis"
+   * of "Interieur" staat. Voor korte artikelen waarvan de inleiding
+   * toevallig maar uit één zin bestaat, levert dit een veel rijker
+   * resultaat op.
+   *
+   * `origin=*` is vereist voor CORS bij aanroep vanuit de browser; in
+   * Node heeft de parameter geen effect maar is hij onschadelijk.
+   */
+  function buildFullBodyExtractEndpoint(lang, title, maxSentences) {
+    const params = new URLSearchParams({
+      action: 'query',
+      format: 'json',
+      formatversion: '2',
+      prop: 'extracts',
+      exsentences: String(maxSentences || DEFAULT_MAX_SENTENCES),
+      explaintext: '1',
+      redirects: '1',
+      origin: '*',
+      titles: title,
+    });
+    return 'https://' + lang + '.wikipedia.org/w/api.php?' + params.toString();
+  }
+
+  /**
+   * Haalt, via de klassieke actie-API, de eerste `maxSentences` zinnen op
+   * uit het VOLLEDIGE artikel (niet beperkt tot de inleidende alinea).
+   * Geeft `null` terug (in plaats van te gooien) als er iets misgaat of
+   * de pagina niet gevonden wordt — de aanroeper valt dan terug op de
+   * kortere REST-samenvatting, zodat één mislukte aanvullende aanroep
+   * nooit de hele samenvatting laat mislukken.
+   *
+   * @returns {Promise<string|null>}
+   */
+  async function fetchFullBodyExtract(lang, title, maxSentences, options) {
+    options = options || {};
+    const endpoint = buildFullBodyExtractEndpoint(lang, title, maxSentences);
+    const timeoutMs = options.timeoutMs || DEFAULT_TIMEOUT_MS;
+    const hasAbortController = typeof AbortController !== 'undefined';
+    const controller = hasAbortController ? new AbortController() : null;
+    let timeoutId = null;
+    if (controller) {
+      timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    }
+
+    const headers = { Accept: 'application/json' };
+    if (options.userAgent) {
+      headers['User-Agent'] = options.userAgent;
+    }
+
+    try {
+      const response = await fetch(endpoint, {
+        headers: headers,
+        signal: controller ? controller.signal : undefined,
+      });
+      if (!response.ok) return null;
+
+      const data = await response.json();
+      const pages = data && data.query && data.query.pages;
+      if (!Array.isArray(pages) || pages.length === 0) return null;
+
+      const page = pages[0];
+      if (page.missing || !page.extract) return null;
+
+      return page.extract;
+    } catch (err) {
+      // Netwerkfout, timeout, of onverwachte responsvorm — stilzwijgend
+      // null teruggeven; fetchSummary() vangt dit op met een terugval.
+      return null;
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+    }
+  }
+
+  /**
    * Haalt de samenvatting op voor één Wikipedia-URL.
    *
    * @param {string} wikipediaUrl
@@ -148,10 +226,23 @@
     const data = await response.json();
     const extract = data.extract || '';
 
+    // De REST-inleiding kan (bij korte artikelen) maar één zin lang zijn
+    // terwijl de rest van het artikel onder kopjes wel degelijk meer
+    // vertelt. Probeer daarom aanvullend het volledige artikel te
+    // doorzoeken; lukt dat niet, dan valt extractShort gewoon terug op
+    // de REST-inleiding (huidig gedrag, geen regressie).
+    const fullBodyExtract = await fetchFullBodyExtract(
+      parsed.lang,
+      data.title || parsed.title,
+      options.maxSentences,
+      options
+    );
+    const richestExtract = fullBodyExtract || extract;
+
     return {
       title: data.title || parsed.title,
       extract: extract,
-      extractShort: truncateToSentences(extract, options.maxSentences),
+      extractShort: truncateToSentences(richestExtract, options.maxSentences),
       thumbnailUrl: (data.thumbnail && data.thumbnail.source) || null,
       pageUrl:
         (data.content_urls &&
@@ -230,6 +321,8 @@
   return {
     parseWikipediaUrl,
     buildSummaryEndpoint,
+    buildFullBodyExtractEndpoint,
+    fetchFullBodyExtract,
     truncateToSentences,
     fetchSummary,
     fetchSummariesForCandidates,
