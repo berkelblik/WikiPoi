@@ -33,3 +33,67 @@ WikiPoi hergebruikt bewust de CSV/Plus Code-aanpak uit EuroPoi's bestaande `gpx2
 🚧 Vroege ontwikkelfase. Eerste bouwsteen (CSV/Plus Code-module) is overgenomen uit EuroPoi. Wikidata/OSM-zoeklogica en Wikipedia-samenvatting volgen.
 
 ## Architectuur (voorlopig)
+
+```
+GPX-route
+   │
+   ▼
+[ Route-buffer berekenen ]         ~400m aan weerszijden van de lijn (ruime
+   │                               zoekstraal, proefondervindelijk te
+   │                               verfijnen — zie "Twee afstandsbegrippen")
+   ▼
+[ Wikidata SPARQL-query ]          monumenten/POI's binnen de buffer
+   │  (aangevuld met OpenStreetMap waar Wikidata leeg is)
+   ▼
+[ Wikipedia-samenvatting ophalen ] 2-3 zinnen per POI, via /page/summary/
+   │
+   ▼
+[ Preview & trigger-afstand ]      gebruiker ziet gevonden punten + afstand
+   │                               tot de route, stelt trigger-afstand in
+   ▼
+[ EuroPoi-CSV genereren ]          src/europoi-csv.js (hergebruikt);
+   │                               category = routenaam, radius = trigger-afstand
+   ▼
+CSV klaar voor import in EuroPoi
+```
+
+### Twee afstandsbegrippen
+
+WikiPoi onderscheidt bewust twee verschillende afstanden, die niet hetzelfde zijn:
+
+| Parameter | Doel | Typische waarde |
+|---|---|---|
+| **Zoekstraal** | Hoe ver van de route Wikidata/OSM wordt doorzocht naar kandidaten | ~400m (ruim, om niets te missen) |
+| **Trigger-afstand** | Vanaf welke afstand de audio in EuroPoi daadwerkelijk afspeelt | Door de gebruiker instelbaar, per POI meegegeven als `radius`-veld in de CSV |
+
+Door ruim te zoeken (400m) maar de trigger-afstand apart en instelbaar te houden, kan de gebruiker na het zoeken — zonder opnieuw te hoeven zoeken — proefondervindelijk bepalen welke gevonden punten daadwerkelijk relevant genoeg zijn om onderweg te triggeren.
+
+### Koppeling met EuroPoi's trigger-mechanisme
+
+EuroPoi triggert een POI alleen wanneer het `category`-veld van die POI *exact* overeenkomt met de naam van de ingeladen route (GPX-bestand). Omdat WikiPoi de route al vooraf inleest, vult het automatisch `category` met de routenaam (uit de `<name>`-tag in de GPX, met de bestandsnaam als fallback) voor elke gevonden POI. Zo werkt de gegenereerde CSV meteen correct in EuroPoi, zonder dat de gebruiker dat handmatig hoeft aan te passen.
+
+Voordat de definitieve CSV wordt gegenereerd, toont WikiPoi een **preview**: alle gevonden punten met hun afstand tot de route. De gebruiker stelt daar de trigger-afstand in en ziet direct welke punten daarmee wel of niet zouden triggeren.
+
+## Bouwstenen (modulair, zoals ook EuroPoi is opgezet)
+
+- **`src/europoi-csv.js`** — Plus Code-encoder + CSV-writer (overgenomen uit EuroPoi's `gpx2europoi.html`, ongewijzigd qua uitvoerformaat)
+- **`src/route-buffer.js`** *(nog te bouwen)* — berekent een zoekgebied (~400m) rond een GPX-track
+- **`src/wikidata-search.js`** *(nog te bouwen)* — SPARQL-query naar de Wikidata Query Service
+- **`src/wikipedia-summary.js`** *(nog te bouwen)* — haalt en verkort Wikipedia-samenvattingen
+- **`src/osm-fallback.js`** *(nog te bouwen)* — aanvullende zoekactie via OpenStreetMap/Overpass waar Wikidata niets oplevert
+- **`src/trigger-preview.js`** *(nog te bouwen)* — toont gevonden punten met afstand tot de route en laat de gebruiker de trigger-afstand instellen
+
+Elk blokje is losstaand testbaar en vervangbaar — als een van de externe bronnen (Wikidata, Wikipedia, OSM) van API verandert, hoeft alleen dat blokje aangepast te worden.
+
+## Meewerken
+
+Zie [`CONTRIBUTING.md`](CONTRIBUTING.md). Dit project is open-source; iedereen die kan programmeren mag meebouwen of verbeteren.
+
+## Licentie
+
+Nog te bepalen — waarschijnlijk MIT voor eigen code. De Plus Code-encoder in `src/europoi-csv.js` is een poort van Google's officiële [Open Location Code](https://github.com/google/open-location-code)-implementatie (Apache License 2.0) en behoudt die licentie/copyright-notice.
+
+## Gerelateerd
+
+- [EuroPoi](https://github.com/berkelblik/EuroPoi) — de app zelf (PWA + AndroidLite)
+- [www.europoi.nl](https://www.europoi.nl) — publieksgerichte site met de handmatige CSV-conversietool en gebruiksinstructies
