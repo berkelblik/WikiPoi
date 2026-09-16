@@ -1,1 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="WikiPoi" xmlns="http://www.topografix.com/GPX/1/1">
+  <trk>
+    <name>Voorbeeldroute Achterhoek</name>
+    <trkseg>
+      <trkpt lat="52.1326" lon="6.1877"></trkpt>
+      <trkpt lat="52.1400" lon="6.2050"></trkpt>
+      <trkpt lat="52.1500" lon="6.2200"></trkpt>
+      <trkpt lat="52.1600" lon="6.2400"></trkpt>
+    </trkseg>
+  </trk>
+</gpx>
 
