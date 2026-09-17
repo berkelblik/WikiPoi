@@ -38,6 +38,10 @@
    * - label: Nederlandse tekst voor het aanvinklijstje
    * - description: korte toelichting (optioneel te tonen, bijv. als tooltip)
    * - qids: Wikidata-QID's waarop gefilterd wordt (instance of / subclass of)
+   * - osmTags: OpenStreetMap-tagfilters voor osm-fallback.js — een array
+   *   van filtergroepen; elke filtergroep is een array van {key, value}
+   *   (AND binnen een groep, OR tussen groepen). Gebruikt als Wikidata
+   *   niets opleverde voor deze categorie in een bepaald gebied.
    * - defaultEnabled: of deze categorie standaard is aangevinkt
    */
   const CATEGORIES = [
@@ -46,6 +50,7 @@
       label: 'Kerken',
       description: 'Kerkgebouwen',
       qids: ['Q16970'], // church building
+      osmTags: [[{ key: 'amenity', value: 'place_of_worship' }, { key: 'religion', value: 'christian' }]],
       defaultEnabled: true,
     },
     {
@@ -53,6 +58,7 @@
       label: 'Molens',
       description: 'Wind- en watermolens',
       qids: ['Q38720'], // windmill
+      osmTags: [[{ key: 'man_made', value: 'windmill' }]],
       defaultEnabled: true,
     },
     {
@@ -60,6 +66,7 @@
       label: 'Musea',
       description: 'Musea en tentoonstellingsruimtes',
       qids: ['Q33506'], // museum
+      osmTags: [[{ key: 'tourism', value: 'museum' }]],
       defaultEnabled: false,
     },
     {
@@ -67,6 +74,7 @@
       label: 'Kastelen',
       description: 'Kastelen en vestingwerken',
       qids: ['Q23413'], // castle
+      osmTags: [[{ key: 'historic', value: 'castle' }]],
       defaultEnabled: true,
     },
     {
@@ -79,6 +87,10 @@
         'Q188055', // siege
         'Q575759', // war memorial
       ],
+      osmTags: [
+        [{ key: 'historic', value: 'memorial' }, { key: 'memorial', value: 'war_memorial' }],
+        [{ key: 'historic', value: 'battlefield' }],
+      ],
       defaultEnabled: true,
     },
     {
@@ -86,6 +98,7 @@
       label: 'Archeologie',
       description: 'Archeologische vindplaatsen',
       qids: ['Q839954'], // archaeological site
+      osmTags: [[{ key: 'historic', value: 'archaeological_site' }]],
       defaultEnabled: false,
     },
     {
@@ -93,6 +106,7 @@
       label: 'Natuurgebieden',
       description: 'Beschermde natuurgebieden',
       qids: ['Q179049'], // nature reserve
+      osmTags: [[{ key: 'leisure', value: 'nature_reserve' }]],
       defaultEnabled: false,
     },
   ];
@@ -104,7 +118,12 @@
   function getCategories() {
     // Kopie teruggeven zodat de aanroeper de vaste tabel niet per ongeluk
     // kan muteren.
-    return CATEGORIES.map((c) => Object.assign({}, c, { qids: c.qids.slice() }));
+    return CATEGORIES.map((c) =>
+      Object.assign({}, c, {
+        qids: c.qids.slice(),
+        osmTags: c.osmTags.map((group) => group.map((tag) => Object.assign({}, tag))),
+      })
+    );
   }
 
   /**
@@ -141,9 +160,34 @@
     return Array.from(qids);
   }
 
+  /**
+   * Zet een lijst van aangevinkte categorie-keys om naar een platte lijst
+   * van OSM-tagfiltergroepen — direct bruikbaar voor osm-fallback.js.
+   * Elke filtergroep is een array van {key, value}-paren (AND binnen een
+   * groep); de teruggegeven array is de OR van alle groepen van alle
+   * aangevinkte categorieën. Onbekende keys worden net als bij
+   * qidsForKeys() stilzwijgend genegeerd.
+   *
+   * @param {string[]} selectedKeys
+   * @returns {Array<Array<{key:string, value:string}>>}
+   */
+  function osmTagFiltersForKeys(selectedKeys) {
+    const keys = new Set(selectedKeys || []);
+    const groups = [];
+    for (const category of CATEGORIES) {
+      if (keys.has(category.key)) {
+        for (const group of category.osmTags) {
+          groups.push(group.map((tag) => Object.assign({}, tag)));
+        }
+      }
+    }
+    return groups;
+  }
+
   return {
     getCategories,
     getDefaultSelectedKeys,
     qidsForKeys,
+    osmTagFiltersForKeys,
   };
 });
