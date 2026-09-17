@@ -29,9 +29,10 @@
   'use strict';
 
   const OVERPASS_ENDPOINT = 'https://overpass-api.de/api/interpreter';
-  const DEFAULT_TIMEOUT_MS = 25000;
-  const DEFAULT_MAX_RETRIES = 1; // 1 automatische herhaling = max. 2 pogingen totaal
-  const OVERPASS_QUERY_TIMEOUT_S = 25; // moet iets onder DEFAULT_TIMEOUT_MS blijven
+  const DEFAULT_TIMEOUT_MS = 40000;
+  const DEFAULT_MAX_RETRIES = 2; // 2 automatische herhalingen = max. 3 pogingen totaal
+  const RETRY_BACKOFF_MS = 3000; // korte pauze tussen pogingen, oplopend per poging
+  const OVERPASS_QUERY_TIMEOUT_S = 38; // moet iets onder DEFAULT_TIMEOUT_MS blijven
 
   /**
    * Bouwt de Overpass QL-query voor een bounding box en een lijst
@@ -195,7 +196,9 @@
         if (!isTimeout || !hasRetriesLeft) {
           throw err;
         }
-        // Stilzwijgend opnieuw proberen bij een timeout.
+        // Korte, oplopende pauze vóór de volgende poging, zelfde reden
+        // als in wikidata-search.js.
+        await new Promise((resolve) => setTimeout(resolve, RETRY_BACKOFF_MS * (attempt + 1)));
       }
     }
     if (lastError) throw lastError;
