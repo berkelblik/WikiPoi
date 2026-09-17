@@ -35,8 +35,9 @@
   const WIKIDATA_SPARQL_ENDPOINT = 'https://query.wikidata.org/sparql';
   const DEFAULT_LANGUAGE = 'nl';
   const DEFAULT_LIMIT = 300;
-  const DEFAULT_TIMEOUT_MS = 25000;
-  const DEFAULT_MAX_RETRIES = 1; // 1 automatische herhaling = max. 2 pogingen totaal
+  const DEFAULT_TIMEOUT_MS = 40000;
+  const DEFAULT_MAX_RETRIES = 2; // 2 automatische herhalingen = max. 3 pogingen totaal
+  const RETRY_BACKOFF_MS = 3000; // korte pauze tussen pogingen, oplopend per poging
 
   /**
    * Bouwt de SPARQL-query voor een bounding-box-zoekopdracht.
@@ -236,9 +237,10 @@
         if (!isTimeout || !hasRetriesLeft) {
           throw err;
         }
-        // Stilzwijgend opnieuw proberen bij een timeout; een echte
-        // HTTP-foutmelding (bijv. 403/500) wordt hierboven al meteen
-        // gegooid en dus niet herhaald.
+        // Korte, oplopende pauze vóór de volgende poging — geeft een
+        // tijdelijk drukke periode bij Wikidata de kans om te zakken,
+        // in plaats van meteen weer tegen dezelfde traagheid aan te lopen.
+        await new Promise((resolve) => setTimeout(resolve, RETRY_BACKOFF_MS * (attempt + 1)));
       }
     }
     throw lastError;
