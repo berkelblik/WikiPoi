@@ -2,27 +2,33 @@
 /**
  * poc-gpx-naar-csv.js
  *
- * RUW proof-of-concept-script (geen onderdeel van src/) dat de vier
- * bestaande WikiPoi-modules aan elkaar knoopt tot één werkende pijplijn:
+ * RUW proof-of-concept-script (geen onderdeel van src/) dat de WikiPoi-
+ * modules aan elkaar knoopt tot één werkende pijplijn:
  *
  *   GPX-bestand
  *     → route-buffer.js       (track/route inlezen, bounding box)
  *     → poi-categories.js     (categorie-filter → Wikidata-QID's + OSM-tags)
  *     → wikidata-search.js    (kandidaat-POI's ophalen)
  *     → osm-fallback.js       (draait standaard ALTIJD aanvullend mee)
- *     → route-buffer.js       (filteren op werkelijke afstand tot de route)
+ *     → route-buffer.js       (werkelijke afstand tot de route berekenen)
  *     → wikipedia-summary.js  (samenvatting per kandidaat ophalen)
- *     → europoi-csv.js        (CSV met BOM/CRLF genereren)
- *
- * Er is nog GEEN preview-UI (trigger-preview.js) — de trigger-afstand
- * wordt hier via een commandoregel-parameter meegegeven in plaats van
- * interactief ingesteld.
+ *     → ÓF europoi-csv.js     (CSV met BOM/CRLF genereren)
+ *       ÓF preview-html.js    (bij --preview: HTML-kaart met trigger-schuifje)
  *
  * Gebruik:
- *   node poc-gpx-naar-csv.js <invoer.gpx> [uitvoer.csv] [zoekstraal_m] [trigger_afstand_m] [categorieën] [osm_skip_drempel]
+ *   node poc-gpx-naar-csv.js <invoer.gpx> [uitvoer] [zoekstraal_m] [trigger_afstand_m] [categorieën] [osm_skip_drempel] [--preview]
  *
- * Voorbeeld:
+ * Voorbeelden:
  *   node poc-gpx-naar-csv.js examples/Utrechtse_Waterlinie.gpx waterlinie.csv 400 75 kerken,molens,kastelen,oorlogsgeschiedenis
+ *   node poc-gpx-naar-csv.js examples/Utrechtse_Waterlinie.gpx waterlinie.preview.html 400 75 kerken,molens --preview
+ *
+ * Werkwijze met --preview: eerst zonder definitieve trigger-afstand een
+ * preview genereren, in de browser bekijken en met het schuifje de
+ * gewenste trigger-afstand bepalen, en dán dit script ZONDER --preview
+ * opnieuw draaien met die afstand als vierde argument voor de
+ * definitieve CSV. De preview-stap genereert bewust geen CSV, en de
+ * CSV-stap bewust geen HTML — dat houdt beide onderdelen simpel en
+ * onafhankelijk testbaar.
  */
 
 const fs = require('fs');
@@ -67,11 +73,26 @@ const DUPLICATE_DISTANCE_METERS = 30;
  * @param {string} [options.language='nl']
  * @param {number} [options.osmFallbackSkipThreshold=Infinity] - zie DEFAULT_OSM_FALLBACK_SKIP_THRESHOLD;
  *   geef een eindig getal om de OSM-aanvulling over te slaan zodra Wikidata al minstens dit aantal vond
+ * @param {boolean} [options.previewMode=false] - true: verrijk ALLE kandidaten binnen de
+ *   zoekstraal (niet alleen die binnen triggerDistanceMeters) met een Wikipedia-samenvatting,
+ *   en genereer GEEN CSV — bedoeld voor gebruik met preview-html.js, waar de gebruiker de
+ *   trigger-afstand nog interactief instelt
  * @param {Function} [options.searchWikidataBox] - override voor tests
  * @param {Function} [options.searchOverpass] - override voor tests
  * @param {Function} [options.fetchSummariesForCandidates] - override voor tests
  * @param {Function} [options.log] - override voor tests (standaard console.log)
- * @returns {Promise<{routeName:string, csv:string|null, pois:Array, candidates:Array, withinTrigger:Array}>}
+ * @returns {Promise<{
+ *   routeName: string,
+ *   routePoints: Array<{lat:number,lng:number}>,
+ *   csv: string|null,
+ *   pois: Array,
+ *   candidates: Array,
+ *   withinTrigger: Array,
+ *   previewCandidates: (Array|undefined)
+ * }>}
+ *   previewCandidates is alleen gevuld wanneer previewMode:true — ALLE kandidaten
+ *   binnen de zoekstraal, elk met distanceToRouteMeters én een Wikipedia-samenvatting
+ *   (of summaryError), rechtstreeks bruikbaar als input voor preview-html.js.
  */
 async function runPipeline(options) {
   const {
@@ -82,6 +103,7 @@ async function runPipeline(options) {
     categoryKeys,
     language = 'nl',
     osmFallbackSkipThreshold = DEFAULT_OSM_FALLBACK_SKIP_THRESHOLD,
+    previewMode = false,
     searchWikidataBox = wikidataSearch.searchWikidataBox,
     searchOverpass = osmFallback.searchOverpass,
     fetchSummariesForCandidates = wikipediaSummary.fetchSummariesForCandidates,
@@ -123,7 +145,7 @@ async function runPipeline(options) {
   // Wikidata al minstens osmFallbackSkipThreshold kandidaten vond. OSM-
   // resultaten die vrijwel op dezelfde plek liggen als een reeds gevonden
   // Wikidata-kandidaat worden overgeslagen — dezelfde fysieke plek hoeft
-  // niet twee keer in de CSV.
+  // niet twee keer in de CSV of preview.
   if (candidates.length < osmFallbackSkipThreshold) {
     log(
       Number.isFinite(osmFallbackSkipThreshold)
@@ -155,36 +177,78 @@ async function runPipeline(options) {
     );
   }
 
-  // 5. Filteren op de WERKELIJKE afstand tot de route (de bbox is een
-  // rechthoek, dus bevat ook punten die verder dan de zoekstraal van de
-  // route zelf liggen; en de trigger-afstand kan bovendien kleiner zijn
-  // dan de zoekstraal). Dit vervangt tijdelijk de nog te bouwen
-  // preview-stap, waarin de gebruiker dit interactief zou doen.
-  const withinTrigger = [];
-  for (const candidate of candidates) {
+  // 5. Werkelijke afstand tot de route berekenen voor ALLE kandidaten (de
+  // bbox is een rechthoek, dus bevat ook punten die verder dan de
+  // zoekstraal van de route zelf liggen). Dit gebeurt nu voor ALLE
+  // kandidaten — niet alleen die binnen de trigger-afstand vallen — zodat
+  // preview-modus ook de kandidaten ERBUITEN kan tonen (grijs/uitgevouwen
+  // op de kaart) terwijl de gebruiker de trigger-afstand nog instelt.
+  const candidatesWithDistance = candidates.map((candidate) => {
     const distance = routeBuffer.distanceToRoute(candidate, parsedRoute.points);
-    if (distance <= triggerDistanceMeters) {
-      withinTrigger.push(
-        Object.assign({}, candidate, { distanceToRouteMeters: Math.round(distance) })
-      );
-    }
-  }
+    return Object.assign({}, candidate, { distanceToRouteMeters: Math.round(distance) });
+  });
+
+  const withinTrigger = candidatesWithDistance.filter(
+    (c) => c.distanceToRouteMeters <= triggerDistanceMeters
+  );
   log(
-    `${withinTrigger.length} van de ${candidates.length} kandidaten liggen binnen de trigger-afstand van ${triggerDistanceMeters}m.`
+    `${withinTrigger.length} van de ${candidatesWithDistance.length} kandidaten liggen binnen de trigger-afstand van ${triggerDistanceMeters}m.`
   );
 
-  if (withinTrigger.length === 0) {
-    log('Geen kandidaten binnen de trigger-afstand — geen CSV gegenereerd.');
-    return { routeName, csv: null, pois: [], candidates, withinTrigger };
+  if (candidatesWithDistance.length === 0) {
+    log('Geen kandidaten gevonden binnen de zoekstraal.');
+    return {
+      routeName,
+      routePoints: parsedRoute.points,
+      csv: null,
+      pois: [],
+      candidates: candidatesWithDistance,
+      withinTrigger: [],
+      previewCandidates: previewMode ? [] : undefined,
+    };
   }
 
-  // 6. Wikipedia-samenvattingen ophalen voor de overgebleven kandidaten
-  const enriched = await fetchSummariesForCandidates(withinTrigger, {
+  if (!previewMode && withinTrigger.length === 0) {
+    log('Geen kandidaten binnen de trigger-afstand — geen CSV gegenereerd.');
+    return {
+      routeName,
+      routePoints: parsedRoute.points,
+      csv: null,
+      pois: [],
+      candidates: candidatesWithDistance,
+      withinTrigger: [],
+      previewCandidates: undefined,
+    };
+  }
+
+  // 6. Wikipedia-samenvattingen ophalen.
+  // - Normale modus: alleen voor kandidaten binnen de trigger-afstand
+  //   (spaart onnodige Wikipedia-aanvragen uit).
+  // - Preview-modus: voor ALLE kandidaten binnen de zoekstraal, zodat de
+  //   preview-pagina ieders samenvatting al klaar heeft staan wanneer de
+  //   gebruiker het schuifje verschuift (anders zou elke aanpassing een
+  //   nieuwe pijplijn-run met netwerkverkeer vereisen).
+  const toEnrich = previewMode ? candidatesWithDistance : withinTrigger;
+  const enriched = await fetchSummariesForCandidates(toEnrich, {
     maxSentences: 3,
     userAgent: USER_AGENT,
   });
 
-  // 7. Omzetten naar EuroPoi-CSV-rijen
+  if (previewMode) {
+    log(`Preview-modus: ${enriched.length} kandidaten verrijkt met samenvatting.`);
+    return {
+      routeName,
+      routePoints: parsedRoute.points,
+      csv: null,
+      pois: [],
+      candidates: candidatesWithDistance,
+      withinTrigger,
+      previewCandidates: enriched,
+    };
+  }
+
+  // 7. Omzetten naar EuroPoi-CSV-rijen (alleen kandidaten binnen de
+  // trigger-afstand, zoals in de normale modus altijd al het geval was).
   const pois = enriched.map((c) => {
     let desc = (c.summary && c.summary.extractShort) || '';
     if (!desc) {
@@ -212,34 +276,51 @@ async function runPipeline(options) {
   const csv = europoiCsv.toEuroPoiCsvWithBom(pois);
   log(`CSV gegenereerd met ${pois.length} POI('s).`);
 
-  return { routeName, csv, pois, candidates, withinTrigger };
+  return {
+    routeName,
+    routePoints: parsedRoute.points,
+    csv,
+    pois,
+    candidates: candidatesWithDistance,
+    withinTrigger,
+    previewCandidates: undefined,
+  };
 }
 
 async function main() {
+  // --preview kan overal tussen de overige argumenten staan; hem er eerst
+  // uithalen houdt de positionele argumenten (gpx, uitvoer, zoekstraal, ...)
+  // op hun vaste plek, ongeacht waar de vlag is neergezet.
+  const rawArgs = process.argv.slice(2);
+  const previewMode = rawArgs.includes('--preview');
+  const positional = rawArgs.filter((a) => a !== '--preview');
+
   const [
-    ,
-    ,
     gpxPath,
     outputPathArg,
     searchRadiusArg,
     triggerDistanceArg,
     categoriesArg,
     osmFallbackSkipThresholdArg,
-  ] = process.argv;
+  ] = positional;
 
   if (!gpxPath) {
     console.error(
-      'Gebruik: node poc-gpx-naar-csv.js <invoer.gpx> [uitvoer.csv] [zoekstraal_m] [trigger_afstand_m] [categorieën,komma,gescheiden] [osm_skip_drempel]'
+      'Gebruik: node poc-gpx-naar-csv.js <invoer.gpx> [uitvoer] [zoekstraal_m] [trigger_afstand_m] [categorieën,komma,gescheiden] [osm_skip_drempel] [--preview]'
     );
     console.error(
-      'Voorbeeld: node poc-gpx-naar-csv.js examples/Utrechtse_Waterlinie.gpx waterlinie.csv 400 75 kerken,molens,kastelen,oorlogsgeschiedenis'
+      'Voorbeeld (CSV):     node poc-gpx-naar-csv.js examples/Utrechtse_Waterlinie.gpx waterlinie.csv 400 75 kerken,molens,kastelen,oorlogsgeschiedenis'
+    );
+    console.error(
+      'Voorbeeld (preview): node poc-gpx-naar-csv.js examples/Utrechtse_Waterlinie.gpx waterlinie.preview.html 400 75 kerken,molens --preview'
     );
     process.exit(1);
   }
 
   const gpxText = fs.readFileSync(gpxPath, 'utf8');
   const routeNameFallback = path.basename(gpxPath, path.extname(gpxPath));
-  const outputPath = outputPathArg || gpxPath.replace(/\.gpx$/i, '') + '.csv';
+  const defaultExtension = previewMode ? '.preview.html' : '.csv';
+  const outputPath = outputPathArg || gpxPath.replace(/\.gpx$/i, '') + defaultExtension;
 
   const searchRadiusMeters = searchRadiusArg ? Number(searchRadiusArg) : DEFAULT_SEARCH_RADIUS_M;
   const triggerDistanceMeters = triggerDistanceArg
@@ -252,15 +333,38 @@ async function main() {
     ? Number(osmFallbackSkipThresholdArg)
     : DEFAULT_OSM_FALLBACK_SKIP_THRESHOLD;
 
-  const { csv, pois, routeName } = await runPipeline({
+  const result = await runPipeline({
     gpxText,
     routeNameFallback,
     searchRadiusMeters,
     triggerDistanceMeters,
     categoryKeys,
     osmFallbackSkipThreshold,
+    previewMode,
   });
 
+  if (previewMode) {
+    const { routeName, routePoints, previewCandidates } = result;
+    if (!previewCandidates || previewCandidates.length === 0) {
+      console.log('Geen kandidaten gevonden binnen de zoekstraal — geen preview gegenereerd.');
+      process.exit(0);
+    }
+    const { generatePreviewHtml } = require('./src/preview-html.js');
+    const html = generatePreviewHtml({
+      routeName,
+      routePoints,
+      candidates: previewCandidates,
+      initialTriggerMeters: triggerDistanceMeters,
+      maxSliderMeters: searchRadiusMeters,
+    });
+    fs.writeFileSync(outputPath, html, 'utf8');
+    console.log(`\nPreview gegenereerd: ${outputPath}`);
+    console.log('Open dit bestand in je browser, stel de gewenste trigger-afstand in met het schuifje,');
+    console.log('en draai dit script daarna ZONDER --preview met die afstand als vierde argument voor de definitieve CSV.');
+    return;
+  }
+
+  const { csv, pois, routeName } = result;
   if (!csv) {
     process.exit(0);
   }
