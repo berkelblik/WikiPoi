@@ -7,9 +7,11 @@
  *
  *   GPX-bestand
  *     → route-buffer.js       (track/route inlezen, bounding box)
- *     → poi-categories.js     (categorie-filter → Wikidata-QID's + OSM-tags,
+ *     → poi-categories.js     (categorie-filter → Wikidata-QID's/-properties + OSM-tags,
  *                               gegroepeerd per effectieve zoekstraal)
- *     → wikidata-search.js    (kandidaat-POI's ophalen, per straal-groep)
+ *     → wikidata-search.js    (kandidaat-POI's ophalen, per straal-groep: één
+ *                               aanroep voor alle instanceOf-QID's samen, plus
+ *                               één aparte aanroep per hasProperty-PID)
  *     → osm-fallback.js       (draait standaard ALTIJD aanvullend mee, per straal-groep)
  *     → route-buffer.js       (werkelijke afstand tot de route berekenen)
  *     → wikipedia-summary.js  (samenvatting per kandidaat ophalen)
@@ -154,25 +156,70 @@ async function runPipeline(options) {
       radiusGroups.map((g) => `${g.radiusMeters}m [${g.keys.join(', ')}]`).join('; ')
   );
 
-  // 3. Per straal-groep: eigen bounding box, eigen Wikidata-zoekopdracht en
-  // eigen OSM-aanvulling. Kandidaten worden meteen in één gezamenlijke
-  // lijst verzameld, met dedupe zowel binnen als tussen groepen (op
-  // Wikidata-id, en op onderlinge afstand voor OSM-resultaten) — zodat een
-  // route die toevallig in twee groepen dezelfde plek oplevert (bijv. een
-  // rijksmonumentale kerk die zowel bij "kerken" als bij "Gebouwd erfgoed"
-  // hoort) niet dubbel in de uitkomst belandt.
+  // 3. Per straal-groep: eigen bounding box, eigen Wikidata-zoekopdracht/-
+  // opdrachten en eigen OSM-aanvulling. Een groep kan twee soorten
+  // Wikidata-filters nodig hebben:
+  //   - instanceOf (QID's, poiCategories.qidsForKeys())  — de bestaande,
+  //     ene aanroep voor alle QID's van de groep samen
+  //   - hasProperty (PID's, poiCategories.hasPropertyForKeys())  — per
+  //     PID een APARTE aanroep, want wikidata-search.js ondersteunt maar
+  //     één filtertype tegelijk per aanroep (zie buildBoxQuery(): bij
+  //     zowel instanceOf als hasProperty wint instanceOf). Op dit moment
+  //     heeft alleen "Gebouwd erfgoed" (P359) een hasProperty-filter.
+  // Is instanceOf leeg voor een groep (bijv. een straal-groep die ALLEEN
+  // uit "Gebouwd erfgoed" bestaat), dan wordt de instanceOf-aanroep
+  // BEWUST OVERGESLAGEN — met een lege instanceOf-lijst zou
+  // buildBoxQuery() namelijk geen enkel klassefilter toepassen en dus
+  // domweg ALLE Wikidata-items met coördinaat + Wikipedia-artikel in de
+  // bbox teruggeven, wat niet de bedoeling is.
+  // Kandidaten worden meteen in één gezamenlijke lijst verzameld, met
+  // dedupe zowel binnen als tussen groepen/aanroepen (op Wikidata-id, en
+  // op onderlinge afstand voor OSM-resultaten) — zodat een route die
+  // toevallig via meerdere filters dezelfde plek oplevert (bijv. een
+  // rijksmonumentale kerk die zowel bij "kerken" als bij "Gebouwd
+  // erfgoed" hoort) niet dubbel in de uitkomst belandt.
   const candidates = [];
   const seenWikidataIds = new Set();
 
   for (const group of radiusGroups) {
     const bbox = routeBuffer.getBoundingBox(parsedRoute.points, group.radiusMeters);
     const instanceOf = poiCategories.qidsForKeys(group.keys);
+    const hasPropertyPids = poiCategories.hasPropertyForKeys(group.keys);
 
-    const groupWikidataCandidates = await searchWikidataBox(bbox, {
-      language: language,
-      instanceOf: instanceOf,
-      userAgent: USER_AGENT,
-    });
+    let groupWikidataCandidates = [];
+
+    if (instanceOf.length > 0) {
+      const instanceOfCandidates = await searchWikidataBox(bbox, {
+        language: language,
+        instanceOf: instanceOf,
+        userAgent: USER_AGENT,
+      });
+      groupWikidataCandidates = groupWikidataCandidates.concat(instanceOfCandidates);
+      log(
+        `  Straal-groep ${group.radiusMeters}m [${group.keys.join(', ')}]: instanceOf-zoekopdracht ` +
+          `(${instanceOf.length} QID's) leverde ${instanceOfCandidates.length} kandidaten op.`
+      );
+    }
+
+    for (const pid of hasPropertyPids) {
+      const propertyCandidates = await searchWikidataBox(bbox, {
+        language: language,
+        hasProperty: pid,
+        userAgent: USER_AGENT,
+      });
+      groupWikidataCandidates = groupWikidataCandidates.concat(propertyCandidates);
+      log(
+        `  Straal-groep ${group.radiusMeters}m [${group.keys.join(', ')}]: hasProperty-zoekopdracht ` +
+          `(${pid}) leverde ${propertyCandidates.length} kandidaten op.`
+      );
+    }
+
+    if (instanceOf.length === 0 && hasPropertyPids.length === 0) {
+      log(
+        `  Straal-groep ${group.radiusMeters}m [${group.keys.join(', ')}]: WAARSCHUWING — geen instanceOf- ` +
+          `of hasProperty-filter beschikbaar voor deze categorieën, Wikidata-zoekopdracht overgeslagen.`
+      );
+    }
 
     let nieuweWikidata = 0;
     for (const candidate of groupWikidataCandidates) {
@@ -182,8 +229,8 @@ async function runPipeline(options) {
       nieuweWikidata++;
     }
     log(
-      `  Straal-groep ${group.radiusMeters}m [${group.keys.join(', ')}]: Wikidata leverde ` +
-        `${groupWikidataCandidates.length} kandidaten op, waarvan ${nieuweWikidata} nieuw.`
+      `  Straal-groep ${group.radiusMeters}m [${group.keys.join(', ')}]: Wikidata leverde in totaal ` +
+        `${groupWikidataCandidates.length} kandidaten op (over alle filters van deze groep), waarvan ${nieuweWikidata} nieuw.`
     );
 
     // OSM-aanvulling draait standaard altijd mee (zie
