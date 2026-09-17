@@ -7,9 +7,10 @@
  *
  *   GPX-bestand
  *     → route-buffer.js       (track/route inlezen, bounding box)
- *     → poi-categories.js     (categorie-filter → Wikidata-QID's + OSM-tags)
- *     → wikidata-search.js    (kandidaat-POI's ophalen)
- *     → osm-fallback.js       (draait standaard ALTIJD aanvullend mee)
+ *     → poi-categories.js     (categorie-filter → Wikidata-QID's + OSM-tags,
+ *                               gegroepeerd per effectieve zoekstraal)
+ *     → wikidata-search.js    (kandidaat-POI's ophalen, per straal-groep)
+ *     → osm-fallback.js       (draait standaard ALTIJD aanvullend mee, per straal-groep)
  *     → route-buffer.js       (werkelijke afstand tot de route berekenen)
  *     → wikipedia-summary.js  (samenvatting per kandidaat ophalen)
  *     → ÓF europoi-csv.js     (CSV met BOM/CRLF genereren)
@@ -29,6 +30,19 @@
  * definitieve CSV. De preview-stap genereert bewust geen CSV, en de
  * CSV-stap bewust geen HTML — dat houdt beide onderdelen simpel en
  * onafhankelijk testbaar.
+ *
+ * ZOEKSTRAAL PER CATEGORIE:
+ * De <zoekstraal_m>-parameter (searchRadiusMeters) is de STANDAARDstraal
+ * voor categorieën zonder eigen straal. Sommige categorieën kunnen via
+ * poi-categories.js een eigen, afwijkende searchRadiusMeters hebben (bijv.
+ * een dichte categorie als "Gebouwd erfgoed" op 150m, terwijl de rest op
+ * de hier opgegeven standaardstraal blijft zoeken). De pijplijn groepeert
+ * de geselecteerde categorieën per effectieve straal
+ * (poiCategories.groupSelectedKeysByRadius()) en doet per groep een eigen
+ * bounding box + Wikidata/OSM-zoekopdracht; de resultaten worden daarna
+ * samengevoegd (met dedupe, ook tussen groepen onderling). Hebben alle
+ * geselecteerde categorieën geen eigen straal, dan ontstaat er precies één
+ * groep en is het gedrag identiek aan vóór deze groepering bestond.
  */
 
 const fs = require('fs');
@@ -52,11 +66,14 @@ const DEFAULT_TRIGGER_DISTANCE_M = 50;
 // minstens N kandidaten vond (bijv. om sneller te zijn of minder "kale"
 // naam-zonder-tekst-resultaten te krijgen), geef dan een eindige
 // osmFallbackSkipThreshold mee. Infinity (de standaard) betekent: nooit
-// overslaan.
+// overslaan. De drempel wordt PER STRAAL-GROEP toegepast (zie stap 4
+// hieronder), dus op basis van hoeveel Wikidata-kandidaten die ene groep
+// zelf opleverde — niet het totaal over alle groepen heen.
 const DEFAULT_OSM_FALLBACK_SKIP_THRESHOLD = Infinity;
-// Twee resultaten (uit Wikidata en uit OSM) die dichter bij elkaar liggen
-// dan dit worden als dezelfde fysieke plek beschouwd; de OSM-versie wordt
-// dan overgeslagen (Wikidata/Wikipedia levert immers de rijkere tekst).
+// Twee resultaten (uit Wikidata en uit OSM, eventueel uit verschillende
+// straal-groepen) die dichter bij elkaar liggen dan dit worden als
+// dezelfde fysieke plek beschouwd; de OSM-versie wordt dan overgeslagen
+// (Wikidata/Wikipedia levert immers de rijkere tekst).
 const DUPLICATE_DISTANCE_METERS = 30;
 
 /**
@@ -67,12 +84,15 @@ const DUPLICATE_DISTANCE_METERS = 30;
  * @param {object} options
  * @param {string} options.gpxText - inhoud van het GPX-bestand
  * @param {string} [options.routeNameFallback] - gebruikt als het GPX-bestand geen <name> heeft
- * @param {number} [options.searchRadiusMeters=400] - hoe ver van de route Wikidata wordt doorzocht
+ * @param {number} [options.searchRadiusMeters=400] - standaardstraal (rond de route) voor
+ *   categorieën zonder eigen searchRadiusMeters in poi-categories.js; zie de opmerking
+ *   "ZOEKSTRAAL PER CATEGORIE" bovenaan dit bestand
  * @param {number} [options.triggerDistanceMeters=50] - vanaf welke afstand EuroPoi zou moeten triggeren
  * @param {string[]} [options.categoryKeys] - poi-categories.js-keys; standaard: getDefaultSelectedKeys()
  * @param {string} [options.language='nl']
  * @param {number} [options.osmFallbackSkipThreshold=Infinity] - zie DEFAULT_OSM_FALLBACK_SKIP_THRESHOLD;
- *   geef een eindig getal om de OSM-aanvulling over te slaan zodra Wikidata al minstens dit aantal vond
+ *   geef een eindig getal om, per straal-groep, de OSM-aanvulling over te slaan zodra Wikidata
+ *   voor die groep al minstens dit aantal kandidaten vond
  * @param {boolean} [options.previewMode=false] - true: verrijk ALLE kandidaten binnen de
  *   zoekstraal (niet alleen die binnen triggerDistanceMeters) met een Wikipedia-samenvatting,
  *   en genereer GEEN CSV — bedoeld voor gebruik met preview-html.js, waar de gebruiker de
@@ -122,67 +142,96 @@ async function runPipeline(options) {
     `GPX ingelezen: bron=${parsedRoute.source}, ${parsedRoute.points.length} punten, routenaam="${routeName}"`
   );
 
-  // 2. Bounding box voor de zoekstraal rond de route
-  const bbox = routeBuffer.getBoundingBox(parsedRoute.points, searchRadiusMeters);
-
-  // 3. Categorie-selectie → Wikidata-QID's + OSM-tagfilters
+  // 2. Categorie-selectie → groepen per effectieve zoekstraal. Zonder
+  // categorieën met een eigen searchRadiusMeters (de huidige situatie voor
+  // alle 7 categorieën) levert dit precies één groep op met
+  // searchRadiusMeters als straal — functioneel identiek aan de vorige,
+  // ongegroepeerde opzet.
   const selectedKeys = categoryKeys || poiCategories.getDefaultSelectedKeys();
-  const instanceOf = poiCategories.qidsForKeys(selectedKeys);
-  log(`Categorieën: ${selectedKeys.join(', ')} (${instanceOf.length} Wikidata-typen)`);
-
-  // 4. Wikidata-zoekopdracht binnen de bounding box
-  let candidates = await searchWikidataBox(bbox, {
-    language: language,
-    instanceOf: instanceOf,
-    userAgent: USER_AGENT,
-  });
+  const radiusGroups = poiCategories.groupSelectedKeysByRadius(selectedKeys, searchRadiusMeters);
   log(
-    `Wikidata leverde ${candidates.length} kandidaten op binnen de zoekstraal van ${searchRadiusMeters}m.`
+    `Categorieën: ${selectedKeys.join(', ')} → ${radiusGroups.length} straal-groep(en): ` +
+      radiusGroups.map((g) => `${g.radiusMeters}m [${g.keys.join(', ')}]`).join('; ')
   );
 
-  // 4b. OSM-aanvulling — draait standaard altijd mee (zie
-  // DEFAULT_OSM_FALLBACK_SKIP_THRESHOLD hierboven voor de reden), tenzij
-  // Wikidata al minstens osmFallbackSkipThreshold kandidaten vond. OSM-
-  // resultaten die vrijwel op dezelfde plek liggen als een reeds gevonden
-  // Wikidata-kandidaat worden overgeslagen — dezelfde fysieke plek hoeft
-  // niet twee keer in de CSV of preview.
-  if (candidates.length < osmFallbackSkipThreshold) {
-    log(
-      Number.isFinite(osmFallbackSkipThreshold)
-        ? `Minder dan ${osmFallbackSkipThreshold} Wikidata-kandidaten — OSM-aanvulling wordt erbij gehaald.`
-        : 'OSM-aanvulling wordt erbij gehaald.'
-    );
-    const osmTagFilterGroups = poiCategories.osmTagFiltersForKeys(selectedKeys);
-    const osmCandidates = await searchOverpass(bbox, osmTagFilterGroups, {
+  // 3. Per straal-groep: eigen bounding box, eigen Wikidata-zoekopdracht en
+  // eigen OSM-aanvulling. Kandidaten worden meteen in één gezamenlijke
+  // lijst verzameld, met dedupe zowel binnen als tussen groepen (op
+  // Wikidata-id, en op onderlinge afstand voor OSM-resultaten) — zodat een
+  // route die toevallig in twee groepen dezelfde plek oplevert (bijv. een
+  // rijksmonumentale kerk die zowel bij "kerken" als bij "Gebouwd erfgoed"
+  // hoort) niet dubbel in de uitkomst belandt.
+  const candidates = [];
+  const seenWikidataIds = new Set();
+
+  for (const group of radiusGroups) {
+    const bbox = routeBuffer.getBoundingBox(parsedRoute.points, group.radiusMeters);
+    const instanceOf = poiCategories.qidsForKeys(group.keys);
+
+    const groupWikidataCandidates = await searchWikidataBox(bbox, {
+      language: language,
+      instanceOf: instanceOf,
       userAgent: USER_AGENT,
     });
 
-    let toegevoegd = 0;
-    for (const osmCandidate of osmCandidates) {
-      const isDuplicate = candidates.some(
-        (existing) =>
-          routeBuffer.haversineDistance(existing, osmCandidate) <= DUPLICATE_DISTANCE_METERS
-      );
-      if (!isDuplicate) {
-        candidates.push(osmCandidate);
-        toegevoegd++;
-      }
+    let nieuweWikidata = 0;
+    for (const candidate of groupWikidataCandidates) {
+      if (candidate.id && seenWikidataIds.has(candidate.id)) continue;
+      if (candidate.id) seenWikidataIds.add(candidate.id);
+      candidates.push(candidate);
+      nieuweWikidata++;
     }
     log(
-      `OSM leverde ${osmCandidates.length} kandidaten op, waarvan ${toegevoegd} nieuw (${osmCandidates.length - toegevoegd} viel samen met een bestaande Wikidata-kandidaat).`
+      `  Straal-groep ${group.radiusMeters}m [${group.keys.join(', ')}]: Wikidata leverde ` +
+        `${groupWikidataCandidates.length} kandidaten op, waarvan ${nieuweWikidata} nieuw.`
     );
-  } else {
-    log(
-      `OSM-aanvulling overgeslagen (Wikidata vond al ${candidates.length} kandidaten, drempel=${osmFallbackSkipThreshold}).`
-    );
+
+    // OSM-aanvulling draait standaard altijd mee (zie
+    // DEFAULT_OSM_FALLBACK_SKIP_THRESHOLD hierboven voor de reden), tenzij
+    // déze straal-groep al minstens osmFallbackSkipThreshold nieuwe
+    // Wikidata-kandidaten opleverde. OSM-resultaten die vrijwel op
+    // dezelfde plek liggen als een reeds verzamelde kandidaat (uit welke
+    // groep dan ook) worden overgeslagen.
+    if (nieuweWikidata < osmFallbackSkipThreshold) {
+      const osmTagFilterGroups = poiCategories.osmTagFiltersForKeys(group.keys);
+      const osmCandidates = await searchOverpass(bbox, osmTagFilterGroups, {
+        userAgent: USER_AGENT,
+      });
+
+      let toegevoegd = 0;
+      for (const osmCandidate of osmCandidates) {
+        const isDuplicate = candidates.some(
+          (existing) =>
+            routeBuffer.haversineDistance(existing, osmCandidate) <= DUPLICATE_DISTANCE_METERS
+        );
+        if (!isDuplicate) {
+          candidates.push(osmCandidate);
+          toegevoegd++;
+        }
+      }
+      log(
+        `  Straal-groep ${group.radiusMeters}m [${group.keys.join(', ')}]: OSM leverde ` +
+          `${osmCandidates.length} kandidaten op, waarvan ${toegevoegd} nieuw ` +
+          `(${osmCandidates.length - toegevoegd} viel samen met een bestaande kandidaat).`
+      );
+    } else {
+      log(
+        `  Straal-groep ${group.radiusMeters}m [${group.keys.join(', ')}]: OSM-aanvulling ` +
+          `overgeslagen (Wikidata vond al ${nieuweWikidata} nieuwe kandidaten, drempel=${osmFallbackSkipThreshold}).`
+      );
+    }
   }
 
-  // 5. Werkelijke afstand tot de route berekenen voor ALLE kandidaten (de
-  // bbox is een rechthoek, dus bevat ook punten die verder dan de
-  // zoekstraal van de route zelf liggen). Dit gebeurt nu voor ALLE
+  log(`In totaal ${candidates.length} unieke kandidaten over alle straal-groepen samen.`);
+
+  // 4. Werkelijke afstand tot de route berekenen voor ALLE kandidaten (elke
+  // bbox is een rechthoek, dus bevat ook punten die verder dan de eigen
+  // zoekstraal van de route zelf liggen). Dit gebeurt voor ALLE
   // kandidaten — niet alleen die binnen de trigger-afstand vallen — zodat
   // preview-modus ook de kandidaten ERBUITEN kan tonen (grijs/uitgevouwen
-  // op de kaart) terwijl de gebruiker de trigger-afstand nog instelt.
+  // op de kaart) terwijl de gebruiker de trigger-afstand nog instelt. Dit
+  // gebeurt na het samenvoegen van alle straal-groepen, dus onafhankelijk
+  // van welke groep een kandidaat oorspronkelijk opleverde.
   const candidatesWithDistance = candidates.map((candidate) => {
     const distance = routeBuffer.distanceToRoute(candidate, parsedRoute.points);
     return Object.assign({}, candidate, { distanceToRouteMeters: Math.round(distance) });
@@ -196,7 +245,7 @@ async function runPipeline(options) {
   );
 
   if (candidatesWithDistance.length === 0) {
-    log('Geen kandidaten gevonden binnen de zoekstraal.');
+    log('Geen kandidaten gevonden binnen de zoekstra(a)l(en).');
     return {
       routeName,
       routePoints: parsedRoute.points,
@@ -221,13 +270,13 @@ async function runPipeline(options) {
     };
   }
 
-  // 6. Wikipedia-samenvattingen ophalen.
+  // 5. Wikipedia-samenvattingen ophalen.
   // - Normale modus: alleen voor kandidaten binnen de trigger-afstand
   //   (spaart onnodige Wikipedia-aanvragen uit).
-  // - Preview-modus: voor ALLE kandidaten binnen de zoekstraal, zodat de
-  //   preview-pagina ieders samenvatting al klaar heeft staan wanneer de
-  //   gebruiker het schuifje verschuift (anders zou elke aanpassing een
-  //   nieuwe pijplijn-run met netwerkverkeer vereisen).
+  // - Preview-modus: voor ALLE kandidaten binnen de zoekstraal/-stralen,
+  //   zodat de preview-pagina ieders samenvatting al klaar heeft staan
+  //   wanneer de gebruiker het schuifje verschuift (anders zou elke
+  //   aanpassing een nieuwe pijplijn-run met netwerkverkeer vereisen).
   const toEnrich = previewMode ? candidatesWithDistance : withinTrigger;
   const enriched = await fetchSummariesForCandidates(toEnrich, {
     maxSentences: 3,
@@ -247,7 +296,7 @@ async function runPipeline(options) {
     };
   }
 
-  // 7. Omzetten naar EuroPoi-CSV-rijen (alleen kandidaten binnen de
+  // 6. Omzetten naar EuroPoi-CSV-rijen (alleen kandidaten binnen de
   // trigger-afstand, zoals in de normale modus altijd al het geval was).
   const pois = enriched.map((c) => {
     let desc = (c.summary && c.summary.extractShort) || '';
@@ -272,7 +321,7 @@ async function runPipeline(options) {
     };
   });
 
-  // 8. CSV genereren (BOM + CRLF, via de bestaande, gedeelde EuroPoi-module)
+  // 7. CSV genereren (BOM + CRLF, via de bestaande, gedeelde EuroPoi-module)
   const csv = europoiCsv.toEuroPoiCsvWithBom(pois);
   log(`CSV gegenereerd met ${pois.length} POI('s).`);
 
