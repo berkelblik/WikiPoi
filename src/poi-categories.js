@@ -174,6 +174,160 @@
       osmTags: [[{ key: 'leisure', value: 'nature_reserve' }]],
       defaultEnabled: false,
     },
+
+    // ---------------------------------------------------------------
+    // Vanaf hier: 4 nieuwe verzamelcategorieën (toegevoegd n.a.v. de
+    // dichtheids-/QID-verificatiesessie van 17 sept. 2026). Elke
+    // categorie hieronder dekt meerdere subtypes, gekozen boven 10
+    // losse, smalle categorieën om de UI overzichtelijk te houden — zie
+    // de description hieronder voor de subtypes die elke categorie dekt.
+    // Per subtype/QID staat in een comment aangegeven hoe hard het is
+    // getest:
+    //   [geverifieerd] — live tegen Wikidata getest met een specifiek
+    //                    testscript en bevestigd
+    //   [afgeleid]     — gevonden via een bredere labelzoekopdracht;
+    //                    aannemelijk, maar niet 1-op-1 herbevestigd
+    //                    tegen een los, onafhankelijk voorbeeld
+    //   [aanname]      — UIT HET GEHEUGEN, NIET live getest; loop hier
+    //                    dus rekening mee dat dit een keer mis kan zijn
+    //                    (zoals eerder bij de gemaal-QID gebeurde)
+    // ---------------------------------------------------------------
+    {
+      key: 'gebouwd_erfgoed',
+      labels: {
+        nl: 'Gebouwd erfgoed',
+        en: 'Built heritage',
+        fr: 'Patrimoine bâti',
+        de: 'Baudenkmäler',
+        es: 'Patrimonio construido',
+      },
+      descriptions: {
+        nl: 'Rijksmonumenten: o.a. kerken, molens, boerderijen, kloosters, industrieel erfgoed en begraafplaatsen',
+        en: 'National heritage sites: e.g. churches, mills, farmhouses, monasteries, industrial heritage and cemeteries',
+        fr: "Monuments nationaux : églises, moulins, fermes, monastères, patrimoine industriel, cimetières, etc.",
+        de: 'Nationaldenkmäler: u. a. Kirchen, Mühlen, Bauernhöfe, Klöster, Industriedenkmäler und Friedhöfe',
+        es: 'Monumentos nacionales: iglesias, molinos, granjas, monasterios, patrimonio industrial, cementerios, etc.',
+      },
+      // Geen qids: deze categorie gebruikt hasProperty i.p.v. instanceOf
+      // (zie wikidata-search.js#buildBoxQuery) — een rijksmonument is
+      // geen aparte Wikidata-KLASSE, maar elk type gebouw (kerk, molen,
+      // boerderij, ...) dat toevallig de eigenschap P359 heeft.
+      qids: [],
+      hasProperty: 'P359', // [geverifieerd] "Rijksmonument ID" — live bevestigd, 20 treffers rond Zutphen
+      osmTags: [
+        [{ key: 'heritage', value: '2' }], // [geverifieerd, Nederlandse rijksmonumenten]
+        // ref:rce=* (aanwezigheid van een RCE-nummer, ongeacht de
+        // waarde) zou eigenlijk ook moeten meetellen, maar het huidige
+        // osmTags-schema ondersteunt alleen exacte key/value-paren, geen
+        // "aanwezig, ongeacht waarde"-wildcard. Nog op te pakken in
+        // osm-fallback.js als je dit alsnog wilt toevoegen.
+      ],
+      // Hoge dichtheid geconstateerd (20+ in één klein gebied rond
+      // Zutphen) — kleinere straal dan de standaard ~400m, gecombineerd
+      // met de trigger-preview om de rest te filteren (besluit 17 sept. 2026).
+      searchRadiusMeters: 150,
+      defaultEnabled: false,
+    },
+    {
+      key: 'prehistorie_archeologie',
+      labels: {
+        nl: 'Prehistorie & archeologie',
+        en: 'Prehistory & archaeology',
+        fr: 'Préhistoire et archéologie',
+        de: 'Vorgeschichte & Archäologie',
+        es: 'Prehistoria y arqueología',
+      },
+      descriptions: {
+        nl: 'Hunebedden, grafheuvels, en vestingwerken/stadswallen',
+        en: 'Dolmens, burial mounds, and fortifications/city walls',
+        fr: 'Dolmens, tumulus et fortifications/remparts',
+        de: 'Hünengräber, Grabhügel und Festungsanlagen/Stadtmauern',
+        es: 'Dólmenes, túmulos y fortificaciones/murallas',
+      },
+      qids: [
+        'Q839954', // [geverifieerd] archaeological site — dekt hunebedden al automatisch mee
+        // via de subclass-hiërarchie (P31/P279*) in wikidata-search.js;
+        // live getest: een hunebed-item bleek hier al onder te vallen,
+        // dus GEEN aparte hunebed-QID nodig. Overlapt met de bestaande,
+        // los aanvinkbare "archeologie"-categorie hierboven — geen
+        // probleem, qidsForKeys() dedupliceert QID's toch al.
+        'Q127418', // [aanname, NIET geverifieerd] burial mound (grafheuvel)
+        'Q91203', // [afgeleid] schans (uit labelzoekopdracht "schans", Naarden/Bourtange/Achterhoek)
+        'Q57821', // [afgeleid] verdedigingswerk/fortification (idem)
+      ],
+      osmTags: [
+        [{ key: 'historic', value: 'archaeological_site' }],
+        [{ key: 'historic', value: 'tumulus' }],
+        [{ key: 'historic', value: 'citywalls' }],
+        [{ key: 'historic', value: 'fort' }],
+      ],
+      defaultEnabled: false,
+    },
+    {
+      key: 'waterstaat_infrastructuur',
+      labels: {
+        nl: 'Waterstaat & infrastructuur',
+        en: 'Water management & infrastructure',
+        fr: 'Gestion des eaux et infrastructures',
+        de: 'Wasserbau & Infrastruktur',
+        es: 'Gestión del agua e infraestructura',
+      },
+      descriptions: {
+        nl: 'Vuurtorens, sluizen, gemalen en historische bruggen (bruggen vooral via Gebouwd erfgoed)',
+        en: 'Lighthouses, locks, pumping stations and historic bridges (bridges mostly via Built heritage)',
+        fr: 'Phares, écluses, stations de pompage et ponts historiques (ponts surtout via Patrimoine bâti)',
+        de: 'Leuchttürme, Schleusen, Schöpfwerke und historische Brücken (Brücken meist über Baudenkmäler)',
+        es: 'Faros, esclusas, estaciones de bombeo y puentes históricos (puentes sobre todo vía Patrimonio construido)',
+      },
+      qids: [
+        'Q39715', // [aanname, eerder als "reeds bevestigd" genoteerd — niet in DEZE sessie herverifieerd] lighthouse
+        'Q105731', // [geverifieerd] schutsluis (lock)
+        'Q446013', // [geverifieerd] pompgemaal (pumping station)
+        'Q2230272', // [geverifieerd] dieselgemaal (subtype van pompgemaal, apart opgenomen i.p.v. aangenomen subklasse-verband)
+        // Historische bruggen: GEEN aparte QID. Alle "brug"-treffers met
+        // een duidelijk historisch karakter bleken zelf Rijksmonumenten
+        // te zijn — die vallen al onder "Gebouwd erfgoed" (P359). Een
+        // aparte QID voor "historische brug" bestaat niet in Wikidata;
+        // Q12280 (brug) is te generiek om hier te gebruiken.
+      ],
+      osmTags: [
+        [{ key: 'man_made', value: 'lighthouse' }], // [geverifieerd]
+        [{ key: 'waterway', value: 'lock' }], // [geverifieerd]
+        [{ key: 'waterway', value: 'lock_gate' }], // [geverifieerd]
+        [{ key: 'man_made', value: 'pumping_station' }], // [geverifieerd]
+      ],
+      defaultEnabled: false,
+    },
+    {
+      key: 'kunst_gedenktekens',
+      labels: {
+        nl: 'Kunst & gedenktekens',
+        en: 'Art & memorials',
+        fr: 'Art et monuments commémoratifs',
+        de: 'Kunst & Gedenkstätten',
+        es: 'Arte y monumentos conmemorativos',
+      },
+      descriptions: {
+        nl: 'Standbeelden en gedenktekens (niet-oorlogsgerelateerd; oorlogsmonumenten staan al bij Oorlogsgeschiedenis)',
+        en: 'Statues and memorials (non-war; war memorials are already under War history)',
+        fr: 'Statues et monuments commémoratifs (hors guerre ; les monuments aux morts sont déjà sous Histoire de guerre)',
+        de: 'Statuen und Gedenkstätten (nicht kriegsbezogen; Kriegsdenkmäler siehe bereits Kriegsgeschichte)',
+        es: 'Estatuas y monumentos conmemorativos (no bélicos; los monumentos de guerra ya están en Historia bélica)',
+      },
+      qids: [
+        'Q179700', // [aanname, NIET geverifieerd] statue (standbeeld)
+        'Q11734477', // [afgeleid] gedenksteen — uit labelzoekopdracht "monument", meestal samen met oorlogsmonument gevonden
+        'Q721747', // [afgeleid] gedenkplaat
+        'Q51845395', // [afgeleid] gedenkzuil
+        'Q1497483', // [afgeleid] gedenkkruis
+        'Q6023295', // [afgeleid] funeraire architectuur
+      ],
+      osmTags: [
+        [{ key: 'tourism', value: 'artwork' }],
+        [{ key: 'historic', value: 'memorial' }],
+      ],
+      defaultEnabled: false,
+    },
   ];
 
   const DEFAULT_UI_LANGUAGE = 'nl';
@@ -283,6 +437,7 @@
       osmTags: c.osmTags.map((group) => group.map((tag) => Object.assign({}, tag))),
       defaultEnabled: c.defaultEnabled,
       searchRadiusMeters: c.searchRadiusMeters || null,
+      hasProperty: c.hasProperty || null,
     }));
   }
 
@@ -345,6 +500,36 @@
   }
 
   /**
+   * Zet een lijst van aangevinkte categorie-keys om naar een platte,
+   * gededupliceerde lijst van Wikidata-property-ID's (PID's, bijv.
+   * 'P359') van categorieën die een hasProperty-filter gebruiken in
+   * plaats van (of naast) instanceOf-QID's — zie wikidata-search.js#
+   * buildBoxQuery() voor hoe deze modus werkt. Op dit moment gebruikt
+   * alléén "Gebouwd erfgoed" (P359) deze modus.
+   *
+   * LET OP — nog niet aangesloten op poc-gpx-naar-csv.js: de pijplijn
+   * roept momenteel alleen qidsForKeys()/instanceOf aan; om een
+   * hasProperty-categorie als "Gebouwd erfgoed" daadwerkelijk te laten
+   * meezoeken is een aanvullende aanpassing aan runPipeline() nodig (een
+   * aparte Wikidata-aanroep per hasProperty-waarde, naast de bestaande
+   * instanceOf-aanroep per straal-groep). Deze functie levert alvast de
+   * bouwsteen daarvoor.
+   *
+   * @param {string[]} selectedKeys
+   * @returns {string[]} unieke property-ID's (PID's)
+   */
+  function hasPropertyForKeys(selectedKeys) {
+    const keys = new Set(selectedKeys || []);
+    const properties = new Set();
+    for (const category of CATEGORIES) {
+      if (keys.has(category.key) && category.hasProperty) {
+        properties.add(category.hasProperty);
+      }
+    }
+    return Array.from(properties);
+  }
+
+  /**
    * Groepeert aangevinkte categorie-keys op hun EFFECTIEVE zoekstraal —
    * dat is category.searchRadiusMeters als die gezet is, anders
    * defaultRadiusMeters. Bedoeld voor poc-gpx-naar-csv.js/runPipeline():
@@ -394,6 +579,7 @@
     getCategories,
     getDefaultSelectedKeys,
     qidsForKeys,
+    hasPropertyForKeys,
     osmTagFiltersForKeys,
     groupSelectedKeysByRadius,
     getSupportedUiLanguages,
