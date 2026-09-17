@@ -156,20 +156,15 @@
   const candidates = ${JSON.stringify(markerData)};
 
   const map = L.map('map');
-  // De gratis tile.openstreetmap.org-testserver blokkeert al snel apps die
-  // er structureel gebruik van maken (met een "403 Access blocked" pagina
-  // i.p.v. kaarttegels) — zeker vanaf een gedeeld IP-adres zoals een
-  // GitHub Codespace. CartoDB's basiskaart is geschikt voor dit soort
-  // licht, niet-commercieel ontwikkelgebruik en toont de attributie aan
-  // OpenStreetMap correct door.
-  // CartoDB's basemaps.cartocdn.com vereist tegenwoordig een API-key voor
-  // anoniem gebruik (vandaar de "API KEY REQUIRED"-watermark als je die
-  // niet hebt). Wikimedia's eigen kaarttegel-server vereist geen key en
-  // past thematisch bij een Wikidata/Wikipedia-project. Mocht ook deze
-  // ooit geblokkeerd worden: vervang de URL hieronder, bijv. door Esri's
-  // World_Street_Map (server.arcgisonline.com), eveneens zonder key.
-  L.tileLayer('https://maps.wikimedia.org/osm-intl/{z}/{x}/{y}.png', {
-    attribution: 'Wikimedia maps beta | Kaartgegevens &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>-medewerkers',
+  // OpenStreetMap's eigen testserver (403), CartoDB (vereist tegenwoordig
+  // een API-key) en Wikimedia's kaartserver (laadde om onduidelijke reden
+  // geen tegels) bleken alle drie lastig vanuit deze omgeving. Esri's
+  // publieke ArcGIS Online-kaartserver is een zwaar opgezette, gratis
+  // dienst zonder key-vereiste en zonder het soort gebruiksbeleid dat de
+  // kleinere community-servers hanteren — bedoeld voor precies dit soort
+  // insluiting. Let op: Esri gebruikt {z}/{y}/{x} (niet {z}/{x}/{y}).
+  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
+    attribution: 'Tegels &copy; Esri &mdash; Bron: Esri, DeLorme, NAVTEQ, USGS, Intermap, iPC, NRCAN, Esri Japan, METI, Esri China (Hong Kong), Esri (Thailand), TomTom',
     maxZoom: 19
   }).addTo(map);
 
