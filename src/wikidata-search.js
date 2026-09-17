@@ -35,7 +35,8 @@
   const WIKIDATA_SPARQL_ENDPOINT = 'https://query.wikidata.org/sparql';
   const DEFAULT_LANGUAGE = 'nl';
   const DEFAULT_LIMIT = 300;
-  const DEFAULT_TIMEOUT_MS = 20000;
+  const DEFAULT_TIMEOUT_MS = 25000;
+  const DEFAULT_MAX_RETRIES = 1; // 1 automatische herhaling = max. 2 pogingen totaal
 
   /**
    * Bouwt de SPARQL-query voor een bounding-box-zoekopdracht.
@@ -158,32 +159,16 @@
   }
 
   /**
-   * Voert de bounding-box-zoekopdracht daadwerkelijk uit tegen de publieke
-   * Wikidata Query Service.
-   *
-   * @param {{minLat:number,maxLat:number,minLng:number,maxLng:number}} bbox
-   * @param {object} [options] - zie buildBoxQuery(); plus:
-   * @param {number} [options.timeoutMs=20000]
-   * @param {string} [options.userAgent] - alleen relevant bij server-side gebruik
-   * @returns {Promise<Array>} kandidaat-POI's, zie parseSparqlResults()
+   * Eén enkele poging om de bounding-box-query uit te voeren — zonder
+   * herhaling. Los gehouden van searchWikidataBox() zodat de
+   * herhalingslogica daar overzichtelijk blijft.
    */
-  async function searchWikidataBox(bbox, options) {
-    options = options || {};
-    const query = buildBoxQuery(bbox, options);
-    const url =
-      WIKIDATA_SPARQL_ENDPOINT + '?format=json&query=' + encodeURIComponent(query);
-
-    const timeoutMs = options.timeoutMs || DEFAULT_TIMEOUT_MS;
+  async function performSingleRequest(url, headers, timeoutMs) {
     const hasAbortController = typeof AbortController !== 'undefined';
     const controller = hasAbortController ? new AbortController() : null;
     let timeoutId = null;
     if (controller) {
       timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-    }
-
-    const headers = { Accept: 'application/sparql-results+json' };
-    if (options.userAgent) {
-      headers['User-Agent'] = options.userAgent; // werkt alleen server-side; browsers negeren dit
     }
 
     let response;
@@ -202,13 +187,61 @@
       );
     }
 
-    const data = await response.json();
-    // Eén Wikidata-item kan meerdere keren in de ruwe SPARQL-respons
-    // voorkomen — bijv. als het via meerdere routes in de klasse-
-    // hiërarchie aan het instanceOf-filter voldoet. Dedupliceren
-    // voorkomt dat de aanroeper (en uiteindelijk de CSV) hetzelfde punt
-    // dubbel krijgt.
-    return dedupeById(parseSparqlResults(data));
+    return response.json();
+  }
+
+  /**
+   * Voert de bounding-box-zoekopdracht daadwerkelijk uit tegen de publieke
+   * Wikidata Query Service. Bij een timeout (de service reageert soms
+   * incidenteel traag) wordt de aanvraag automatisch één keer herhaald
+   * voordat de fout wordt doorgegeven — de aanroeper hoeft dus niet zelf
+   * handmatig opnieuw te proberen.
+   *
+   * @param {{minLat:number,maxLat:number,minLng:number,maxLng:number}} bbox
+   * @param {object} [options] - zie buildBoxQuery(); plus:
+   * @param {number} [options.timeoutMs=25000]
+   * @param {number} [options.maxRetries=1] - aantal automatische herhalingen bij een timeout
+   * @param {string} [options.userAgent] - alleen relevant bij server-side gebruik
+   * @returns {Promise<Array>} kandidaat-POI's, zie parseSparqlResults()
+   */
+  async function searchWikidataBox(bbox, options) {
+    options = options || {};
+    const query = buildBoxQuery(bbox, options);
+    const url =
+      WIKIDATA_SPARQL_ENDPOINT + '?format=json&query=' + encodeURIComponent(query);
+
+    const timeoutMs = options.timeoutMs || DEFAULT_TIMEOUT_MS;
+    const maxRetries =
+      options.maxRetries !== undefined ? options.maxRetries : DEFAULT_MAX_RETRIES;
+
+    const headers = { Accept: 'application/sparql-results+json' };
+    if (options.userAgent) {
+      headers['User-Agent'] = options.userAgent; // werkt alleen server-side; browsers negeren dit
+    }
+
+    let lastError;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const data = await performSingleRequest(url, headers, timeoutMs);
+        // Eén Wikidata-item kan meerdere keren in de ruwe SPARQL-respons
+        // voorkomen — bijv. als het via meerdere routes in de klasse-
+        // hiërarchie aan het instanceOf-filter voldoet. Dedupliceren
+        // voorkomt dat de aanroeper (en uiteindelijk de CSV) hetzelfde
+        // punt dubbel krijgt.
+        return dedupeById(parseSparqlResults(data));
+      } catch (err) {
+        lastError = err;
+        const isTimeout = err.name === 'AbortError';
+        const hasRetriesLeft = attempt < maxRetries;
+        if (!isTimeout || !hasRetriesLeft) {
+          throw err;
+        }
+        // Stilzwijgend opnieuw proberen bij een timeout; een echte
+        // HTTP-foutmelding (bijv. 403/500) wordt hierboven al meteen
+        // gegooid en dus niet herhaald.
+      }
+    }
+    throw lastError;
   }
 
   return {
