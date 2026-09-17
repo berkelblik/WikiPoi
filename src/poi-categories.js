@@ -35,8 +35,10 @@
    * Elke categorie:
    * - key: technische sleutel (stabiel, gebruik dit in opgeslagen
    *   gebruikersvoorkeuren — niet het label, dat kan nog wijzigen)
-   * - label: Nederlandse tekst voor het aanvinklijstje
-   * - description: korte toelichting (optioneel te tonen, bijv. als tooltip)
+   * - labels: vertalingen van het label voor het aanvinklijstje, per
+   *   taalcode (bijv. {nl: 'Kerken', en: 'Churches', ...})
+   * - descriptions: vertalingen van een korte toelichting (optioneel te
+   *   tonen, bijv. als tooltip), zelfde structuur als labels
    * - qids: Wikidata-QID's waarop gefilterd wordt (instance of / subclass of)
    * - osmTags: OpenStreetMap-tagfilters voor osm-fallback.js — een array
    *   van filtergroepen; elke filtergroep is een array van {key, value}
@@ -47,41 +49,76 @@
   const CATEGORIES = [
     {
       key: 'kerken',
-      label: 'Kerken',
-      description: 'Kerkgebouwen',
+      labels: { nl: 'Kerken', en: 'Churches', fr: 'Églises', de: 'Kirchen', es: 'Iglesias' },
+      descriptions: {
+        nl: 'Kerkgebouwen',
+        en: 'Church buildings',
+        fr: 'Édifices religieux',
+        de: 'Kirchengebäude',
+        es: 'Edificios religiosos',
+      },
       qids: ['Q16970'], // church building
       osmTags: [[{ key: 'amenity', value: 'place_of_worship' }, { key: 'religion', value: 'christian' }]],
       defaultEnabled: true,
     },
     {
       key: 'molens',
-      label: 'Molens',
-      description: 'Wind- en watermolens',
+      labels: { nl: 'Molens', en: 'Windmills', fr: 'Moulins', de: 'Mühlen', es: 'Molinos' },
+      descriptions: {
+        nl: 'Wind- en watermolens',
+        en: 'Wind and water mills',
+        fr: 'Moulins à vent et à eau',
+        de: 'Wind- und Wassermühlen',
+        es: 'Molinos de viento y de agua',
+      },
       qids: ['Q38720'], // windmill
       osmTags: [[{ key: 'man_made', value: 'windmill' }]],
       defaultEnabled: true,
     },
     {
       key: 'musea',
-      label: 'Musea',
-      description: 'Musea en tentoonstellingsruimtes',
+      labels: { nl: 'Musea', en: 'Museums', fr: 'Musées', de: 'Museen', es: 'Museos' },
+      descriptions: {
+        nl: 'Musea en tentoonstellingsruimtes',
+        en: 'Museums and exhibition spaces',
+        fr: "Musées et espaces d'exposition",
+        de: 'Museen und Ausstellungsräume',
+        es: 'Museos y espacios de exposición',
+      },
       qids: ['Q33506'], // museum
       osmTags: [[{ key: 'tourism', value: 'museum' }]],
       defaultEnabled: false,
     },
     {
       key: 'kastelen',
-      label: 'Kastelen',
-      description: 'Kastelen en vestingwerken',
+      labels: { nl: 'Kastelen', en: 'Castles', fr: 'Châteaux', de: 'Burgen und Schlösser', es: 'Castillos' },
+      descriptions: {
+        nl: 'Kastelen en vestingwerken',
+        en: 'Castles and fortifications',
+        fr: 'Châteaux et fortifications',
+        de: 'Burgen und Festungsanlagen',
+        es: 'Castillos y fortificaciones',
+      },
       qids: ['Q23413'], // castle
       osmTags: [[{ key: 'historic', value: 'castle' }]],
       defaultEnabled: true,
     },
     {
       key: 'oorlogsgeschiedenis',
-      label: 'Oorlogsgeschiedenis',
-      description:
-        'Veldslagen, belegeringen en oorlogsmonumenten (bijv. WO II of het Beleg van Lochem)',
+      labels: {
+        nl: 'Oorlogsgeschiedenis',
+        en: 'War history',
+        fr: 'Histoire de guerre',
+        de: 'Kriegsgeschichte',
+        es: 'Historia bélica',
+      },
+      descriptions: {
+        nl: 'Veldslagen, belegeringen en oorlogsmonumenten (bijv. WO II of het Beleg van Lochem)',
+        en: 'Battles, sieges and war memorials (e.g. WWII or the Siege of Lochem)',
+        fr: 'Batailles, sièges et monuments commémoratifs de guerre (p. ex. la Seconde Guerre mondiale ou le siège de Lochem)',
+        de: 'Schlachten, Belagerungen und Kriegsdenkmäler (z. B. Zweiter Weltkrieg oder die Belagerung von Lochem)',
+        es: 'Batallas, asedios y monumentos conmemorativos de guerra (p. ej. la Segunda Guerra Mundial o el asedio de Lochem)',
+      },
       qids: [
         'Q178561', // battle
         'Q188055', // siege
@@ -95,35 +132,147 @@
     },
     {
       key: 'archeologie',
-      label: 'Archeologie',
-      description: 'Archeologische vindplaatsen',
+      labels: { nl: 'Archeologie', en: 'Archaeology', fr: 'Archéologie', de: 'Archäologie', es: 'Arqueología' },
+      descriptions: {
+        nl: 'Archeologische vindplaatsen',
+        en: 'Archaeological sites',
+        fr: 'Sites archéologiques',
+        de: 'Archäologische Fundstätten',
+        es: 'Yacimientos arqueológicos',
+      },
       qids: ['Q839954'], // archaeological site
       osmTags: [[{ key: 'historic', value: 'archaeological_site' }]],
       defaultEnabled: false,
     },
     {
       key: 'natuur',
-      label: 'Natuurgebieden',
-      description: 'Beschermde natuurgebieden',
+      labels: {
+        nl: 'Natuurgebieden',
+        en: 'Nature reserves',
+        fr: 'Réserves naturelles',
+        de: 'Naturschutzgebiete',
+        es: 'Reservas naturales',
+      },
+      descriptions: {
+        nl: 'Beschermde natuurgebieden',
+        en: 'Protected nature reserves',
+        fr: 'Réserves naturelles protégées',
+        de: 'Geschützte Naturschutzgebiete',
+        es: 'Reservas naturales protegidas',
+      },
       qids: ['Q179049'], // nature reserve
       osmTags: [[{ key: 'leisure', value: 'nature_reserve' }]],
       defaultEnabled: false,
     },
   ];
 
+  const DEFAULT_UI_LANGUAGE = 'nl';
+  const SUPPORTED_UI_LANGUAGES = ['nl', 'en', 'fr', 'de', 'es'];
+
+  /**
+   * Kiest de tekst in de gevraagde taal uit een vertaaltabel, met een
+   * terugvalketen: gevraagde taal → Nederlands (de "brontaal" waarin
+   * alles gegarandeerd bestaat) → Engels → de eerste vertaling die er
+   * toevallig is (zou niet moeten voorkomen bij de huidige, complete
+   * vertaaltabellen, maar voorkomt een crash mocht een categorie ooit
+   * onvolledig vertaald worden toegevoegd).
+   */
+  function resolveTranslation(translations, uiLanguage) {
+    return (
+      translations[uiLanguage] ||
+      translations[DEFAULT_UI_LANGUAGE] ||
+      translations.en ||
+      Object.values(translations)[0]
+    );
+  }
+
+  /**
+   * De taalcodes waarvoor de categorienamen daadwerkelijk vertaald zijn.
+   */
+  function getSupportedUiLanguages() {
+    return SUPPORTED_UI_LANGUAGES.slice();
+  }
+
+  /**
+   * Haalt de primaire taalsubtag uit een BCP47-achtige locale-string, bijv.
+   * "fr-FR" → "fr", "pt_BR" → "pt", "de-DE" → "de". Hoofdletterongevoelig.
+   * Geeft null terug als er geen bruikbare taalcode uit te halen valt.
+   */
+  function normalizeLocale(locale) {
+    if (!locale) return null;
+    const primary = String(locale).split(/[-_]/)[0].toLowerCase();
+    return /^[a-z]{2,3}$/.test(primary) ? primary : null;
+  }
+
+  /**
+   * Bepaalt welke UI-taal gebruikt moet worden op basis van de
+   * apparaat-/browserlocale van de gebruiker (bijv. `navigator.language`
+   * in een PWA, of het Capacitor-equivalent in de native app — het
+   * uitlezen daarvan is aan de aanroeper, deze functie doet alleen de
+   * vertaling naar "wat kan WikiPoi ermee").
+   *
+   * Staat de taal van het apparaat in de ondersteunde lijst
+   * (getSupportedUiLanguages()), dan wordt die gebruikt. Staat hij er
+   * niet in (bijv. Portugees, Italiaans, Pools), dan valt de UI terug op
+   * Engels — expliciet gekozen in plaats van Nederlands, omdat Engels
+   * voor een willekeurige buitenlandse toerist een neutralere/breder
+   * begrepen keuze is dan Nederlands.
+   *
+   * @param {string} [deviceLocale] - bijv. "fr-FR", "pt-BR", "nl"
+   * @returns {string} een taalcode uit getSupportedUiLanguages()
+   */
+  function resolveUiLanguage(deviceLocale) {
+    const primary = normalizeLocale(deviceLocale);
+    if (primary && SUPPORTED_UI_LANGUAGES.includes(primary)) {
+      return primary;
+    }
+    return 'en';
+  }
+
+  /**
+   * Bouwt, op basis van diezelfde apparaatlocale, de taalprioriteitsketen
+   * die direct als `languages`-optie aan
+   * wikidata-search.js#searchWikidataBox() kan worden meegegeven — zodat
+   * de UI-taal en de inhoud-taal met één instelling in de pas lopen.
+   *
+   * De keten is: [herkende voorkeurstaal, 'en', 'nl'] (dubbele talen
+   * verwijderd) — dus bij een niet-ondersteunde apparaattaal wordt dat
+   * gewoon ['en', 'nl']. Nederlands staat altijd als laatste vangnet in
+   * de keten, ongeacht de voorkeurstaal, omdat dat nu eenmaal de taal is
+   * waarin de meeste Nederlandse POI's het rijkst gedocumenteerd zijn.
+   *
+   * @param {string} [deviceLocale]
+   * @returns {string[]}
+   */
+  function getContentLanguageChain(deviceLocale) {
+    const uiLanguage = resolveUiLanguage(deviceLocale);
+    const chain = [uiLanguage];
+    if (!chain.includes('en')) chain.push('en');
+    if (!chain.includes('nl')) chain.push('nl');
+    return chain;
+  }
+
   /**
    * Geeft de volledige categorie-tabel terug, bijv. om een aanvinklijstje
-   * mee op te bouwen in de UI.
+   * mee op te bouwen in de UI. `label` en `description` zijn — net als
+   * voorheen — gewone strings; welke taal dat is, bepaalt `uiLanguage`
+   * (standaard Nederlands, zoals altijd).
+   *
+   * @param {string} [uiLanguage='nl'] - taalcode voor label/description,
+   *   bijv. 'fr' voor een Franstalige gebruiker
    */
-  function getCategories() {
+  function getCategories(uiLanguage) {
+    const lang = uiLanguage || DEFAULT_UI_LANGUAGE;
     // Kopie teruggeven zodat de aanroeper de vaste tabel niet per ongeluk
     // kan muteren.
-    return CATEGORIES.map((c) =>
-      Object.assign({}, c, {
-        qids: c.qids.slice(),
-        osmTags: c.osmTags.map((group) => group.map((tag) => Object.assign({}, tag))),
-      })
-    );
+    return CATEGORIES.map((c) => ({
+      key: c.key,
+      label: resolveTranslation(c.labels, lang),
+      description: resolveTranslation(c.descriptions, lang),
+      qids: c.qids.slice(),
+      osmTags: c.osmTags.map((group) => group.map((tag) => Object.assign({}, tag))),
+      defaultEnabled: c.defaultEnabled,
+    }));
   }
 
   /**
@@ -189,5 +338,8 @@
     getDefaultSelectedKeys,
     qidsForKeys,
     osmTagFiltersForKeys,
+    getSupportedUiLanguages,
+    resolveUiLanguage,
+    getContentLanguageChain,
   };
 });
