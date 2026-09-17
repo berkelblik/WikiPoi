@@ -156,9 +156,16 @@
   const candidates = ${JSON.stringify(markerData)};
 
   const map = L.map('map');
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '&copy; OpenStreetMap-medewerkers',
-    maxZoom: 19
+  // De gratis tile.openstreetmap.org-testserver blokkeert al snel apps die
+  // er structureel gebruik van maken (met een "403 Access blocked" pagina
+  // i.p.v. kaarttegels) — zeker vanaf een gedeeld IP-adres zoals een
+  // GitHub Codespace. CartoDB's basiskaart is geschikt voor dit soort
+  // licht, niet-commercieel ontwikkelgebruik en toont de attributie aan
+  // OpenStreetMap correct door.
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>-medewerkers &copy; <a href="https://carto.com/attributions">CARTO</a>',
+    maxZoom: 19,
+    subdomains: 'abcd'
   }).addTo(map);
 
   if (routeLatLngs.length > 1) {
