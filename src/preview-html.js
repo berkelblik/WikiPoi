@@ -162,10 +162,15 @@
   // GitHub Codespace. CartoDB's basiskaart is geschikt voor dit soort
   // licht, niet-commercieel ontwikkelgebruik en toont de attributie aan
   // OpenStreetMap correct door.
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>-medewerkers &copy; <a href="https://carto.com/attributions">CARTO</a>',
-    maxZoom: 19,
-    subdomains: 'abcd'
+  // CartoDB's basemaps.cartocdn.com vereist tegenwoordig een API-key voor
+  // anoniem gebruik (vandaar de "API KEY REQUIRED"-watermark als je die
+  // niet hebt). Wikimedia's eigen kaarttegel-server vereist geen key en
+  // past thematisch bij een Wikidata/Wikipedia-project. Mocht ook deze
+  // ooit geblokkeerd worden: vervang de URL hieronder, bijv. door Esri's
+  // World_Street_Map (server.arcgisonline.com), eveneens zonder key.
+  L.tileLayer('https://maps.wikimedia.org/osm-intl/{z}/{x}/{y}.png', {
+    attribution: 'Wikimedia maps beta | Kaartgegevens &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>-medewerkers',
+    maxZoom: 19
   }).addTo(map);
 
   if (routeLatLngs.length > 1) {
