@@ -117,8 +117,27 @@
   }
 
   /**
+   * Bepaalt of een HTTP-statuscode een TIJDELIJK serverprobleem
+   * aanduidt, waarbij opnieuw proberen zinvol is (de server was even
+   * overbelast of niet bereikbaar, niet per se blijvend "nee").
+   * 502 (Bad Gateway), 503 (Service Unavailable) en 504 (Gateway
+   * Timeout) vallen hieronder. Een 4xx-fout (zoals de eerder
+   * geconstateerde 403 Access blocked) is típisch een permanente
+   * afwijzing en wordt hier bewust NIET als herhaalbaar beschouwd.
+   *
+   * @param {number} status
+   * @returns {boolean}
+   */
+  function isRetryableHttpStatus(status) {
+    return status === 502 || status === 503 || status === 504;
+  }
+
+  /**
    * Eén enkele poging om de Overpass-query uit te voeren, zonder
    * herhaling — analoog aan wikidata-search.js#performSingleRequest().
+   * Bij een HTTP-foutstatus wordt de statuscode op de gegooide Error
+   * gezet (err.status), zodat searchOverpass() kan bepalen of de fout
+   * herhaalbaar is (zie isRetryableHttpStatus() hierboven).
    */
   async function performSingleRequest(query, headers, timeoutMs) {
     const hasAbortController = typeof AbortController !== 'undefined';
@@ -143,9 +162,11 @@
     }
 
     if (!response.ok) {
-      throw new Error(
+      const err = new Error(
         'Overpass-query mislukt: HTTP ' + response.status + ' ' + response.statusText
       );
+      err.status = response.status;
+      throw err;
     }
 
     return response.json();
@@ -154,15 +175,24 @@
   /**
    * Voert de Overpass-zoekopdracht uit en geeft de resultaten terug in
    * hetzelfde kandidaat-formaat als wikidata-search.js#searchWikidataBox().
-   * Bij een timeout wordt de aanvraag automatisch één keer herhaald
-   * (Overpass reageert, net als Wikidata, soms incidenteel traag) —
-   * de aanroeper hoeft dus niet zelf handmatig opnieuw te proberen.
+   * Bij een timeout ÓF een tijdelijke serverfout (HTTP 502/503/504, zie
+   * isRetryableHttpStatus()) wordt de aanvraag automatisch herhaald —
+   * de aanroeper hoeft dus niet zelf handmatig opnieuw te proberen. Een
+   * niet-herhaalbare fout (bijv. HTTP 403, of geen pogingen meer over)
+   * wordt gewoon meteen doorgegeven.
+   *
+   * ACHTERGROND (17 sept. 2026): tot deze wijziging werd alleen een
+   * timeout (AbortError) als herhaalbaar herkend; een HTTP 504 die
+   * tijdens live testen optrad, werd daardoor als harde fout doorgegeven
+   * en liet de hele pijplijn-run crashen, ook al was de oorzaak (een
+   * tijdelijk overbelaste publieke Overpass-server) net zo transiënt als
+   * een timeout.
    *
    * @param {{minLat:number,maxLat:number,minLng:number,maxLng:number}} bbox
    * @param {Array<Array<{key:string,value:string}>>} tagFilterGroups
    * @param {object} [options]
    * @param {number} [options.timeoutMs=25000]
-   * @param {number} [options.maxRetries=1] - aantal automatische herhalingen bij een timeout
+   * @param {number} [options.maxRetries=1] - aantal automatische herhalingen bij een timeout/5xx
    * @param {string} [options.userAgent] - alleen relevant bij server-side gebruik
    * @returns {Promise<Array>}
    */
@@ -192,8 +222,10 @@
       } catch (err) {
         lastError = err;
         const isTimeout = err.name === 'AbortError';
+        const isRetryableServerError = typeof err.status === 'number' && isRetryableHttpStatus(err.status);
+        const isRetryable = isTimeout || isRetryableServerError;
         const hasRetriesLeft = attempt < maxRetries;
-        if (!isTimeout || !hasRetriesLeft) {
+        if (!isRetryable || !hasRetriesLeft) {
           throw err;
         }
         // Korte, oplopende pauze vóór de volgende poging, zelfde reden
@@ -216,6 +248,7 @@
   return {
     buildOverpassQuery,
     elementToCandidate,
+    isRetryableHttpStatus,
     searchOverpass,
   };
 });
