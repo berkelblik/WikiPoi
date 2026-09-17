@@ -5,6 +5,18 @@
  * (zoals geleverd door route-buffer.js → getBoundingBox()), en die een
  * Wikipedia-artikel hebben in de gewenste taal.
  *
+ * Ondersteunt twee, elkaar uitsluitende, filtermodi bovenop de basis
+ * coördinaat+artikel-voorwaarde:
+ *   - options.instanceOf  — "is instance-of/subclass-of één van deze QID's"
+ *     (bestaande modus, bijv. voor kastelen, molens, kerken, ...)
+ *   - options.hasProperty — "heeft deze eigenschap (PID)", bijv. P359
+ *     ("Rijksmonument ID"). Nieuw, toegevoegd voor de "Gebouwd erfgoed"-
+ *     verzamelcategorie, waar niet één klasse-QID volstaat maar een
+ *     Wikidata-eigenschap het onderscheidende kenmerk is.
+ * Worden beide opgegeven, dan heeft instanceOf voorrang (hasProperty wordt
+ * dan genegeerd) — combineren van beide filters in één query wordt (nog)
+ * niet ondersteund, was ook niet nodig voor de huidige categorieën.
+ *
  * Gebruikt de "wikibase:box"-geoservice van de publieke Wikidata Query
  * Service (query.wikidata.org/sparql). Deze service ondersteunt CORS, dus
  * de module werkt zowel in de browser als in Node (Node 18+, native
@@ -48,8 +60,13 @@
    * @param {number} [options.limit=500] - max. aantal resultaten
    * @param {string[]} [options.instanceOf] - optionele lijst Wikidata-QIDs
    *   (bijv. ['Q570116','Q2319498']) om te filteren op "instance of / subclass
-   *   of" een van deze typen (bijv. monument, bezienswaardigheid). Zonder
-   *   deze optie worden alle items met coördinaat + artikel meegenomen.
+   *   of" een van deze typen (bijv. monument, bezienswaardigheid). Heeft
+   *   voorrang op options.hasProperty als beide zijn opgegeven.
+   * @param {string} [options.hasProperty] - optionele Wikidata-property-ID
+   *   (bijv. 'P359' voor "Rijksmonument ID") om te filteren op "heeft deze
+   *   eigenschap". Wordt genegeerd als options.instanceOf ook is opgegeven.
+   *   De waarde van de eigenschap wordt, indien aanwezig, meegenomen in het
+   *   resultaat als `propertyValue` (zie parseSparqlResults()).
    * @returns {string} SPARQL-querytekst
    */
   function buildBoxQuery(bbox, options) {
@@ -57,12 +74,17 @@
     const lang = options.language || DEFAULT_LANGUAGE;
     const limit = options.limit || DEFAULT_LIMIT;
     const instanceOf = options.instanceOf;
+    const hasProperty = options.hasProperty;
 
     let typeClause = '';
+    let propertyValueSelect = '';
     if (Array.isArray(instanceOf) && instanceOf.length > 0) {
       const values = instanceOf.map((id) => 'wd:' + id).join(' ');
       typeClause =
         '?item wdt:P31/wdt:P279* ?type .\n  VALUES ?type { ' + values + ' }\n  ';
+    } else if (hasProperty) {
+      typeClause = '?item wdt:' + hasProperty + ' ?propertyValue .\n  ';
+      propertyValueSelect = ' ?propertyValue';
     }
 
     // Let op: wikibase:box verwacht cornerWest/cornerEast als "Point(lng lat)"
@@ -70,7 +92,9 @@
     // volgorde in de rest van deze codebase — bewust hier lokaal gehouden
     // om verwarring elders te voorkomen).
     return (
-      'SELECT ?item ?itemLabel ?itemDescription ?location ?article WHERE {\n' +
+      'SELECT ?item ?itemLabel ?itemDescription ?location ?article' +
+      propertyValueSelect +
+      ' WHERE {\n' +
       '  SERVICE wikibase:box {\n' +
       '    ?item wdt:P625 ?location .\n' +
       '    bd:serviceParam wikibase:cornerWest "Point(' +
@@ -116,7 +140,9 @@
    * te testen is (bijv. met een opgeslagen voorbeeldrespons).
    *
    * @param {object} sparqlJson - de gedecodeerde JSON-respons
-   * @returns {Array<{id:string,label:string,description:?string,lat:number,lng:number,wikipediaUrl:?string}>}
+   * @returns {Array<{id:string,label:string,description:?string,lat:number,lng:number,wikipediaUrl:?string,propertyValue:?string}>}
+   *   `propertyValue` is alleen aanwezig als de query met options.hasProperty
+   *   is opgebouwd en de binding een waarde voor ?propertyValue bevat.
    */
   function parseSparqlResults(sparqlJson) {
     const bindings =
@@ -131,14 +157,18 @@
       const itemUrl = b.item && b.item.value; // http://www.wikidata.org/entity/Q123
       const id = itemUrl ? itemUrl.substring(itemUrl.lastIndexOf('/') + 1) : null;
 
-      results.push({
+      const result = {
         id: id,
         label: b.itemLabel ? b.itemLabel.value : id || 'Onbekend',
         description: b.itemDescription ? b.itemDescription.value : null,
         lat: point.lat,
         lng: point.lng,
         wikipediaUrl: b.article ? b.article.value : null,
-      });
+      };
+      if (b.propertyValue && b.propertyValue.value !== undefined) {
+        result.propertyValue = b.propertyValue.value;
+      }
+      results.push(result);
     }
     return results;
   }
