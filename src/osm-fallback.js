@@ -30,6 +30,7 @@
 
   const OVERPASS_ENDPOINT = 'https://overpass-api.de/api/interpreter';
   const DEFAULT_TIMEOUT_MS = 25000;
+  const DEFAULT_MAX_RETRIES = 1; // 1 automatische herhaling = max. 2 pogingen totaal
   const OVERPASS_QUERY_TIMEOUT_S = 25; // moet iets onder DEFAULT_TIMEOUT_MS blijven
 
   /**
@@ -115,34 +116,15 @@
   }
 
   /**
-   * Voert de Overpass-zoekopdracht uit en geeft de resultaten terug in
-   * hetzelfde kandidaat-formaat als wikidata-search.js#searchWikidataBox().
-   *
-   * @param {{minLat:number,maxLat:number,minLng:number,maxLng:number}} bbox
-   * @param {Array<Array<{key:string,value:string}>>} tagFilterGroups
-   * @param {object} [options]
-   * @param {number} [options.timeoutMs=25000]
-   * @param {string} [options.userAgent] - alleen relevant bij server-side gebruik
-   * @returns {Promise<Array>}
+   * Eén enkele poging om de Overpass-query uit te voeren, zonder
+   * herhaling — analoog aan wikidata-search.js#performSingleRequest().
    */
-  async function searchOverpass(bbox, tagFilterGroups, options) {
-    options = options || {};
-    if (!Array.isArray(tagFilterGroups) || tagFilterGroups.length === 0) {
-      return []; // geen filters geselecteerd — niets te zoeken
-    }
-
-    const query = buildOverpassQuery(bbox, tagFilterGroups, options);
-    const timeoutMs = options.timeoutMs || DEFAULT_TIMEOUT_MS;
+  async function performSingleRequest(query, headers, timeoutMs) {
     const hasAbortController = typeof AbortController !== 'undefined';
     const controller = hasAbortController ? new AbortController() : null;
     let timeoutId = null;
     if (controller) {
       timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-    }
-
-    const headers = { 'Content-Type': 'text/plain' };
-    if (options.userAgent) {
-      headers['User-Agent'] = options.userAgent;
     }
 
     let response;
@@ -165,7 +147,59 @@
       );
     }
 
-    const data = await response.json();
+    return response.json();
+  }
+
+  /**
+   * Voert de Overpass-zoekopdracht uit en geeft de resultaten terug in
+   * hetzelfde kandidaat-formaat als wikidata-search.js#searchWikidataBox().
+   * Bij een timeout wordt de aanvraag automatisch één keer herhaald
+   * (Overpass reageert, net als Wikidata, soms incidenteel traag) —
+   * de aanroeper hoeft dus niet zelf handmatig opnieuw te proberen.
+   *
+   * @param {{minLat:number,maxLat:number,minLng:number,maxLng:number}} bbox
+   * @param {Array<Array<{key:string,value:string}>>} tagFilterGroups
+   * @param {object} [options]
+   * @param {number} [options.timeoutMs=25000]
+   * @param {number} [options.maxRetries=1] - aantal automatische herhalingen bij een timeout
+   * @param {string} [options.userAgent] - alleen relevant bij server-side gebruik
+   * @returns {Promise<Array>}
+   */
+  async function searchOverpass(bbox, tagFilterGroups, options) {
+    options = options || {};
+    if (!Array.isArray(tagFilterGroups) || tagFilterGroups.length === 0) {
+      return []; // geen filters geselecteerd — niets te zoeken
+    }
+
+    const query = buildOverpassQuery(bbox, tagFilterGroups, options);
+    const timeoutMs = options.timeoutMs || DEFAULT_TIMEOUT_MS;
+    const maxRetries =
+      options.maxRetries !== undefined ? options.maxRetries : DEFAULT_MAX_RETRIES;
+
+    const headers = { 'Content-Type': 'text/plain' };
+    if (options.userAgent) {
+      headers['User-Agent'] = options.userAgent;
+    }
+
+    let data;
+    let lastError;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        data = await performSingleRequest(query, headers, timeoutMs);
+        lastError = null;
+        break;
+      } catch (err) {
+        lastError = err;
+        const isTimeout = err.name === 'AbortError';
+        const hasRetriesLeft = attempt < maxRetries;
+        if (!isTimeout || !hasRetriesLeft) {
+          throw err;
+        }
+        // Stilzwijgend opnieuw proberen bij een timeout.
+      }
+    }
+    if (lastError) throw lastError;
+
     const elements = data.elements || [];
 
     const candidates = [];
