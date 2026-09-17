@@ -72,6 +72,30 @@
   }
   #kopieer-knop:hover { background: #eee; }
   #kopieer-status { margin-left: 0.6rem; font-size: 0.85rem; color: #2a7a2a; }
+
+  .instellingen {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0.8rem 1.2rem;
+    margin-top: 0.8rem;
+  }
+  .veld { display: flex; flex-direction: column; gap: 0.25rem; }
+  .veld label { font-size: 0.85rem; font-weight: 600; color: #333; }
+  .veld input[type="text"], .veld input[type="number"] {
+    padding: 0.4rem 0.5rem;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    font-family: inherit;
+  }
+  .veld small { color: #777; font-size: 0.78rem; }
+  .veld-checkbox { display: flex; flex-direction: row; align-items: center; gap: 0.5rem; }
+  .veld-checkbox label { font-weight: 600; font-size: 0.85rem; }
+  #commando-waarschuwing {
+    color: #a15c00;
+    font-size: 0.85rem;
+    margin-top: 0.5rem;
+  }
 </style>
 </head>
 <body>
@@ -84,6 +108,36 @@
   categorieën tijdelijk uitgeschakeld.
 </p>
 
+<h2>Route &amp; instellingen</h2>
+<div class="instellingen">
+  <div class="veld">
+    <label for="veld-gpx">GPX-bestand</label>
+    <input type="text" id="veld-gpx" placeholder="examples/route.gpx" />
+  </div>
+  <div class="veld">
+    <label for="veld-uitvoer">Uitvoerbestand</label>
+    <input type="text" id="veld-uitvoer" placeholder="(automatisch)" />
+    <small>Leeg = automatisch afgeleid van het GPX-bestand</small>
+  </div>
+  <div class="veld">
+    <label for="veld-straal">Zoekstraal (m)</label>
+    <input type="number" id="veld-straal" value="400" min="1" />
+  </div>
+  <div class="veld">
+    <label for="veld-trigger">Trigger-afstand (m)</label>
+    <input type="number" id="veld-trigger" value="50" min="1" />
+  </div>
+  <div class="veld">
+    <label for="veld-osm-drempel">OSM-skip-drempel</label>
+    <input type="number" id="veld-osm-drempel" placeholder="(optioneel)" min="0" />
+    <small>Leeg = OSM-aanvulling nooit overslaan</small>
+  </div>
+  <div class="veld veld-checkbox">
+    <input type="checkbox" id="veld-preview" />
+    <label for="veld-preview">Preview genereren (--preview)</label>
+  </div>
+</div>
+
 <h2>Kernvaste categorieën</h2>
 <fieldset id="kern-categorieen"></fieldset>
 
@@ -92,12 +146,12 @@
 <fieldset id="extra-categorieen"></fieldset>
 
 <div id="resultaat">
-  <strong>CLI-argument voor poc-gpx-naar-csv.js</strong>
+  <strong>Commando voor poc-gpx-naar-csv.js</strong>
   <p class="uitleg" style="margin-top:0.3rem;">
-    Kopieer onderstaande tekst als het 5e argument van je commando, bijv.:<br />
-    <code>node poc-gpx-naar-csv.js route.gpx uitvoer.csv 400 75 <em>&lt;dit&gt;</em></code>
+    Kopieer onderstaande regel en plak die in de terminal, in de hoofdmap van de repo.
   </p>
   <code id="cli-argument"></code>
+  <div id="commando-waarschuwing"></div>
   <br />
   <button id="kopieer-knop" type="button">Kopieer naar klembord</button>
   <span id="kopieer-status"></span>
@@ -122,8 +176,35 @@
     const extraContainer = document.getElementById('extra-categorieen');
     const teller = document.getElementById('teller');
     const cliArgument = document.getElementById('cli-argument');
+    const commandoWaarschuwing = document.getElementById('commando-waarschuwing');
     const kopieerKnop = document.getElementById('kopieer-knop');
     const kopieerStatus = document.getElementById('kopieer-status');
+
+    const veldGpx = document.getElementById('veld-gpx');
+    const veldUitvoer = document.getElementById('veld-uitvoer');
+    const veldStraal = document.getElementById('veld-straal');
+    const veldTrigger = document.getElementById('veld-trigger');
+    const veldOsmDrempel = document.getElementById('veld-osm-drempel');
+    const veldPreview = document.getElementById('veld-preview');
+
+    // Zodra de gebruiker zelf iets in het uitvoerveld typt, stoppen we met
+    // het automatisch overschrijven ervan (anders vecht de auto-suggestie
+    // met wat de gebruiker net intypte).
+    let uitvoerHandmatigGewijzigd = false;
+    veldUitvoer.addEventListener('input', () => {
+      uitvoerHandmatigGewijzigd = veldUitvoer.value.trim() !== '';
+    });
+
+    /**
+     * Leidt, net als poc-gpx-naar-csv.js#main() zelf doet, een
+     * standaard-uitvoerbestandsnaam af van het GPX-pad: dezelfde naam,
+     * met .csv (normale modus) of .preview.html (--preview) als extensie.
+     */
+    function standaardUitvoerbestand(gpxPad, isPreview) {
+      if (!gpxPad) return '';
+      const zonderExtensie = gpxPad.replace(/\.gpx$/i, '');
+      return zonderExtensie + (isPreview ? '.preview.html' : '.csv');
+    }
 
     function maakCategorieLabel(categorie) {
       const label = document.createElement('label');
@@ -154,12 +235,43 @@
     }
 
     function huidigeSelectie() {
-      const alleCheckboxes = document.querySelectorAll('input[type="checkbox"]');
+      const alleCheckboxes = document.querySelectorAll('#kern-categorieen input[type="checkbox"], #extra-categorieen input[type="checkbox"]');
       const geselecteerd = [];
       alleCheckboxes.forEach((cb) => {
         if (cb.checked) geselecteerd.push(cb.value);
       });
       return geselecteerd;
+    }
+
+    /**
+     * Bouwt het volledige commando op uit de huidige veldwaarden en
+     * categorieselectie. Losstaand van de DOM-updates gehouden zodat dit
+     * ook buiten de browser (bijv. met een test) na te bootsen is.
+     *
+     * @returns {{command: string|null, warning: string|null}}
+     *   command is null als er nog geen GPX-bestand is ingevuld.
+     */
+    function bouwCommando(params) {
+      const { gpx, uitvoer, straal, trigger, osmDrempel, preview, categorieënCsv } = params;
+
+      if (!gpx) {
+        return { command: null, warning: 'Vul eerst een GPX-bestand in.' };
+      }
+      if (!categorieënCsv) {
+        return { command: null, warning: 'Vink minstens één categorie aan.' };
+      }
+
+      const effectieveUitvoer = uitvoer || standaardUitvoerbestand(gpx, preview);
+
+      const delen = ['node', 'poc-gpx-naar-csv.js', gpx, effectieveUitvoer, String(straal), String(trigger), categorieënCsv];
+      if (osmDrempel !== '' && osmDrempel !== null && osmDrempel !== undefined) {
+        delen.push(String(osmDrempel));
+      }
+      if (preview) {
+        delen.push('--preview');
+      }
+
+      return { command: delen.join(' '), warning: null };
     }
 
     function bijwerken() {
@@ -180,16 +292,48 @@
         label.classList.toggle('disabled', !magNogAan);
       });
 
-      // CLI-argument bijwerken (volgorde: zoals CATEGORIES ze definieert,
-      // dus deterministisch en leesbaar, niet de volgorde van aanvinken)
+      // Categorieën in vaste, voorspelbare volgorde (zoals CATEGORIES ze
+      // definieert, niet de volgorde van aanvinken)
       const volgorde = categorieën.map((c) => c.key);
       const geordendeSelectie = volgorde.filter((k) => selectie.includes(k));
-      cliArgument.textContent = geordendeSelectie.join(',');
+      const categorieënCsv = geordendeSelectie.join(',');
+
+      // Uitvoerveld auto-suggereren, tenzij de gebruiker het zelf al bewerkte
+      const gpx = veldGpx.value.trim();
+      const preview = veldPreview.checked;
+      if (!uitvoerHandmatigGewijzigd) {
+        veldUitvoer.value = standaardUitvoerbestand(gpx, preview);
+      }
+
+      const resultaat = bouwCommando({
+        gpx: gpx,
+        uitvoer: veldUitvoer.value.trim(),
+        straal: veldStraal.value || 400,
+        trigger: veldTrigger.value || 50,
+        osmDrempel: veldOsmDrempel.value.trim(),
+        preview: preview,
+        categorieënCsv: categorieënCsv,
+      });
+
+      if (resultaat.command) {
+        cliArgument.textContent = resultaat.command;
+        commandoWaarschuwing.textContent = '';
+        kopieerKnop.disabled = false;
+      } else {
+        cliArgument.textContent = '';
+        commandoWaarschuwing.textContent = resultaat.warning;
+        kopieerKnop.disabled = true;
+      }
       kopieerStatus.textContent = '';
     }
 
     document.addEventListener('change', (e) => {
-      if (e.target.matches('input[type="checkbox"]')) {
+      if (e.target.matches('input')) {
+        bijwerken();
+      }
+    });
+    document.addEventListener('input', (e) => {
+      if (e.target.matches('input[type="text"], input[type="number"]')) {
         bijwerken();
       }
     });
@@ -209,3 +353,4 @@
 
 </body>
 </html>
+
