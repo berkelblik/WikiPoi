@@ -194,6 +194,7 @@
     // ---------------------------------------------------------------
     {
       key: 'gebouwd_erfgoed',
+      group: 'nieuw',
       labels: {
         nl: 'Gebouwd erfgoed',
         en: 'Built heritage',
@@ -230,6 +231,7 @@
     },
     {
       key: 'prehistorie_archeologie',
+      group: 'nieuw',
       labels: {
         nl: 'Prehistorie & archeologie',
         en: 'Prehistory & archaeology',
@@ -265,6 +267,7 @@
     },
     {
       key: 'waterstaat_infrastructuur',
+      group: 'nieuw',
       labels: {
         nl: 'Waterstaat & infrastructuur',
         en: 'Water management & infrastructure',
@@ -300,6 +303,7 @@
     },
     {
       key: 'kunst_gedenktekens',
+      group: 'nieuw',
       labels: {
         nl: 'Kunst & gedenktekens',
         en: 'Art & memorials',
@@ -329,6 +333,14 @@
       defaultEnabled: false,
     },
   ];
+
+  // Maximum aantal categorieën met group:'nieuw' dat de gebruiker tegelijk
+  // mag aanvinken (naast de 7 kernvaste categorieën, die geen limiet
+  // hebben). Bewust hier als constante i.p.v. hardcoded "2" in de UI,
+  // zodat één plek bepaalt wat de regel is; een toekomstige 5e nieuwe
+  // categorie hoeft alleen group: 'nieuw' te krijgen om automatisch onder
+  // dezelfde regel te vallen.
+  const MAX_EXTRA_CATEGORIES = 2;
 
   const DEFAULT_UI_LANGUAGE = 'nl';
   const SUPPORTED_UI_LANGUAGES = ['nl', 'en', 'fr', 'de', 'es'];
@@ -438,6 +450,7 @@
       defaultEnabled: c.defaultEnabled,
       searchRadiusMeters: c.searchRadiusMeters || null,
       hasProperty: c.hasProperty || null,
+      group: c.group || null,
     }));
   }
 
@@ -530,6 +543,49 @@
   }
 
   /**
+   * Geeft de keys van alle categorieën met group:'nieuw' terug — d.w.z.
+   * de categorieën waarop de "kies max. 2"-regel van toepassing is (zie
+   * MAX_EXTRA_CATEGORIES en validateCategorySelection()).
+   *
+   * @returns {string[]}
+   */
+  function getExtraCategoryKeys() {
+    return CATEGORIES.filter((c) => c.group === 'nieuw').map((c) => c.key);
+  }
+
+  /**
+   * Controleert of een selectie van categorie-keys voldoet aan de "kies
+   * max. MAX_EXTRA_CATEGORIES van de group:'nieuw'-categorieën"-regel.
+   * De 7 kernvaste categorieën (zonder group) tellen niet mee voor deze
+   * limiet — die mag de gebruiker allemaal tegelijk aanvinken.
+   *
+   * Bedoeld voor gebruik in zowel een toekomstige UI (om vooraf te
+   * voorkomen dat de gebruiker er te veel aanvinkt) als eventuele
+   * server-/CLI-kant validatie (om een ongeldige, bijv. handmatig
+   * samengestelde, categorielijst alsnog af te vangen).
+   *
+   * @param {string[]} selectedKeys
+   * @returns {{
+   *   valid: boolean,
+   *   extraSelectedKeys: string[],
+   *   maxExtraCategories: number
+   * }}
+   *   extraSelectedKeys bevat ALLE geselecteerde group:'nieuw'-keys (ook
+   *   als dat er te veel zijn) — de aanroeper kan dus zelf tonen welke
+   *   er precies te veel zijn.
+   */
+  function validateCategorySelection(selectedKeys) {
+    const extraKeys = new Set(getExtraCategoryKeys());
+    const keys = selectedKeys || [];
+    const extraSelectedKeys = keys.filter((k) => extraKeys.has(k));
+    return {
+      valid: extraSelectedKeys.length <= MAX_EXTRA_CATEGORIES,
+      extraSelectedKeys: extraSelectedKeys,
+      maxExtraCategories: MAX_EXTRA_CATEGORIES,
+    };
+  }
+
+  /**
    * Groepeert aangevinkte categorie-keys op hun EFFECTIEVE zoekstraal —
    * dat is category.searchRadiusMeters als die gezet is, anders
    * defaultRadiusMeters. Bedoeld voor poc-gpx-naar-csv.js/runPipeline():
@@ -582,6 +638,8 @@
     hasPropertyForKeys,
     osmTagFiltersForKeys,
     groupSelectedKeysByRadius,
+    getExtraCategoryKeys,
+    validateCategorySelection,
     getSupportedUiLanguages,
     resolveUiLanguage,
     getContentLanguageChain,
