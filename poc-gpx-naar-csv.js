@@ -9,7 +9,7 @@
  *     → route-buffer.js       (track/route inlezen, bounding box)
  *     → poi-categories.js     (categorie-filter → Wikidata-QID's + OSM-tags)
  *     → wikidata-search.js    (kandidaat-POI's ophalen)
- *     → osm-fallback.js       (aanvullend, ALLEEN als Wikidata te weinig opleverde)
+ *     → osm-fallback.js       (draait standaard ALTIJD aanvullend mee)
  *     → route-buffer.js       (filteren op werkelijke afstand tot de route)
  *     → wikipedia-summary.js  (samenvatting per kandidaat ophalen)
  *     → europoi-csv.js        (CSV met BOM/CRLF genereren)
@@ -19,7 +19,7 @@
  * interactief ingesteld.
  *
  * Gebruik:
- *   node poc-gpx-naar-csv.js <invoer.gpx> [uitvoer.csv] [zoekstraal_m] [trigger_afstand_m] [categorieën] [osm_fallback_drempel]
+ *   node poc-gpx-naar-csv.js <invoer.gpx> [uitvoer.csv] [zoekstraal_m] [trigger_afstand_m] [categorieën] [osm_skip_drempel]
  *
  * Voorbeeld:
  *   node poc-gpx-naar-csv.js examples/Utrechtse_Waterlinie.gpx waterlinie.csv 400 75 kerken,molens,kastelen,oorlogsgeschiedenis
@@ -38,12 +38,16 @@ const europoiCsv = require('./src/europoi-csv.js');
 const USER_AGENT = 'WikiPoi/0.1 (https://github.com/berkelblik/WikiPoi)';
 const DEFAULT_SEARCH_RADIUS_M = 400;
 const DEFAULT_TRIGGER_DISTANCE_M = 50;
-// Als Wikidata voor de hele bbox minder dan dit aantal kandidaten oplevert,
-// wordt osm-fallback.js erbij gehaald. Standaard 1, d.w.z. "alleen als
-// Wikidata écht niets vond" — zoals het architectuurschema het beschrijft.
-// Hoger zetten (bijv. 5) laat de OSM-aanvulling ook meedraaien bij een
-// schrale, maar niet lege, Wikidata-opbrengst.
-const DEFAULT_OSM_FALLBACK_MIN_CANDIDATES = 1;
+// osm-fallback.js draait STANDAARD ALTIJD mee, naast Wikidata — een route
+// (zoals een industriegebied) kan namelijk best een handvol Wikidata-
+// treffers opleveren terwijl OSM daar nog veel meer te bieden heeft; het
+// ruwe aantal Wikidata-treffers is geen betrouwbare graadmeter voor "is
+// dit genoeg". Wil je de OSM-aanvulling toch overslaan zodra Wikidata al
+// minstens N kandidaten vond (bijv. om sneller te zijn of minder "kale"
+// naam-zonder-tekst-resultaten te krijgen), geef dan een eindige
+// osmFallbackSkipThreshold mee. Infinity (de standaard) betekent: nooit
+// overslaan.
+const DEFAULT_OSM_FALLBACK_SKIP_THRESHOLD = Infinity;
 // Twee resultaten (uit Wikidata en uit OSM) die dichter bij elkaar liggen
 // dan dit worden als dezelfde fysieke plek beschouwd; de OSM-versie wordt
 // dan overgeslagen (Wikidata/Wikipedia levert immers de rijkere tekst).
@@ -61,7 +65,8 @@ const DUPLICATE_DISTANCE_METERS = 30;
  * @param {number} [options.triggerDistanceMeters=50] - vanaf welke afstand EuroPoi zou moeten triggeren
  * @param {string[]} [options.categoryKeys] - poi-categories.js-keys; standaard: getDefaultSelectedKeys()
  * @param {string} [options.language='nl']
- * @param {number} [options.osmFallbackMinCandidates] - zie DEFAULT_OSM_FALLBACK_MIN_CANDIDATES
+ * @param {number} [options.osmFallbackSkipThreshold=Infinity] - zie DEFAULT_OSM_FALLBACK_SKIP_THRESHOLD;
+ *   geef een eindig getal om de OSM-aanvulling over te slaan zodra Wikidata al minstens dit aantal vond
  * @param {Function} [options.searchWikidataBox] - override voor tests
  * @param {Function} [options.searchOverpass] - override voor tests
  * @param {Function} [options.fetchSummariesForCandidates] - override voor tests
@@ -76,7 +81,7 @@ async function runPipeline(options) {
     triggerDistanceMeters = DEFAULT_TRIGGER_DISTANCE_M,
     categoryKeys,
     language = 'nl',
-    osmFallbackMinCandidates = DEFAULT_OSM_FALLBACK_MIN_CANDIDATES,
+    osmFallbackSkipThreshold = DEFAULT_OSM_FALLBACK_SKIP_THRESHOLD,
     searchWikidataBox = wikidataSearch.searchWikidataBox,
     searchOverpass = osmFallback.searchOverpass,
     fetchSummariesForCandidates = wikipediaSummary.fetchSummariesForCandidates,
@@ -113,13 +118,17 @@ async function runPipeline(options) {
     `Wikidata leverde ${candidates.length} kandidaten op binnen de zoekstraal van ${searchRadiusMeters}m.`
   );
 
-  // 4b. OSM-fallback: alleen als Wikidata te weinig opleverde (zie
-  // DEFAULT_OSM_FALLBACK_MIN_CANDIDATES). OSM-resultaten die vrijwel op
-  // dezelfde plek liggen als een reeds gevonden Wikidata-kandidaat worden
-  // overgeslagen — dezelfde fysieke plek hoeft niet twee keer in de CSV.
-  if (candidates.length < osmFallbackMinCandidates) {
+  // 4b. OSM-aanvulling — draait standaard altijd mee (zie
+  // DEFAULT_OSM_FALLBACK_SKIP_THRESHOLD hierboven voor de reden), tenzij
+  // Wikidata al minstens osmFallbackSkipThreshold kandidaten vond. OSM-
+  // resultaten die vrijwel op dezelfde plek liggen als een reeds gevonden
+  // Wikidata-kandidaat worden overgeslagen — dezelfde fysieke plek hoeft
+  // niet twee keer in de CSV.
+  if (candidates.length < osmFallbackSkipThreshold) {
     log(
-      `Minder dan ${osmFallbackMinCandidates} Wikidata-kandidaten — OSM-fallback wordt erbij gehaald.`
+      Number.isFinite(osmFallbackSkipThreshold)
+        ? `Minder dan ${osmFallbackSkipThreshold} Wikidata-kandidaten — OSM-aanvulling wordt erbij gehaald.`
+        : 'OSM-aanvulling wordt erbij gehaald.'
     );
     const osmTagFilterGroups = poiCategories.osmTagFiltersForKeys(selectedKeys);
     const osmCandidates = await searchOverpass(bbox, osmTagFilterGroups, {
@@ -139,6 +148,10 @@ async function runPipeline(options) {
     }
     log(
       `OSM leverde ${osmCandidates.length} kandidaten op, waarvan ${toegevoegd} nieuw (${osmCandidates.length - toegevoegd} viel samen met een bestaande Wikidata-kandidaat).`
+    );
+  } else {
+    log(
+      `OSM-aanvulling overgeslagen (Wikidata vond al ${candidates.length} kandidaten, drempel=${osmFallbackSkipThreshold}).`
     );
   }
 
@@ -211,12 +224,12 @@ async function main() {
     searchRadiusArg,
     triggerDistanceArg,
     categoriesArg,
-    osmFallbackMinCandidatesArg,
+    osmFallbackSkipThresholdArg,
   ] = process.argv;
 
   if (!gpxPath) {
     console.error(
-      'Gebruik: node poc-gpx-naar-csv.js <invoer.gpx> [uitvoer.csv] [zoekstraal_m] [trigger_afstand_m] [categorieën,komma,gescheiden] [osm_fallback_drempel]'
+      'Gebruik: node poc-gpx-naar-csv.js <invoer.gpx> [uitvoer.csv] [zoekstraal_m] [trigger_afstand_m] [categorieën,komma,gescheiden] [osm_skip_drempel]'
     );
     console.error(
       'Voorbeeld: node poc-gpx-naar-csv.js examples/Utrechtse_Waterlinie.gpx waterlinie.csv 400 75 kerken,molens,kastelen,oorlogsgeschiedenis'
@@ -235,9 +248,9 @@ async function main() {
   const categoryKeys = categoriesArg
     ? categoriesArg.split(',').map((s) => s.trim()).filter(Boolean)
     : undefined;
-  const osmFallbackMinCandidates = osmFallbackMinCandidatesArg
-    ? Number(osmFallbackMinCandidatesArg)
-    : DEFAULT_OSM_FALLBACK_MIN_CANDIDATES;
+  const osmFallbackSkipThreshold = osmFallbackSkipThresholdArg
+    ? Number(osmFallbackSkipThresholdArg)
+    : DEFAULT_OSM_FALLBACK_SKIP_THRESHOLD;
 
   const { csv, pois, routeName } = await runPipeline({
     gpxText,
@@ -245,7 +258,7 @@ async function main() {
     searchRadiusMeters,
     triggerDistanceMeters,
     categoryKeys,
-    osmFallbackMinCandidates,
+    osmFallbackSkipThreshold,
   });
 
   if (!csv) {
