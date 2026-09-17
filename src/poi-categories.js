@@ -45,6 +45,16 @@
    *   (AND binnen een groep, OR tussen groepen). Gebruikt als Wikidata
    *   niets opleverde voor deze categorie in een bepaald gebied.
    * - defaultEnabled: of deze categorie standaard is aangevinkt
+   * - searchRadiusMeters (optioneel): overschrijft voor déze categorie de
+   *   standaard zoekstraal die poc-gpx-naar-csv.js/runPipeline() gebruikt
+   *   (searchRadiusMeters-parameter daar, standaard 400m). Weggelaten of
+   *   niet gezet ⇒ de categorie gebruikt gewoon de standaardstraal. Nodig
+   *   voor categorieën met een van nature hoge dichtheid — bijv. de
+   *   toekomstige "Gebouwd erfgoed"-categorie (rijksmonumenten), waar rond
+   *   Zutphen al 20+ treffers in één klein gebied werden gevonden; die zal
+   *   searchRadiusMeters: 150 krijgen zodra hij wordt toegevoegd. Zie
+   *   groupSelectedKeysByRadius() hieronder voor hoe de pijplijn hiermee
+   *   omgaat.
    */
   const CATEGORIES = [
     {
@@ -272,6 +282,7 @@
       qids: c.qids.slice(),
       osmTags: c.osmTags.map((group) => group.map((tag) => Object.assign({}, tag))),
       defaultEnabled: c.defaultEnabled,
+      searchRadiusMeters: c.searchRadiusMeters || null,
     }));
   }
 
@@ -333,11 +344,58 @@
     return groups;
   }
 
+  /**
+   * Groepeert aangevinkte categorie-keys op hun EFFECTIEVE zoekstraal —
+   * dat is category.searchRadiusMeters als die gezet is, anders
+   * defaultRadiusMeters. Bedoeld voor poc-gpx-naar-csv.js/runPipeline():
+   * omdat verschillende categorieën verschillende zoekstralen kunnen
+   * hebben (bijv. een dichte categorie als toekomstige "Gebouwd erfgoed"
+   * op 150m, de rest op de standaard ~400m), kan de pijplijn niet langer
+   * met één gedeelde bounding box werken. Deze functie levert de indeling
+   * waarmee de pijplijn per straal een aparte bbox + Wikidata/OSM-
+   * zoekopdracht kan uitvoeren.
+   *
+   * Bevatten alle aangevinkte categorieën geen eigen searchRadiusMeters
+   * (de situatie voor alle 7 huidige categorieën), dan levert dit precies
+   * ÉÉN groep op met defaultRadiusMeters — het gedrag van de pijplijn
+   * blijft dan identiek aan vóór deze functie bestond.
+   *
+   * Onbekende keys worden, net als bij qidsForKeys() en
+   * osmTagFiltersForKeys(), stilzwijgend genegeerd.
+   *
+   * @param {string[]} selectedKeys
+   * @param {number} defaultRadiusMeters - straal voor categorieën zonder
+   *   eigen searchRadiusMeters (in de pijplijn: DEFAULT_SEARCH_RADIUS_M of
+   *   de door de gebruiker opgegeven waarde)
+   * @returns {Array<{radiusMeters:number, keys:string[]}>} groepen, in de
+   *   volgorde waarin de eerste categorie van elke groep in CATEGORIES
+   *   voorkomt (deterministisch, handig voor voorspelbare logregels)
+   */
+  function groupSelectedKeysByRadius(selectedKeys, defaultRadiusMeters) {
+    const keys = new Set(selectedKeys || []);
+    const order = []; // volgorde waarin radii voor het eerst gezien worden
+    const keysByRadius = new Map();
+    for (const category of CATEGORIES) {
+      if (!keys.has(category.key)) continue;
+      const radius = category.searchRadiusMeters || defaultRadiusMeters;
+      if (!keysByRadius.has(radius)) {
+        keysByRadius.set(radius, []);
+        order.push(radius);
+      }
+      keysByRadius.get(radius).push(category.key);
+    }
+    return order.map((radiusMeters) => ({
+      radiusMeters,
+      keys: keysByRadius.get(radiusMeters),
+    }));
+  }
+
   return {
     getCategories,
     getDefaultSelectedKeys,
     qidsForKeys,
     osmTagFiltersForKeys,
+    groupSelectedKeysByRadius,
     getSupportedUiLanguages,
     resolveUiLanguage,
     getContentLanguageChain,
