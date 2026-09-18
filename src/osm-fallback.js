@@ -44,7 +44,11 @@
    * bbox-object van route-buffer.js#getBoundingBox().
    *
    * @param {{minLat:number,maxLat:number,minLng:number,maxLng:number}} bbox
-   * @param {Array<Array<{key:string,value:string}>>} tagFilterGroups
+   * @param {Array<Array<{key:string,value?:string}>>} tagFilterGroups - een
+   *   tag zonder `value` (of met `value: '*'`) is een "aanwezig, ongeacht
+   *   waarde"-filter, bijv. { key: 'ref:rce' } voor "heeft een RCE-nummer,
+   *   welk nummer dan ook" — nodig omdat rijksmonumenten in OSM een uniek
+   *   ref:rce-nummer per pand hebben, niet een vaste waarde.
    * @param {object} [options]
    * @param {number} [options.timeoutSeconds=25]
    * @returns {string}
@@ -59,7 +63,15 @@
 
     for (const group of tagFilterGroups) {
       const tagClause = group
-        .map((tag) => '["' + tag.key + '"="' + tag.value + '"]')
+        .map((tag) => {
+          // Geen value (of expliciet '*') ⇒ presence-filter: Overpass'
+          // ["key"]-notatie matcht de tag ongeacht de waarde.
+          const isPresenceOnly =
+            tag.value === undefined || tag.value === null || tag.value === '*';
+          return isPresenceOnly
+            ? '["' + tag.key + '"]'
+            : '["' + tag.key + '"="' + tag.value + '"]';
+        })
         .join('');
       // node én way, want zowel losse punten (bijv. een enkel wegkruis)
       // als vlakken (bijv. de omtrek van een kasteelterrein) komen voor.
