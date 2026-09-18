@@ -44,6 +44,10 @@
    *   van filtergroepen; elke filtergroep is een array van {key, value}
    *   (AND binnen een groep, OR tussen groepen). Gebruikt als Wikidata
    *   niets opleverde voor deze categorie in een bepaald gebied.
+   *   `value` is optioneel: {key} zonder value (of met value: '*') is een
+   *   "aanwezig, ongeacht waarde"-filter, bijv. { key: 'ref:rce' } voor
+   *   "heeft een RCE-nummer" — nodig voor tags die per object een uniek
+   *   nummer dragen in plaats van een vaste waarde.
    * - defaultEnabled: of deze categorie standaard is aangevinkt
    * - searchRadiusMeters (optioneel): overschrijft voor déze categorie de
    *   standaard zoekstraal die poc-gpx-naar-csv.js/runPipeline() gebruikt
@@ -217,11 +221,7 @@
       hasProperty: 'P359', // [geverifieerd] "Rijksmonument ID" — live bevestigd, 20 treffers rond Zutphen
       osmTags: [
         [{ key: 'heritage', value: '2' }], // [geverifieerd, Nederlandse rijksmonumenten]
-        // ref:rce=* (aanwezigheid van een RCE-nummer, ongeacht de
-        // waarde) zou eigenlijk ook moeten meetellen, maar het huidige
-        // osmTags-schema ondersteunt alleen exacte key/value-paren, geen
-        // "aanwezig, ongeacht waarde"-wildcard. Nog op te pakken in
-        // osm-fallback.js als je dit alsnog wilt toevoegen.
+        [{ key: 'ref:rce' }], // [geverifieerd] presence-only: heeft een RCE-nummer, ongeacht de waarde
       ],
       // Hoge dichtheid geconstateerd (20+ in één klein gebied rond
       // Zutphen) — kleinere straal dan de standaard ~400m, gecombineerd
