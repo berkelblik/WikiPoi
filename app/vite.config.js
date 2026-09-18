@@ -1,7 +1,13 @@
-import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
 
-// https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+  server: {
+    fs: {
+      // Nodig om de bestaande pijplijn-modules in ../src/ te kunnen
+      // hergebruiken zonder ze te dupliceren in app/.
+      allow: ['..'],
+    },
+  },
 })
