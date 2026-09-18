@@ -283,7 +283,7 @@
         es: 'Faros, esclusas, estaciones de bombeo y puentes históricos (puentes sobre todo vía Patrimonio construido)',
       },
       qids: [
-        'Q39715', // [aanname, eerder als "reeds bevestigd" genoteerd — niet in DEZE sessie herverifieerd] lighthouse
+        'Q39715', // [geverifieerd] lighthouse — live bevestigd rond de Waddeneilanden (11 treffers, o.a. Noordertoren, Vuurtoren van Harlingen)
         'Q105731', // [geverifieerd] schutsluis (lock)
         'Q446013', // [geverifieerd] pompgemaal (pumping station)
         'Q2230272', // [geverifieerd] dieselgemaal (subtype van pompgemaal, apart opgenomen i.p.v. aangenomen subklasse-verband)
