@@ -36,10 +36,20 @@
  */
 
 (function (root, factory) {
+  // BELANGRIJK: beide toewijzingen gebeuren hier onvoorwaardelijk, niet als
+  // elkaars if/else-tak. Bundelaars zoals Vite/Rollup herkennen automatisch
+  // module.exports-syntax en injecteren daarom soms zelf een (nep-)`module`-
+  // object voor CommonJS-compatibiliteit, ook wanneer dit bestand via een
+  // ESM side-effect-import wordt binnengehaald. Stond de root-toewijzing in
+  // een "else"-tak, dan zou hij worden overgeslagen zodra die nep-module
+  // aanwezig is, en zou root.WikiPoiWikidataSearch undefined blijven in de
+  // gebouwde app — dezelfde bug die eerder in europoi-csv.js werd gevonden.
+  const mod = factory();
   if (typeof module === 'object' && module.exports) {
-    module.exports = factory();
-  } else {
-    root.WikiPoiWikidataSearch = factory();
+    module.exports = mod;
+  }
+  if (root) {
+    root.WikiPoiWikidataSearch = mod;
   }
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
