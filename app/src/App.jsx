@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import '../../src/europoi-csv.js'
+import { Capacitor } from '@capacitor/core'
 import { Geolocation } from '@capacitor/geolocation'
 import { TextToSpeech } from '@capacitor-community/text-to-speech'
 import './App.css'
@@ -29,13 +30,19 @@ function App() {
     setGpsError('')
     setGpsResult('')
     try {
-      const permission = await Geolocation.requestPermissions()
-      if (
-        permission.location !== 'granted' &&
-        permission.coarseLocation !== 'granted'
-      ) {
-        setGpsError('Geen toestemming gekregen voor locatie.')
-        return
+      // requestPermissions() is op het web niet geïmplementeerd door de
+      // Capacitor-Geolocation-plugin; alleen op native (Android/iOS) is een
+      // aparte toestemmingsaanvraag nodig. Op het web regelt de browser dit
+      // zelf zodra getCurrentPosition() wordt aangeroepen.
+      if (Capacitor.isNativePlatform()) {
+        const permission = await Geolocation.requestPermissions()
+        if (
+          permission.location !== 'granted' &&
+          permission.coarseLocation !== 'granted'
+        ) {
+          setGpsError('Geen toestemming gekregen voor locatie.')
+          return
+        }
       }
 
       const position = await Geolocation.getCurrentPosition()
