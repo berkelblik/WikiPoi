@@ -182,9 +182,21 @@ function toEuroPoiCsvBlob(pois) {
   return new Blob([toEuroPoiCsvWithBom(pois)], { type: 'text/csv;charset=utf-8;' });
 }
 
-// Werkt zowel als CommonJS-module (Node/tests) als los <script> in de browser.
+// Werkt zowel als CommonJS-module (Node/tests) als los <script> of ESM-bundel-
+// side-effect-import in de browser (Vite/Capacitor).
+//
+// BELANGRIJK: de window-toewijzing gebeurt hier ONVOORWAARDELIJK wanneer
+// window bestaat — dus niet als "else"-tak na de module-check. Bundelaars
+// zoals Vite/Rollup herkennen automatisch de module.exports-syntax hieronder
+// en injecteren daarom soms zelf een (nep-)`module`-object om CommonJS-
+// compatibiliteit te bieden, ook als het bestand via een ESM side-effect-
+// import wordt binnengehaald. Als de window-toewijzing dan in een "else if"
+// zou staan, wordt hij overgeslagen zodra die nep-module aanwezig is, en
+// blijft window.EuroPoiCsv undefined in de gebouwde app — precies de bug
+// die deze volgorde voorkomt.
+if (typeof window !== 'undefined') {
+  window.EuroPoiCsv = { OLC, toEuroPoiCsv, toEuroPoiCsvWithBom, toEuroPoiCsvBlob, cleanText };
+}
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { OLC, toEuroPoiCsv, toEuroPoiCsvWithBom, toEuroPoiCsvBlob, cleanText };
-} else if (typeof window !== 'undefined') {
-  window.EuroPoiCsv = { OLC, toEuroPoiCsv, toEuroPoiCsvWithBom, toEuroPoiCsvBlob, cleanText };
 }
