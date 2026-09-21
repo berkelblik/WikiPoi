@@ -2,6 +2,7 @@ import { useState } from 'react'
 import '../../src/europoi-csv.js'
 import '../../src/wikidata-search.js'
 import '../../src/route-buffer.js'
+import '../../src/osm-fallback.js'
 import { Capacitor } from '@capacitor/core'
 import { Geolocation } from '@capacitor/geolocation'
 import { TextToSpeech } from '@capacitor-community/text-to-speech'
@@ -19,6 +20,14 @@ const FALLBACK_TEST_BBOX = {
   maxLng: 6.2333,
 }
 
+// Voorbeeldfilter voor Test 5, in afwachting van poi-categories.js (die
+// straks de echte categorie → tagfilter-koppeling levert): alles met een
+// "historic"-tag (welke waarde dan ook), of tourism=attraction.
+const EXAMPLE_OSM_TAG_FILTER_GROUPS = [
+  [{ key: 'historic' }],
+  [{ key: 'tourism', value: 'attraction' }],
+]
+
 function App() {
   const [csv, setCsv] = useState('')
   const [csvError, setCsvError] = useState('')
@@ -29,6 +38,9 @@ function App() {
   const [wikidataResults, setWikidataResults] = useState(null)
   const [wikidataError, setWikidataError] = useState('')
   const [wikidataLoading, setWikidataLoading] = useState(false)
+  const [osmResults, setOsmResults] = useState(null)
+  const [osmError, setOsmError] = useState('')
+  const [osmLoading, setOsmLoading] = useState(false)
 
   function runSmokeTest() {
     setCsvError('')
@@ -103,11 +115,13 @@ function App() {
   function handleGpxFileChange(event) {
     setRouteError('')
     setRouteInfo(null)
-    // Een nieuwe route maakt eerdere Wikidata-resultaten (van de vorige
-    // route of het testgebied) ongeldig; laat de gebruiker niet naar
-    // resultaten kijken die niet meer bij de huidige route horen.
+    // Een nieuwe route maakt eerdere resultaten (van de vorige route of
+    // het testgebied) ongeldig; laat de gebruiker niet naar resultaten
+    // kijken die niet meer bij de huidige route horen.
     setWikidataResults(null)
     setWikidataError('')
+    setOsmResults(null)
+    setOsmError('')
 
     const file = event.target.files && event.target.files[0]
     if (!file) return
@@ -180,6 +194,33 @@ function App() {
     }
   }
 
+  async function runOsmFallbackTest() {
+    setOsmError('')
+    setOsmResults(null)
+    setOsmLoading(true)
+    try {
+      if (
+        !window.WikiPoiOsmFallback ||
+        typeof window.WikiPoiOsmFallback.searchOverpass !== 'function'
+      ) {
+        setOsmError(
+          'Fout: window.WikiPoiOsmFallback is niet beschikbaar (osm-fallback.js is niet correct geladen).'
+        )
+        return
+      }
+      const bbox = routeInfo ? routeInfo.bbox : FALLBACK_TEST_BBOX
+      const results = await window.WikiPoiOsmFallback.searchOverpass(
+        bbox,
+        EXAMPLE_OSM_TAG_FILTER_GROUPS
+      )
+      setOsmResults(results)
+    } catch (err) {
+      setOsmError('Fout: ' + (err && err.message ? err.message : String(err)))
+    } finally {
+      setOsmLoading(false)
+    }
+  }
+
   return (
     <>
       <h1>WikiPoi — smoketest</h1>
@@ -234,7 +275,7 @@ function App() {
         {routeError && <p style={{ color: 'red' }}>{routeError}</p>}
       </section>
 
-      <section>
+      <section style={{ marginBottom: '2em' }}>
         <h2>Test 3: POI's zoeken via Wikidata</h2>
         <p style={{ fontStyle: 'italic', marginBottom: '0.5em' }}>
           {routeInfo
@@ -274,6 +315,46 @@ function App() {
           </div>
         )}
         {wikidataError && <p style={{ color: 'red' }}>{wikidataError}</p>}
+      </section>
+
+      <section>
+        <h2>Test 5: OSM-fallback zoeken via Overpass</h2>
+        <p style={{ fontStyle: 'italic', marginBottom: '0.5em' }}>
+          Voorbeeldfilter (nog niet gekoppeld aan poi-categories.js):
+          "historic" (elke waarde) of "tourism=attraction".{' '}
+          {routeInfo
+            ? `Zoekt binnen de bounding box van "${routeInfo.fileName}" (Test 4 hierboven).`
+            : 'Nog geen route geladen bij Test 4 — gebruikt het vaste testgebied bij Zutphen.'}
+        </p>
+        <button onClick={runOsmFallbackTest} disabled={osmLoading}>
+          {osmLoading ? 'Bezig met zoeken...' : "Zoek POI's via Overpass (OSM)"}
+        </button>
+        {osmResults && (
+          <div style={{ textAlign: 'left', marginTop: '1em' }}>
+            <p>{osmResults.length} resultaat/resultaten gevonden:</p>
+            <ul>
+              {osmResults.map((poi) => (
+                <li key={poi.id} style={{ marginBottom: '0.75em' }}>
+                  <strong>{poi.label}</strong>
+                  {poi.description ? ` — ${poi.description}` : ''}
+                  <br />
+                  <small>
+                    {poi.lat.toFixed(5)}, {poi.lng.toFixed(5)}
+                    {poi.wikipediaUrl && (
+                      <>
+                        {' · '}
+                        <a href={poi.wikipediaUrl} target="_blank" rel="noreferrer">
+                          Wikipedia
+                        </a>
+                      </>
+                    )}
+                  </small>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {osmError && <p style={{ color: 'red' }}>{osmError}</p>}
       </section>
     </>
   )
