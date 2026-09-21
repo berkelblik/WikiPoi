@@ -1,10 +1,14 @@
 import { useState } from 'react'
 import '../../src/europoi-csv.js'
 import '../../src/wikidata-search.js'
+import '../../src/route-buffer.js'
 import { Capacitor } from '@capacitor/core'
 import { Geolocation } from '@capacitor/geolocation'
 import { TextToSpeech } from '@capacitor-community/text-to-speech'
 import './App.css'
+
+// Zoekstraal rond de route, zoals eerder afgesproken (~400m).
+const SEARCH_RADIUS_METERS = 400
 
 function App() {
   const [csv, setCsv] = useState('')
@@ -14,6 +18,8 @@ function App() {
   const [wikidataResults, setWikidataResults] = useState(null)
   const [wikidataError, setWikidataError] = useState('')
   const [wikidataLoading, setWikidataLoading] = useState(false)
+  const [routeInfo, setRouteInfo] = useState(null)
+  const [routeError, setRouteError] = useState('')
 
   function runSmokeTest() {
     setCsvError('')
@@ -117,6 +123,54 @@ function App() {
     }
   }
 
+  function handleGpxFileChange(event) {
+    setRouteError('')
+    setRouteInfo(null)
+    const file = event.target.files && event.target.files[0]
+    if (!file) return
+
+    if (
+      !window.WikiPoiRouteBuffer ||
+      typeof window.WikiPoiRouteBuffer.parseGpxLineString !== 'function'
+    ) {
+      setRouteError(
+        'Fout: window.WikiPoiRouteBuffer is niet beschikbaar (route-buffer.js is niet correct geladen).'
+      )
+      return
+    }
+
+    const reader = new FileReader()
+    reader.onload = () => {
+      try {
+        const gpxText = String(reader.result)
+        const parsed = window.WikiPoiRouteBuffer.parseGpxLineString(gpxText)
+        if (!parsed.points || parsed.points.length === 0) {
+          setRouteError(
+            'Geen track- of routepunten gevonden in dit GPX-bestand (verwacht <trkpt> of <rtept>-elementen).'
+          )
+          return
+        }
+        const bbox = window.WikiPoiRouteBuffer.getBoundingBox(
+          parsed.points,
+          SEARCH_RADIUS_METERS
+        )
+        setRouteInfo({
+          fileName: file.name,
+          pointCount: parsed.points.length,
+          source: parsed.source,
+          name: parsed.name,
+          bbox: bbox,
+        })
+      } catch (err) {
+        setRouteError('Fout: ' + (err && err.message ? err.message : String(err)))
+      }
+    }
+    reader.onerror = () => {
+      setRouteError('Fout: kon het bestand niet lezen.')
+    }
+    reader.readAsText(file)
+  }
+
   return (
     <>
       <h1>WikiPoi — smoketest</h1>
@@ -141,7 +195,7 @@ function App() {
         {gpsError && <p style={{ color: 'red' }}>{gpsError}</p>}
       </section>
 
-      <section>
+      <section style={{ marginBottom: '2em' }}>
         <h2>Test 3: POI's zoeken via Wikidata</h2>
         <button onClick={runWikidataTest} disabled={wikidataLoading}>
           {wikidataLoading
@@ -174,6 +228,36 @@ function App() {
           </div>
         )}
         {wikidataError && <p style={{ color: 'red' }}>{wikidataError}</p>}
+      </section>
+
+      <section>
+        <h2>Test 4: GPX-route inladen + bounding box berekenen</h2>
+        <input type="file" accept=".gpx" onChange={handleGpxFileChange} />
+        {routeInfo && (
+          <div style={{ textAlign: 'left', marginTop: '1em' }}>
+            <p>
+              Bestand: <strong>{routeInfo.fileName}</strong>
+              <br />
+              Type: {routeInfo.source === 'track' ? 'track (<trkpt>)' : 'route (<rtept>)'}
+              <br />
+              Naam in bestand: {routeInfo.name || '(geen naam gevonden)'}
+              <br />
+              Aantal punten: {routeInfo.pointCount}
+            </p>
+            <p>
+              Berekende bounding box (marge {SEARCH_RADIUS_METERS}m):
+              <br />
+              <code>
+                minLat: {routeInfo.bbox.minLat.toFixed(5)}, maxLat:{' '}
+                {routeInfo.bbox.maxLat.toFixed(5)}
+                <br />
+                minLng: {routeInfo.bbox.minLng.toFixed(5)}, maxLng:{' '}
+                {routeInfo.bbox.maxLng.toFixed(5)}
+              </code>
+            </p>
+          </div>
+        )}
+        {routeError && <p style={{ color: 'red' }}>{routeError}</p>}
       </section>
     </>
   )

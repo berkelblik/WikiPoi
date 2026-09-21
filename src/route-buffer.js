@@ -18,10 +18,17 @@
  */
 
 (function (root, factory) {
+  // BELANGRIJK: beide toewijzingen gebeuren hier onvoorwaardelijk, niet als
+  // elkaars if/else-tak — zie europoi-csv.js en wikidata-search.js voor de
+  // achtergrond van deze fix (Vite/Rollup injecteert soms een nep-`module`-
+  // object voor CommonJS-compatibiliteit, waardoor een "else"-tak met de
+  // root-toewijzing wordt overgeslagen).
+  const mod = factory();
   if (typeof module === 'object' && module.exports) {
-    module.exports = factory();
-  } else {
-    root.WikiPoiRouteBuffer = factory();
+    module.exports = mod;
+  }
+  if (root) {
+    root.WikiPoiRouteBuffer = mod;
   }
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
