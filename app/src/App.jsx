@@ -7,23 +7,36 @@ import './App.css'
 
 function App() {
   const [csv, setCsv] = useState('')
+  const [csvError, setCsvError] = useState('')
   const [gpsResult, setGpsResult] = useState('')
   const [gpsError, setGpsError] = useState('')
 
   function runSmokeTest() {
-    const testPois = [
-      {
-        lat: 52.1326,
-        lng: 6.2233,
-        name: 'Testpunt Zutphen',
-        desc: 'Smoketest voor de fase 1-integratie.',
-        category: 'Testroute',
-        radius: 50,
-        mp3: '',
-      },
-    ]
-    const result = window.EuroPoiCsv.toEuroPoiCsv(testPois)
-    setCsv(result)
+    setCsvError('')
+    setCsv('')
+    try {
+      if (!window.EuroPoiCsv || typeof window.EuroPoiCsv.toEuroPoiCsv !== 'function') {
+        setCsvError(
+          'Fout: window.EuroPoiCsv is niet beschikbaar (europoi-csv.js is niet correct geladen).'
+        )
+        return
+      }
+      const testPois = [
+        {
+          lat: 52.1326,
+          lng: 6.2233,
+          name: 'Testpunt Zutphen',
+          desc: 'Smoketest voor de fase 1-integratie.',
+          category: 'Testroute',
+          radius: 50,
+          mp3: '',
+        },
+      ]
+      const result = window.EuroPoiCsv.toEuroPoiCsv(testPois)
+      setCsv(result)
+    } catch (err) {
+      setCsvError('Fout: ' + (err && err.message ? err.message : String(err)))
+    }
   }
 
   async function runGpsTtsTest() {
@@ -45,11 +58,15 @@ function App() {
         }
       }
 
-      const position = await Geolocation.getCurrentPosition()
+      const position = await Geolocation.getCurrentPosition({
+        enableHighAccuracy: true,
+        timeout: 20000,
+      })
       const { latitude, longitude } = position.coords
+      const plusCode = window.EuroPoiCsv.OLC.encode(latitude, longitude, 10)
       const resultText = `Positie gevonden: breedtegraad ${latitude.toFixed(
         5
-      )}, lengtegraad ${longitude.toFixed(5)}.`
+      )}, lengtegraad ${longitude.toFixed(5)}. PlusCode: ${plusCode}.`
       setGpsResult(resultText)
 
       await TextToSpeech.speak({
@@ -78,6 +95,7 @@ function App() {
             {csv}
           </pre>
         )}
+        {csvError && <p style={{ color: 'red' }}>{csvError}</p>}
       </section>
 
       <section>
