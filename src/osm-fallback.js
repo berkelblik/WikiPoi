@@ -104,6 +104,13 @@
    * `wikipedia-summary.js` zal voor de meeste OSM-resultaten een
    * `summaryError` teruggeven; de OSM-naam/beschrijving blijft dan als
    * (summiere) terugval-tekst over.
+   *
+   * `wikidataId` (uit de `wikidata`-tag, bijv. "Q12345") wordt apart van
+   * `wikipediaUrl` bijgehouden — bedoeld voor filterAndDedupeOsmCandidates()
+   * hieronder, dat hierop dedupliceert tegen wikidata-search.js-resultaten
+   * (Test 3). Een QID-vergelijking is robuuster dan een URL-vergelijking
+   * (taalvarianten, trailing slashes, encoding-verschillen spelen dan niet
+   * mee).
    */
   function elementToCandidate(element) {
     const tags = element.tags || {};
@@ -121,6 +128,11 @@
       }
     }
 
+    // De `wikidata`-tag bevat, indien aanwezig, rechtstreeks de QID
+    // (bijv. "Q12345") — geen verdere parsing nodig, in tegenstelling tot
+    // de `wikipedia`-tag hierboven.
+    const wikidataId = tags.wikidata || null;
+
     const label = tags.name || tags['name:nl'] || 'Naamloos punt (OSM)';
     const description = tags.description || tags.inscription || null;
 
@@ -131,8 +143,48 @@
       lat: lat,
       lng: lng,
       wikipediaUrl: wikipediaUrl,
+      wikidataId: wikidataId,
       source: 'osm',
     };
+  }
+
+  /**
+   * Filtert en dedupliceert OSM-kandidaten t.o.v. reeds gevonden
+   * Wikidata-kandidaten (Test 3 / wikidata-search.js#searchWikidataBox()):
+   *
+   *   - een OSM-kandidaat wiens `wikidataId` al voorkomt in de
+   *     Wikidata-resultatenlijst (op basis van het `id`-veld daar, de kale
+   *     QID) wordt overgeslagen — die is al rijker opgehaald via de
+   *     Wikidata/Wikipedia-route, dus dubbel werk zonder meerwaarde;
+   *   - een OSM-kandidaat zónder `wikidataId`, zónder `wikipediaUrl` én
+   *     zónder `description` wordt overgeslagen — een "leeg" punt levert
+   *     geen bruikbare tekst op voor de app (zie ook: toekomstige
+   *     OSM-aan/uit-schakelaar voor de eindgebruiker, los van dit filter).
+   *
+   * Een OSM-kandidaat mét `wikidataId` die NIET in de Wikidata-resultaten
+   * voorkomt, blijft juist behouden — dat is precies het vangnet-scenario
+   * (Wikidata-item zonder coördinaat, of buiten het instanceOf/hasProperty-
+   * filter van de gekozen categorie) waarom Test 5 naast Test 3 bestaat.
+   *
+   * @param {Array<{wikidataId:?string,wikipediaUrl:?string,description:?string}>} osmCandidates
+   *   - resultaat van searchOverpass() / elementToCandidate()
+   * @param {Array<{id:string}>} wikidataCandidates - resultaat van
+   *   wikidata-search.js#searchWikidataBox() (of #dedupeById()); `id` is de
+   *   kale QID, bijv. "Q12345"
+   * @returns {Array} de gefilterde/gededupliceerde OSM-kandidatenlijst
+   */
+  function filterAndDedupeOsmCandidates(osmCandidates, wikidataCandidates) {
+    const knownQids = new Set(
+      (wikidataCandidates || []).map((c) => c.id).filter(Boolean)
+    );
+
+    return (osmCandidates || []).filter((c) => {
+      if (c.wikidataId && knownQids.has(c.wikidataId)) {
+        return false; // al gevonden via Test 3 — dubbel, overslaan
+      }
+      const hasUsableContent = !!(c.wikidataId || c.wikipediaUrl || c.description);
+      return hasUsableContent; // "leeg" punt zonder wiki-koppeling/tekst overslaan
+    });
   }
 
   /**
@@ -267,6 +319,7 @@
   return {
     buildOverpassQuery,
     elementToCandidate,
+    filterAndDedupeOsmCandidates,
     isRetryableHttpStatus,
     searchOverpass,
   };
