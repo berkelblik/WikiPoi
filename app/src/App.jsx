@@ -3,6 +3,7 @@ import '../../src/europoi-csv.js'
 import '../../src/wikidata-search.js'
 import '../../src/route-buffer.js'
 import '../../src/osm-fallback.js'
+import '../../src/wikipedia-summary.js'
 import { Capacitor } from '@capacitor/core'
 import { Geolocation } from '@capacitor/geolocation'
 import { TextToSpeech } from '@capacitor-community/text-to-speech'
@@ -41,6 +42,9 @@ function App() {
   const [osmResults, setOsmResults] = useState(null)
   const [osmError, setOsmError] = useState('')
   const [osmLoading, setOsmLoading] = useState(false)
+  const [summaryResults, setSummaryResults] = useState(null)
+  const [summaryError, setSummaryError] = useState('')
+  const [summaryLoading, setSummaryLoading] = useState(false)
 
   function runSmokeTest() {
     setCsvError('')
@@ -122,6 +126,8 @@ function App() {
     setWikidataError('')
     setOsmResults(null)
     setOsmError('')
+    setSummaryResults(null)
+    setSummaryError('')
 
     const file = event.target.files && event.target.files[0]
     if (!file) return
@@ -221,6 +227,41 @@ function App() {
     }
   }
 
+  async function runWikipediaSummaryTest() {
+    setSummaryError('')
+    setSummaryResults(null)
+    setSummaryLoading(true)
+    try {
+      if (
+        !window.WikiPoiWikipediaSummary ||
+        typeof window.WikiPoiWikipediaSummary.fetchSummariesForCandidates !== 'function'
+      ) {
+        setSummaryError(
+          'Fout: window.WikiPoiWikipediaSummary is niet beschikbaar (wikipedia-summary.js is niet correct geladen).'
+        )
+        return
+      }
+      // Combineert de Test 3- (Wikidata) en Test 5- (OSM) resultaten tot
+      // één lijst van kandidaten; beide kunnen een wikipediaUrl hebben.
+      const candidates = [...(wikidataResults || []), ...(osmResults || [])]
+      if (candidates.length === 0) {
+        setSummaryError(
+          'Geen kandidaten beschikbaar — voer eerst Test 3 en/of Test 5 uit.'
+        )
+        return
+      }
+      const enriched = await window.WikiPoiWikipediaSummary.fetchSummariesForCandidates(
+        candidates,
+        { maxSentences: 3 }
+      )
+      setSummaryResults(enriched)
+    } catch (err) {
+      setSummaryError('Fout: ' + (err && err.message ? err.message : String(err)))
+    } finally {
+      setSummaryLoading(false)
+    }
+  }
+
   return (
     <>
       <h1>WikiPoi — smoketest</h1>
@@ -317,7 +358,7 @@ function App() {
         {wikidataError && <p style={{ color: 'red' }}>{wikidataError}</p>}
       </section>
 
-      <section>
+      <section style={{ marginBottom: '2em' }}>
         <h2>Test 5: OSM-fallback zoeken via Overpass</h2>
         <p style={{ fontStyle: 'italic', marginBottom: '0.5em' }}>
           Voorbeeldfilter (nog niet gekoppeld aan poi-categories.js):
@@ -355,6 +396,51 @@ function App() {
           </div>
         )}
         {osmError && <p style={{ color: 'red' }}>{osmError}</p>}
+      </section>
+
+      <section>
+        <h2>Test 6: Wikipedia-samenvattingen ophalen</h2>
+        <p style={{ fontStyle: 'italic', marginBottom: '0.5em' }}>
+          Verrijkt de hierboven gevonden Test 3- (Wikidata) en Test 5-
+          (OSM) resultaten samen met hun Wikipedia-samenvatting (max. 3
+          zinnen), via wikipedia-summary.js. Voer eerst Test 3 en/of Test
+          5 uit.
+        </p>
+        <button onClick={runWikipediaSummaryTest} disabled={summaryLoading}>
+          {summaryLoading ? 'Bezig met ophalen...' : 'Haal Wikipedia-samenvattingen op'}
+        </button>
+        {summaryResults && (
+          <div style={{ textAlign: 'left', marginTop: '1em' }}>
+            <p>{summaryResults.length} kandidaat/kandidaten verwerkt:</p>
+            <ul>
+              {summaryResults.map((item, index) => (
+                <li key={item.id || index} style={{ marginBottom: '1em' }}>
+                  <strong>{item.label}</strong>
+                  <br />
+                  {item.summary ? (
+                    <>
+                      {item.summary.thumbnailUrl && (
+                        <img
+                          src={item.summary.thumbnailUrl}
+                          alt=""
+                          style={{ maxWidth: '150px', display: 'block', margin: '0.5em 0' }}
+                        />
+                      )}
+                      <span>{item.summary.extractShort}</span>
+                      <br />
+                      <small>{item.summary.attribution}</small>
+                    </>
+                  ) : (
+                    <span style={{ color: 'red' }}>
+                      Geen samenvatting: {item.summaryError}
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {summaryError && <p style={{ color: 'red' }}>{summaryError}</p>}
       </section>
     </>
   )
