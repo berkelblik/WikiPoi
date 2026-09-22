@@ -149,38 +149,132 @@
   }
 
   /**
+   * Haalt uit een Wikipedia-artikel-URL een genormaliseerde paginatitel,
+   * bedoeld om twee URL's die naar hetzelfde artikel verwijzen (maar met
+   * kleine notatieverschillen: underscore vs. spatie, hoofdlettergebruik,
+   * URL-encoding) als gelijk te herkennen.
+   *
+   * BEPERKING: een Wikidata-artikeltitel mét ontdubbelingstoevoeging
+   * (bijv. "Sint Walburgiskerk (Zutphen)") matcht NIET met een OSM
+   * `wikipedia`-tag die naar de kale titel "Sint Walburgiskerk" verwijst —
+   * dat blijven twee verschillende strings. Dit vangt dus het gangbare
+   * geval (identieke titel in beide bronnen), niet elk edge-case.
+   *
+   * @param {?string} url
+   * @returns {?string} kleine letters, spaties i.p.v. underscores, of null
+   */
+  function normalizeWikipediaTitle(url) {
+    if (!url) return null;
+    const m = /\/wiki\/([^#?]+)/.exec(url);
+    if (!m) return null;
+    let title = m[1];
+    try {
+      title = decodeURIComponent(title);
+    } catch (e) {
+      // ongeldige encoding — val terug op de ruwe (nog steeds bruikbare) tekst
+    }
+    return title.replace(/_/g, ' ').trim().toLowerCase();
+  }
+
+  /**
+   * Berekent de afstand tussen twee coördinaten in meters (Haversine-
+   * formule). Gebruikt door filterAndDedupeOsmCandidates() om OSM- en
+   * Wikidata-kandidaten op nagenoeg dezelfde locatie te herkennen als
+   * duplicaat, ook wanneer titel- of QID-matching niet aanslaat (bijv.
+   * door een koppelteken- of ontdubbelingsverschil in de Wikipedia-titel).
+   *
+   * @param {number} lat1
+   * @param {number} lng1
+   * @param {number} lat2
+   * @param {number} lng2
+   * @returns {number} afstand in meters
+   */
+  function haversineDistanceMeters(lat1, lng1, lat2, lng2) {
+    const EARTH_RADIUS_METERS = 6371000;
+    const toRad = (deg) => (deg * Math.PI) / 180;
+    const dLat = toRad(lat2 - lat1);
+    const dLng = toRad(lng2 - lng1);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return EARTH_RADIUS_METERS * c;
+  }
+
+  // Standaarddrempel voor "nagenoeg dezelfde locatie" in
+  // filterAndDedupeOsmCandidates() — te overschrijven via
+  // options.coordinateThresholdMeters. Bewust klein gehouden: groter
+  // vergroot het risico dat een apart object vlak naast een Wikidata-POI
+  // (bijv. een monument naast een kerk) onterecht als duplicaat wordt
+  // gezien.
+  const DEFAULT_COORDINATE_DEDUPE_THRESHOLD_METERS = 25;
+
+  /**
    * Filtert en dedupliceert OSM-kandidaten t.o.v. reeds gevonden
-   * Wikidata-kandidaten (Test 3 / wikidata-search.js#searchWikidataBox()):
+   * Wikidata-kandidaten (Test 3 / wikidata-search.js#searchWikidataBox()).
+   * Een OSM-kandidaat wordt overgeslagen zodra minstens één van deze drie
+   * criteria een match geeft met een Wikidata-kandidaat:
    *
-   *   - een OSM-kandidaat wiens `wikidataId` al voorkomt in de
-   *     Wikidata-resultatenlijst (op basis van het `id`-veld daar, de kale
-   *     QID) wordt overgeslagen — die is al rijker opgehaald via de
-   *     Wikidata/Wikipedia-route, dus dubbel werk zonder meerwaarde;
-   *   - een OSM-kandidaat zónder `wikidataId`, zónder `wikipediaUrl` én
-   *     zónder `description` wordt overgeslagen — een "leeg" punt levert
-   *     geen bruikbare tekst op voor de app (zie ook: toekomstige
-   *     OSM-aan/uit-schakelaar voor de eindgebruiker, los van dit filter).
+   *   1. `wikidataId` (OSM-tag `wikidata=*`) komt overeen met het `id`-veld
+   *      (QID) van een Wikidata-kandidaat — de betrouwbaarste match.
+   *   2. De genormaliseerde Wikipedia-paginatitel (exacte match, zie
+   *      normalizeWikipediaTitle()) komt overeen.
+   *   3. De coördinaten liggen binnen `options.coordinateThresholdMeters`
+   *      (standaard 25m, zie haversineDistanceMeters()) van elkaar — vangt
+   *      het geval op waarbij 1 en 2 net niet matchen door een koppelteken-
+   *      of ontdubbelingsverschil in de titel (bijv. Wikidata's
+   *      "Sint-Walburgiskerk (Zutphen)" vs. OSM's "Sint Walburgiskerk"),
+   *      maar het overduidelijk om dezelfde locatie gaat.
    *
-   * Een OSM-kandidaat mét `wikidataId` die NIET in de Wikidata-resultaten
-   * voorkomt, blijft juist behouden — dat is precies het vangnet-scenario
-   * (Wikidata-item zonder coördinaat, of buiten het instanceOf/hasProperty-
-   * filter van de gekozen categorie) waarom Test 5 naast Test 3 bestaat.
+   * Daarnaast wordt een OSM-kandidaat zónder `wikidataId`, zónder
+   * `wikipediaUrl` én zónder `description` altijd overgeslagen — een
+   * "leeg" punt levert geen bruikbare tekst op voor de app.
    *
-   * @param {Array<{wikidataId:?string,wikipediaUrl:?string,description:?string}>} osmCandidates
+   * Een OSM-kandidaat die op geen van deze manieren matcht, blijft
+   * behouden — dat is het vangnet-scenario (Wikidata-item zonder
+   * coördinaat, of buiten het instanceOf/hasProperty-filter van de
+   * gekozen categorie) waarom Test 5 naast Test 3 bestaat.
+   *
+   * @param {Array<{wikidataId:?string,wikipediaUrl:?string,description:?string,lat:number,lng:number}>} osmCandidates
    *   - resultaat van searchOverpass() / elementToCandidate()
-   * @param {Array<{id:string}>} wikidataCandidates - resultaat van
-   *   wikidata-search.js#searchWikidataBox() (of #dedupeById()); `id` is de
-   *   kale QID, bijv. "Q12345"
+   * @param {Array<{id:string,wikipediaUrl:?string,lat:number,lng:number}>} wikidataCandidates -
+   *   resultaat van wikidata-search.js#searchWikidataBox() (of
+   *   #dedupeById()); `id` is de kale QID, bijv. "Q12345"
+   * @param {object} [options]
+   * @param {number} [options.coordinateThresholdMeters=25]
    * @returns {Array} de gefilterde/gededupliceerde OSM-kandidatenlijst
    */
-  function filterAndDedupeOsmCandidates(osmCandidates, wikidataCandidates) {
-    const knownQids = new Set(
-      (wikidataCandidates || []).map((c) => c.id).filter(Boolean)
+  function filterAndDedupeOsmCandidates(osmCandidates, wikidataCandidates, options) {
+    options = options || {};
+    const coordinateThresholdMeters =
+      options.coordinateThresholdMeters !== undefined
+        ? options.coordinateThresholdMeters
+        : DEFAULT_COORDINATE_DEDUPE_THRESHOLD_METERS;
+
+    const wikidataList = wikidataCandidates || [];
+    const knownQids = new Set(wikidataList.map((c) => c.id).filter(Boolean));
+    const knownTitles = new Set(
+      wikidataList.map((c) => normalizeWikipediaTitle(c.wikipediaUrl)).filter(Boolean)
     );
 
     return (osmCandidates || []).filter((c) => {
       if (c.wikidataId && knownQids.has(c.wikidataId)) {
-        return false; // al gevonden via Test 3 — dubbel, overslaan
+        return false; // match 1: QID
+      }
+      const osmTitle = normalizeWikipediaTitle(c.wikipediaUrl);
+      if (osmTitle && knownTitles.has(osmTitle)) {
+        return false; // match 2: exacte Wikipedia-titel
+      }
+      if (typeof c.lat === 'number' && typeof c.lng === 'number') {
+        const isNearKnownWikidataPoint = wikidataList.some((wd) => {
+          if (typeof wd.lat !== 'number' || typeof wd.lng !== 'number') return false;
+          return (
+            haversineDistanceMeters(c.lat, c.lng, wd.lat, wd.lng) <= coordinateThresholdMeters
+          );
+        });
+        if (isNearKnownWikidataPoint) {
+          return false; // match 3: nagenoeg dezelfde coördinaten
+        }
       }
       const hasUsableContent = !!(c.wikidataId || c.wikipediaUrl || c.description);
       return hasUsableContent; // "leeg" punt zonder wiki-koppeling/tekst overslaan
@@ -320,6 +414,8 @@
     buildOverpassQuery,
     elementToCandidate,
     filterAndDedupeOsmCandidates,
+    haversineDistanceMeters,
+    normalizeWikipediaTitle,
     isRetryableHttpStatus,
     searchOverpass,
   };
