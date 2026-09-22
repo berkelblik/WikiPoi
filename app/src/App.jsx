@@ -2,8 +2,6 @@ import { useState } from 'react'
 import '../../src/europoi-csv.js'
 import '../../src/wikidata-search.js'
 import '../../src/route-buffer.js'
-import '../../src/osm-fallback.js'
-import '../../src/wikipedia-summary.js'
 import { Capacitor } from '@capacitor/core'
 import { Geolocation } from '@capacitor/geolocation'
 import { TextToSpeech } from '@capacitor-community/text-to-speech'
@@ -12,39 +10,16 @@ import './App.css'
 // Zoekstraal rond de route, zoals eerder afgesproken (~400m).
 const SEARCH_RADIUS_METERS = 400
 
-// Vast testgebied rond het eerdere GPS-testpunt bij Zutphen (ca. 1,1 x
-// 0,7 km), gebruikt als fallback zolang er nog geen GPX-route is geladen.
-const FALLBACK_TEST_BBOX = {
-  minLat: 52.1276,
-  maxLat: 52.1376,
-  minLng: 6.2133,
-  maxLng: 6.2333,
-}
-
-// Voorbeeldfilter voor Test 5, in afwachting van poi-categories.js (die
-// straks de echte categorie → tagfilter-koppeling levert): alles met een
-// "historic"-tag (welke waarde dan ook), of tourism=attraction.
-const EXAMPLE_OSM_TAG_FILTER_GROUPS = [
-  [{ key: 'historic' }],
-  [{ key: 'tourism', value: 'attraction' }],
-]
-
 function App() {
   const [csv, setCsv] = useState('')
   const [csvError, setCsvError] = useState('')
   const [gpsResult, setGpsResult] = useState('')
   const [gpsError, setGpsError] = useState('')
-  const [routeInfo, setRouteInfo] = useState(null)
-  const [routeError, setRouteError] = useState('')
   const [wikidataResults, setWikidataResults] = useState(null)
   const [wikidataError, setWikidataError] = useState('')
   const [wikidataLoading, setWikidataLoading] = useState(false)
-  const [osmResults, setOsmResults] = useState(null)
-  const [osmError, setOsmError] = useState('')
-  const [osmLoading, setOsmLoading] = useState(false)
-  const [summaryResults, setSummaryResults] = useState(null)
-  const [summaryError, setSummaryError] = useState('')
-  const [summaryLoading, setSummaryLoading] = useState(false)
+  const [routeInfo, setRouteInfo] = useState(null)
+  const [routeError, setRouteError] = useState('')
 
   function runSmokeTest() {
     setCsvError('')
@@ -116,19 +91,41 @@ function App() {
     }
   }
 
+  async function runWikidataTest() {
+    setWikidataError('')
+    setWikidataResults(null)
+    setWikidataLoading(true)
+    try {
+      if (
+        !window.WikiPoiWikidataSearch ||
+        typeof window.WikiPoiWikidataSearch.searchWikidataBox !== 'function'
+      ) {
+        setWikidataError(
+          'Fout: window.WikiPoiWikidataSearch is niet beschikbaar (wikidata-search.js is niet correct geladen).'
+        )
+        return
+      }
+      // Vast testgebied rond het eerdere GPS-testpunt bij Zutphen
+      // (ca. 1,1 x 0,7 km), zodat deze knop zonder live locatie of GPX-
+      // route te testen is.
+      const testBbox = {
+        minLat: 52.1276,
+        maxLat: 52.1376,
+        minLng: 6.2133,
+        maxLng: 6.2333,
+      }
+      const results = await window.WikiPoiWikidataSearch.searchWikidataBox(testBbox)
+      setWikidataResults(results)
+    } catch (err) {
+      setWikidataError('Fout: ' + (err && err.message ? err.message : String(err)))
+    } finally {
+      setWikidataLoading(false)
+    }
+  }
+
   function handleGpxFileChange(event) {
     setRouteError('')
     setRouteInfo(null)
-    // Een nieuwe route maakt eerdere resultaten (van de vorige route of
-    // het testgebied) ongeldig; laat de gebruiker niet naar resultaten
-    // kijken die niet meer bij de huidige route horen.
-    setWikidataResults(null)
-    setWikidataError('')
-    setOsmResults(null)
-    setOsmError('')
-    setSummaryResults(null)
-    setSummaryError('')
-
     const file = event.target.files && event.target.files[0]
     if (!file) return
 
@@ -174,94 +171,6 @@ function App() {
     reader.readAsText(file)
   }
 
-  async function runWikidataTest() {
-    setWikidataError('')
-    setWikidataResults(null)
-    setWikidataLoading(true)
-    try {
-      if (
-        !window.WikiPoiWikidataSearch ||
-        typeof window.WikiPoiWikidataSearch.searchWikidataBox !== 'function'
-      ) {
-        setWikidataError(
-          'Fout: window.WikiPoiWikidataSearch is niet beschikbaar (wikidata-search.js is niet correct geladen).'
-        )
-        return
-      }
-      // Gebruik de bounding box van de geladen GPX-route (Test 4) als die
-      // er is; anders het vaste testgebied bij Zutphen als fallback.
-      const bbox = routeInfo ? routeInfo.bbox : FALLBACK_TEST_BBOX
-      const results = await window.WikiPoiWikidataSearch.searchWikidataBox(bbox)
-      setWikidataResults(results)
-    } catch (err) {
-      setWikidataError('Fout: ' + (err && err.message ? err.message : String(err)))
-    } finally {
-      setWikidataLoading(false)
-    }
-  }
-
-  async function runOsmFallbackTest() {
-    setOsmError('')
-    setOsmResults(null)
-    setOsmLoading(true)
-    try {
-      if (
-        !window.WikiPoiOsmFallback ||
-        typeof window.WikiPoiOsmFallback.searchOverpass !== 'function'
-      ) {
-        setOsmError(
-          'Fout: window.WikiPoiOsmFallback is niet beschikbaar (osm-fallback.js is niet correct geladen).'
-        )
-        return
-      }
-      const bbox = routeInfo ? routeInfo.bbox : FALLBACK_TEST_BBOX
-      const results = await window.WikiPoiOsmFallback.searchOverpass(
-        bbox,
-        EXAMPLE_OSM_TAG_FILTER_GROUPS
-      )
-      setOsmResults(results)
-    } catch (err) {
-      setOsmError('Fout: ' + (err && err.message ? err.message : String(err)))
-    } finally {
-      setOsmLoading(false)
-    }
-  }
-
-  async function runWikipediaSummaryTest() {
-    setSummaryError('')
-    setSummaryResults(null)
-    setSummaryLoading(true)
-    try {
-      if (
-        !window.WikiPoiWikipediaSummary ||
-        typeof window.WikiPoiWikipediaSummary.fetchSummariesForCandidates !== 'function'
-      ) {
-        setSummaryError(
-          'Fout: window.WikiPoiWikipediaSummary is niet beschikbaar (wikipedia-summary.js is niet correct geladen).'
-        )
-        return
-      }
-      // Combineert de Test 3- (Wikidata) en Test 5- (OSM) resultaten tot
-      // één lijst van kandidaten; beide kunnen een wikipediaUrl hebben.
-      const candidates = [...(wikidataResults || []), ...(osmResults || [])]
-      if (candidates.length === 0) {
-        setSummaryError(
-          'Geen kandidaten beschikbaar — voer eerst Test 3 en/of Test 5 uit.'
-        )
-        return
-      }
-      const enriched = await window.WikiPoiWikipediaSummary.fetchSummariesForCandidates(
-        candidates,
-        { maxSentences: 3 }
-      )
-      setSummaryResults(enriched)
-    } catch (err) {
-      setSummaryError('Fout: ' + (err && err.message ? err.message : String(err)))
-    } finally {
-      setSummaryLoading(false)
-    }
-  }
-
   return (
     <>
       <h1>WikiPoi — smoketest</h1>
@@ -287,48 +196,11 @@ function App() {
       </section>
 
       <section style={{ marginBottom: '2em' }}>
-        <h2>Test 4: GPX-route inladen + bounding box berekenen</h2>
-        <input type="file" accept=".gpx" onChange={handleGpxFileChange} />
-        {routeInfo && (
-          <div style={{ textAlign: 'left', marginTop: '1em' }}>
-            <p>
-              Bestand: <strong>{routeInfo.fileName}</strong>
-              <br />
-              Type: {routeInfo.source === 'track' ? 'track (<trkpt>)' : 'route (<rtept>)'}
-              <br />
-              Naam in bestand: {routeInfo.name || '(geen naam gevonden)'}
-              <br />
-              Aantal punten: {routeInfo.pointCount}
-            </p>
-            <p>
-              Berekende bounding box (marge {SEARCH_RADIUS_METERS}m):
-              <br />
-              <code>
-                minLat: {routeInfo.bbox.minLat.toFixed(5)}, maxLat:{' '}
-                {routeInfo.bbox.maxLat.toFixed(5)}
-                <br />
-                minLng: {routeInfo.bbox.minLng.toFixed(5)}, maxLng:{' '}
-                {routeInfo.bbox.maxLng.toFixed(5)}
-              </code>
-            </p>
-          </div>
-        )}
-        {routeError && <p style={{ color: 'red' }}>{routeError}</p>}
-      </section>
-
-      <section style={{ marginBottom: '2em' }}>
         <h2>Test 3: POI's zoeken via Wikidata</h2>
-        <p style={{ fontStyle: 'italic', marginBottom: '0.5em' }}>
-          {routeInfo
-            ? `Zoekt binnen de bounding box van "${routeInfo.fileName}" (Test 4 hierboven).`
-            : 'Nog geen route geladen bij Test 4 — gebruikt het vaste testgebied bij Zutphen.'}
-        </p>
         <button onClick={runWikidataTest} disabled={wikidataLoading}>
           {wikidataLoading
             ? 'Bezig met zoeken...'
-            : routeInfo
-              ? "Zoek POI's via Wikidata voor deze route"
-              : "Zoek POI's via Wikidata (testgebied Zutphen)"}
+            : "Zoek POI's via Wikidata (testgebied Zutphen)"}
         </button>
         {wikidataResults && (
           <div style={{ textAlign: 'left', marginTop: '1em' }}>
@@ -358,89 +230,34 @@ function App() {
         {wikidataError && <p style={{ color: 'red' }}>{wikidataError}</p>}
       </section>
 
-      <section style={{ marginBottom: '2em' }}>
-        <h2>Test 5: OSM-fallback zoeken via Overpass</h2>
-        <p style={{ fontStyle: 'italic', marginBottom: '0.5em' }}>
-          Voorbeeldfilter (nog niet gekoppeld aan poi-categories.js):
-          "historic" (elke waarde) of "tourism=attraction".{' '}
-          {routeInfo
-            ? `Zoekt binnen de bounding box van "${routeInfo.fileName}" (Test 4 hierboven).`
-            : 'Nog geen route geladen bij Test 4 — gebruikt het vaste testgebied bij Zutphen.'}
-        </p>
-        <button onClick={runOsmFallbackTest} disabled={osmLoading}>
-          {osmLoading ? 'Bezig met zoeken...' : "Zoek POI's via Overpass (OSM)"}
-        </button>
-        {osmResults && (
-          <div style={{ textAlign: 'left', marginTop: '1em' }}>
-            <p>{osmResults.length} resultaat/resultaten gevonden:</p>
-            <ul>
-              {osmResults.map((poi) => (
-                <li key={poi.id} style={{ marginBottom: '0.75em' }}>
-                  <strong>{poi.label}</strong>
-                  {poi.description ? ` — ${poi.description}` : ''}
-                  <br />
-                  <small>
-                    {poi.lat.toFixed(5)}, {poi.lng.toFixed(5)}
-                    {poi.wikipediaUrl && (
-                      <>
-                        {' · '}
-                        <a href={poi.wikipediaUrl} target="_blank" rel="noreferrer">
-                          Wikipedia
-                        </a>
-                      </>
-                    )}
-                  </small>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-        {osmError && <p style={{ color: 'red' }}>{osmError}</p>}
-      </section>
-
       <section>
-        <h2>Test 6: Wikipedia-samenvattingen ophalen</h2>
-        <p style={{ fontStyle: 'italic', marginBottom: '0.5em' }}>
-          Verrijkt de hierboven gevonden Test 3- (Wikidata) en Test 5-
-          (OSM) resultaten samen met hun Wikipedia-samenvatting (max. 3
-          zinnen), via wikipedia-summary.js. Voer eerst Test 3 en/of Test
-          5 uit.
-        </p>
-        <button onClick={runWikipediaSummaryTest} disabled={summaryLoading}>
-          {summaryLoading ? 'Bezig met ophalen...' : 'Haal Wikipedia-samenvattingen op'}
-        </button>
-        {summaryResults && (
+        <h2>Test 4: GPX-route inladen + bounding box berekenen</h2>
+        <input type="file" accept=".gpx" onChange={handleGpxFileChange} />
+        {routeInfo && (
           <div style={{ textAlign: 'left', marginTop: '1em' }}>
-            <p>{summaryResults.length} kandidaat/kandidaten verwerkt:</p>
-            <ul>
-              {summaryResults.map((item, index) => (
-                <li key={item.id || index} style={{ marginBottom: '1em' }}>
-                  <strong>{item.label}</strong>
-                  <br />
-                  {item.summary ? (
-                    <>
-                      {item.summary.thumbnailUrl && (
-                        <img
-                          src={item.summary.thumbnailUrl}
-                          alt=""
-                          style={{ maxWidth: '150px', display: 'block', margin: '0.5em 0' }}
-                        />
-                      )}
-                      <span>{item.summary.extractShort}</span>
-                      <br />
-                      <small>{item.summary.attribution}</small>
-                    </>
-                  ) : (
-                    <span style={{ color: 'red' }}>
-                      Geen samenvatting: {item.summaryError}
-                    </span>
-                  )}
-                </li>
-              ))}
-            </ul>
+            <p>
+              Bestand: <strong>{routeInfo.fileName}</strong>
+              <br />
+              Type: {routeInfo.source === 'track' ? 'track (<trkpt>)' : 'route (<rtept>)'}
+              <br />
+              Naam in bestand: {routeInfo.name || '(geen naam gevonden)'}
+              <br />
+              Aantal punten: {routeInfo.pointCount}
+            </p>
+            <p>
+              Berekende bounding box (marge {SEARCH_RADIUS_METERS}m):
+              <br />
+              <code>
+                minLat: {routeInfo.bbox.minLat.toFixed(5)}, maxLat:{' '}
+                {routeInfo.bbox.maxLat.toFixed(5)}
+                <br />
+                minLng: {routeInfo.bbox.minLng.toFixed(5)}, maxLng:{' '}
+                {routeInfo.bbox.maxLng.toFixed(5)}
+              </code>
+            </p>
           </div>
         )}
-        {summaryError && <p style={{ color: 'red' }}>{summaryError}</p>}
+        {routeError && <p style={{ color: 'red' }}>{routeError}</p>}
       </section>
     </>
   )
