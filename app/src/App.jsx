@@ -1,266 +1,657 @@
-import { useState } from 'react'
-import '../../src/europoi-csv.js'
-import '../../src/wikidata-search.js'
-import '../../src/route-buffer.js'
-import { Capacitor } from '@capacitor/core'
-import { Geolocation } from '@capacitor/geolocation'
-import { TextToSpeech } from '@capacitor-community/text-to-speech'
-import './App.css'
+/**
+ * poi-categories.js
+ *
+ * Vaste, herkenbare categorieën waaruit de gebruiker vóór het starten van
+ * de Wikidata-zoekopdracht kan kiezen (aanvinklijstje) — zodat WikiPoi
+ * alleen categorieën ophaalt die voor déze tocht relevant zijn, zonder dat
+ * de gebruiker ook maar iets van Wikidata-QID's hoeft te weten.
+ *
+ * Elke categorie is gekoppeld aan één of meer Wikidata-QID's. Die worden
+ * gebruikt als `instanceOf`-filter voor wikidata-search.js: een kandidaat
+ * komt alleen mee als hij "instance of / subclass of" één van de QID's van
+ * een aangevinkte categorie is.
+ *
+ * ACHTERGROND (n.a.v. de live testquery rond Lochem, 16 sept. 2026):
+ * zonder filter kwamen naast een écht bruikbaar resultaat ("Ontzet van
+ * Lochem", een belegering) ook een gemeente ("Lochem") en een sportclub
+ * ("Lochemse Hockey Club") mee — beide zonder filter niet te onderscheiden
+ * van interessante bezienswaardigheden. Alle QID's hieronder zijn
+ * geverifieerd tegen Wikidata (niet uit het geheugen aangenomen).
+ *
+ * Werkt zowel als CommonJS-module (Node) als los <script> in de browser,
+ * naar analogie van de andere WikiPoi-modules.
+ */
 
-// Zoekstraal rond de route, zoals eerder afgesproken (~400m).
-const SEARCH_RADIUS_METERS = 400
+(function (root, factory) {
+  // BELANGRIJK: beide toewijzingen zijn hier onvoorwaardelijk (twee losse
+  // `if`-blokken), NIET als `if`/`else if`. Vite/Rollup detecteert
+  // automatisch `module.exports`-syntax en injecteert soms zelf een nep-
+  // `module`-object voor CommonJS-interop, ook bij een ESM side-effect-
+  // import — waardoor een `else if (typeof window !== 'undefined')`-tak
+  // stilzwijgend wordt overgeslagen en window.WikiPoiCategories undefined
+  // blijft. Zie europoi-csv.js / wikidata-search.js / route-buffer.js /
+  // osm-fallback.js / wikipedia-summary.js voor dezelfde fix.
+  var mod = factory();
+  if (typeof module === 'object' && module.exports) {
+    module.exports = mod;
+  }
+  if (typeof window !== 'undefined') {
+    window.WikiPoiCategories = mod;
+  }
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
 
-function App() {
-  const [csv, setCsv] = useState('')
-  const [csvError, setCsvError] = useState('')
-  const [gpsResult, setGpsResult] = useState('')
-  const [gpsError, setGpsError] = useState('')
-  const [wikidataResults, setWikidataResults] = useState(null)
-  const [wikidataError, setWikidataError] = useState('')
-  const [wikidataLoading, setWikidataLoading] = useState(false)
-  const [routeInfo, setRouteInfo] = useState(null)
-  const [routeError, setRouteError] = useState('')
+  /**
+   * Elke categorie:
+   * - key: technische sleutel (stabiel, gebruik dit in opgeslagen
+   *   gebruikersvoorkeuren — niet het label, dat kan nog wijzigen)
+   * - labels: vertalingen van het label voor het aanvinklijstje, per
+   *   taalcode (bijv. {nl: 'Kerken', en: 'Churches', ...})
+   * - descriptions: vertalingen van een korte toelichting (optioneel te
+   *   tonen, bijv. als tooltip), zelfde structuur als labels
+   * - qids: Wikidata-QID's waarop gefilterd wordt (instance of / subclass of)
+   * - osmTags: OpenStreetMap-tagfilters voor osm-fallback.js — een array
+   *   van filtergroepen; elke filtergroep is een array van {key, value}
+   *   (AND binnen een groep, OR tussen groepen). Gebruikt als Wikidata
+   *   niets opleverde voor deze categorie in een bepaald gebied.
+   *   `value` is optioneel: {key} zonder value (of met value: '*') is een
+   *   "aanwezig, ongeacht waarde"-filter, bijv. { key: 'ref:rce' } voor
+   *   "heeft een RCE-nummer" — nodig voor tags die per object een uniek
+   *   nummer dragen in plaats van een vaste waarde.
+   * - defaultEnabled: of deze categorie standaard is aangevinkt
+   * - searchRadiusMeters (optioneel): overschrijft voor déze categorie de
+   *   standaard zoekstraal die poc-gpx-naar-csv.js/runPipeline() gebruikt
+   *   (searchRadiusMeters-parameter daar, standaard 400m). Weggelaten of
+   *   niet gezet ⇒ de categorie gebruikt gewoon de standaardstraal. Nodig
+   *   voor categorieën met een van nature hoge dichtheid — bijv. de
+   *   toekomstige "Gebouwd erfgoed"-categorie (rijksmonumenten), waar rond
+   *   Zutphen al 20+ treffers in één klein gebied werden gevonden; die zal
+   *   searchRadiusMeters: 150 krijgen zodra hij wordt toegevoegd. Zie
+   *   groupSelectedKeysByRadius() hieronder voor hoe de pijplijn hiermee
+   *   omgaat.
+   */
+  const CATEGORIES = [
+    {
+      key: 'kerken',
+      labels: { nl: 'Kerken', en: 'Churches', fr: 'Églises', de: 'Kirchen', es: 'Iglesias' },
+      descriptions: {
+        nl: 'Kerkgebouwen',
+        en: 'Church buildings',
+        fr: 'Édifices religieux',
+        de: 'Kirchengebäude',
+        es: 'Edificios religiosos',
+      },
+      qids: ['Q16970'], // church building
+      osmTags: [[{ key: 'amenity', value: 'place_of_worship' }, { key: 'religion', value: 'christian' }]],
+      defaultEnabled: true,
+    },
+    {
+      key: 'molens',
+      labels: { nl: 'Molens', en: 'Windmills', fr: 'Moulins', de: 'Mühlen', es: 'Molinos' },
+      descriptions: {
+        nl: 'Wind- en watermolens',
+        en: 'Wind and water mills',
+        fr: 'Moulins à vent et à eau',
+        de: 'Wind- und Wassermühlen',
+        es: 'Molinos de viento y de agua',
+      },
+      qids: ['Q38720'], // windmill
+      osmTags: [[{ key: 'man_made', value: 'windmill' }]],
+      defaultEnabled: true,
+    },
+    {
+      key: 'musea',
+      labels: { nl: 'Musea', en: 'Museums', fr: 'Musées', de: 'Museen', es: 'Museos' },
+      descriptions: {
+        nl: 'Musea en tentoonstellingsruimtes',
+        en: 'Museums and exhibition spaces',
+        fr: "Musées et espaces d'exposition",
+        de: 'Museen und Ausstellungsräume',
+        es: 'Museos y espacios de exposición',
+      },
+      qids: ['Q33506'], // museum
+      osmTags: [[{ key: 'tourism', value: 'museum' }]],
+      defaultEnabled: false,
+    },
+    {
+      key: 'kastelen',
+      labels: { nl: 'Kastelen', en: 'Castles', fr: 'Châteaux', de: 'Burgen und Schlösser', es: 'Castillos' },
+      descriptions: {
+        nl: 'Kastelen en vestingwerken',
+        en: 'Castles and fortifications',
+        fr: 'Châteaux et fortifications',
+        de: 'Burgen und Festungsanlagen',
+        es: 'Castillos y fortificaciones',
+      },
+      qids: ['Q23413'], // castle
+      osmTags: [[{ key: 'historic', value: 'castle' }]],
+      defaultEnabled: true,
+    },
+    {
+      key: 'oorlogsgeschiedenis',
+      labels: {
+        nl: 'Oorlogsgeschiedenis',
+        en: 'War history',
+        fr: 'Histoire de guerre',
+        de: 'Kriegsgeschichte',
+        es: 'Historia bélica',
+      },
+      descriptions: {
+        nl: 'Veldslagen, belegeringen en oorlogsmonumenten (bijv. WO II of het Beleg van Lochem)',
+        en: 'Battles, sieges and war memorials (e.g. WWII or the Siege of Lochem)',
+        fr: 'Batailles, sièges et monuments commémoratifs de guerre (p. ex. la Seconde Guerre mondiale ou le siège de Lochem)',
+        de: 'Schlachten, Belagerungen und Kriegsdenkmäler (z. B. Zweiter Weltkrieg oder die Belagerung von Lochem)',
+        es: 'Batallas, asedios y monumentos conmemorativos de guerra (p. ej. la Segunda Guerra Mundial o el asedio de Lochem)',
+      },
+      qids: [
+        'Q178561', // battle
+        'Q188055', // siege
+        'Q575759', // war memorial
+      ],
+      osmTags: [
+        [{ key: 'historic', value: 'memorial' }, { key: 'memorial', value: 'war_memorial' }],
+        [{ key: 'historic', value: 'battlefield' }],
+      ],
+      defaultEnabled: true,
+    },
+    {
+      key: 'archeologie',
+      labels: { nl: 'Archeologie', en: 'Archaeology', fr: 'Archéologie', de: 'Archäologie', es: 'Arqueología' },
+      descriptions: {
+        nl: 'Archeologische vindplaatsen',
+        en: 'Archaeological sites',
+        fr: 'Sites archéologiques',
+        de: 'Archäologische Fundstätten',
+        es: 'Yacimientos arqueológicos',
+      },
+      qids: ['Q839954'], // archaeological site
+      osmTags: [[{ key: 'historic', value: 'archaeological_site' }]],
+      defaultEnabled: false,
+    },
+    {
+      key: 'natuur',
+      labels: {
+        nl: 'Natuurgebieden',
+        en: 'Nature reserves',
+        fr: 'Réserves naturelles',
+        de: 'Naturschutzgebiete',
+        es: 'Reservas naturales',
+      },
+      descriptions: {
+        nl: 'Beschermde natuurgebieden',
+        en: 'Protected nature reserves',
+        fr: 'Réserves naturelles protégées',
+        de: 'Geschützte Naturschutzgebiete',
+        es: 'Reservas naturales protegidas',
+      },
+      qids: ['Q179049'], // nature reserve
+      osmTags: [[{ key: 'leisure', value: 'nature_reserve' }]],
+      defaultEnabled: false,
+    },
 
-  function runSmokeTest() {
-    setCsvError('')
-    setCsv('')
-    try {
-      if (!window.EuroPoiCsv || typeof window.EuroPoiCsv.toEuroPoiCsv !== 'function') {
-        setCsvError(
-          'Fout: window.EuroPoiCsv is niet beschikbaar (europoi-csv.js is niet correct geladen).'
-        )
-        return
-      }
-      const testPois = [
-        {
-          lat: 52.1326,
-          lng: 6.2233,
-          name: 'Testpunt Zutphen',
-          desc: 'Smoketest voor de fase 1-integratie.',
-          category: 'Testroute',
-          radius: 50,
-          mp3: '',
-        },
-      ]
-      const result = window.EuroPoiCsv.toEuroPoiCsv(testPois)
-      setCsv(result)
-    } catch (err) {
-      setCsvError('Fout: ' + (err && err.message ? err.message : String(err)))
-    }
+    // ---------------------------------------------------------------
+    // Vanaf hier: 4 nieuwe verzamelcategorieën (toegevoegd n.a.v. de
+    // dichtheids-/QID-verificatiesessie van 17 sept. 2026). Elke
+    // categorie hieronder dekt meerdere subtypes, gekozen boven 10
+    // losse, smalle categorieën om de UI overzichtelijk te houden — zie
+    // de description hieronder voor de subtypes die elke categorie dekt.
+    // Per subtype/QID staat in een comment aangegeven hoe hard het is
+    // getest:
+    //   [geverifieerd] — live tegen Wikidata getest met een specifiek
+    //                    testscript en bevestigd
+    //   [afgeleid]     — gevonden via een bredere labelzoekopdracht;
+    //                    aannemelijk, maar niet 1-op-1 herbevestigd
+    //                    tegen een los, onafhankelijk voorbeeld
+    //   [aanname]      — UIT HET GEHEUGEN, NIET live getest; loop hier
+    //                    dus rekening mee dat dit een keer mis kan zijn
+    //                    (zoals eerder bij de gemaal-QID gebeurde)
+    // ---------------------------------------------------------------
+    {
+      key: 'gebouwd_erfgoed',
+      group: 'nieuw',
+      labels: {
+        nl: 'Gebouwd erfgoed',
+        en: 'Built heritage',
+        fr: 'Patrimoine bâti',
+        de: 'Baudenkmäler',
+        es: 'Patrimonio construido',
+      },
+      descriptions: {
+        nl: 'Rijksmonumenten: o.a. kerken, molens, boerderijen, kloosters, industrieel erfgoed en begraafplaatsen',
+        en: 'National heritage sites: e.g. churches, mills, farmhouses, monasteries, industrial heritage and cemeteries',
+        fr: "Monuments nationaux : églises, moulins, fermes, monastères, patrimoine industriel, cimetières, etc.",
+        de: 'Nationaldenkmäler: u. a. Kirchen, Mühlen, Bauernhöfe, Klöster, Industriedenkmäler und Friedhöfe',
+        es: 'Monumentos nacionales: iglesias, molinos, granjas, monasterios, patrimonio industrial, cementerios, etc.',
+      },
+      // Geen qids: deze categorie gebruikt hasProperty i.p.v. instanceOf
+      // (zie wikidata-search.js#buildBoxQuery) — een rijksmonument is
+      // geen aparte Wikidata-KLASSE, maar elk type gebouw (kerk, molen,
+      // boerderij, ...) dat toevallig de eigenschap P359 heeft.
+      qids: [],
+      hasProperty: 'P359', // [geverifieerd] "Rijksmonument ID" — live bevestigd, 20 treffers rond Zutphen
+      osmTags: [
+        [{ key: 'heritage', value: '2' }], // [geverifieerd, Nederlandse rijksmonumenten]
+        [{ key: 'ref:rce' }], // [geverifieerd] presence-only: heeft een RCE-nummer, ongeacht de waarde
+      ],
+      // Hoge dichtheid geconstateerd (20+ in één klein gebied rond
+      // Zutphen) — kleinere straal dan de standaard ~400m, gecombineerd
+      // met de trigger-preview om de rest te filteren (besluit 17 sept. 2026).
+      searchRadiusMeters: 150,
+      defaultEnabled: false,
+    },
+    {
+      key: 'prehistorie_archeologie',
+      group: 'nieuw',
+      labels: {
+        nl: 'Prehistorie & archeologie',
+        en: 'Prehistory & archaeology',
+        fr: 'Préhistoire et archéologie',
+        de: 'Vorgeschichte & Archäologie',
+        es: 'Prehistoria y arqueología',
+      },
+      descriptions: {
+        nl: 'Hunebedden, grafheuvels, en vestingwerken/stadswallen',
+        en: 'Dolmens, burial mounds, and fortifications/city walls',
+        fr: 'Dolmens, tumulus et fortifications/remparts',
+        de: 'Hünengräber, Grabhügel und Festungsanlagen/Stadtmauern',
+        es: 'Dólmenes, túmulos y fortificaciones/murallas',
+      },
+      qids: [
+        'Q839954', // [geverifieerd] archaeological site — dekt hunebedden al automatisch mee
+        // via de subclass-hiërarchie (P31/P279*) in wikidata-search.js;
+        // live getest: een hunebed-item bleek hier al onder te vallen,
+        // dus GEEN aparte hunebed-QID nodig. Overlapt met de bestaande,
+        // los aanvinkbare "archeologie"-categorie hierboven — geen
+        // probleem, qidsForKeys() dedupliceert QID's toch al.
+        'Q127418', // [aanname, NIET geverifieerd] burial mound (grafheuvel)
+        'Q91203', // [afgeleid] schans (uit labelzoekopdracht "schans", Naarden/Bourtange/Achterhoek)
+        'Q57821', // [afgeleid] verdedigingswerk/fortification (idem)
+      ],
+      osmTags: [
+        [{ key: 'historic', value: 'archaeological_site' }],
+        [{ key: 'historic', value: 'tumulus' }],
+        [{ key: 'historic', value: 'citywalls' }],
+        [{ key: 'historic', value: 'fort' }],
+      ],
+      defaultEnabled: false,
+    },
+    {
+      key: 'waterstaat_infrastructuur',
+      group: 'nieuw',
+      labels: {
+        nl: 'Waterstaat & infrastructuur',
+        en: 'Water management & infrastructure',
+        fr: 'Gestion des eaux et infrastructures',
+        de: 'Wasserbau & Infrastruktur',
+        es: 'Gestión del agua e infraestructura',
+      },
+      descriptions: {
+        nl: 'Vuurtorens, sluizen, gemalen en historische bruggen (bruggen vooral via Gebouwd erfgoed)',
+        en: 'Lighthouses, locks, pumping stations and historic bridges (bridges mostly via Built heritage)',
+        fr: 'Phares, écluses, stations de pompage et ponts historiques (ponts surtout via Patrimoine bâti)',
+        de: 'Leuchttürme, Schleusen, Schöpfwerke und historische Brücken (Brücken meist über Baudenkmäler)',
+        es: 'Faros, esclusas, estaciones de bombeo y puentes históricos (puentes sobre todo vía Patrimonio construido)',
+      },
+      qids: [
+        'Q39715', // [geverifieerd] lighthouse — live bevestigd rond de Waddeneilanden (11 treffers, o.a. Noordertoren, Vuurtoren van Harlingen)
+        'Q105731', // [geverifieerd] schutsluis (lock)
+        'Q446013', // [geverifieerd] pompgemaal (pumping station)
+        'Q2230272', // [geverifieerd] dieselgemaal (subtype van pompgemaal, apart opgenomen i.p.v. aangenomen subklasse-verband)
+        // Historische bruggen: GEEN aparte QID. Alle "brug"-treffers met
+        // een duidelijk historisch karakter bleken zelf Rijksmonumenten
+        // te zijn — die vallen al onder "Gebouwd erfgoed" (P359). Een
+        // aparte QID voor "historische brug" bestaat niet in Wikidata;
+        // Q12280 (brug) is te generiek om hier te gebruiken.
+      ],
+      osmTags: [
+        [{ key: 'man_made', value: 'lighthouse' }], // [geverifieerd]
+        [{ key: 'waterway', value: 'lock' }], // [geverifieerd]
+        [{ key: 'waterway', value: 'lock_gate' }], // [geverifieerd]
+        [{ key: 'man_made', value: 'pumping_station' }], // [geverifieerd]
+      ],
+      defaultEnabled: false,
+    },
+    {
+      key: 'kunst_gedenktekens',
+      group: 'nieuw',
+      labels: {
+        nl: 'Kunst & gedenktekens',
+        en: 'Art & memorials',
+        fr: 'Art et monuments commémoratifs',
+        de: 'Kunst & Gedenkstätten',
+        es: 'Arte y monumentos conmemorativos',
+      },
+      descriptions: {
+        nl: 'Standbeelden en gedenktekens (niet-oorlogsgerelateerd; oorlogsmonumenten staan al bij Oorlogsgeschiedenis)',
+        en: 'Statues and memorials (non-war; war memorials are already under War history)',
+        fr: 'Statues et monuments commémoratifs (hors guerre ; les monuments aux morts sont déjà sous Histoire de guerre)',
+        de: 'Statuen und Gedenkstätten (nicht kriegsbezogen; Kriegsdenkmäler siehe bereits Kriegsgeschichte)',
+        es: 'Estatuas y monumentos conmemorativos (no bélicos; los monumentos de guerra ya están en Historia bélica)',
+      },
+      qids: [
+        'Q179700', // [aanname, NIET geverifieerd] statue (standbeeld)
+        'Q11734477', // [afgeleid] gedenksteen — uit labelzoekopdracht "monument", meestal samen met oorlogsmonument gevonden
+        'Q721747', // [afgeleid] gedenkplaat
+        'Q51845395', // [afgeleid] gedenkzuil
+        'Q1497483', // [afgeleid] gedenkkruis
+        'Q6023295', // [afgeleid] funeraire architectuur
+      ],
+      osmTags: [
+        [{ key: 'tourism', value: 'artwork' }],
+        [{ key: 'historic', value: 'memorial' }],
+      ],
+      defaultEnabled: false,
+    },
+  ];
+
+  // Maximum aantal categorieën met group:'nieuw' dat de gebruiker tegelijk
+  // mag aanvinken (naast de 7 kernvaste categorieën, die geen limiet
+  // hebben). Bewust hier als constante i.p.v. hardcoded "2" in de UI,
+  // zodat één plek bepaalt wat de regel is; een toekomstige 5e nieuwe
+  // categorie hoeft alleen group: 'nieuw' te krijgen om automatisch onder
+  // dezelfde regel te vallen.
+  const MAX_EXTRA_CATEGORIES = 2;
+
+  const DEFAULT_UI_LANGUAGE = 'nl';
+  const SUPPORTED_UI_LANGUAGES = ['nl', 'en', 'fr', 'de', 'es'];
+
+  /**
+   * Kiest de tekst in de gevraagde taal uit een vertaaltabel, met een
+   * terugvalketen: gevraagde taal → Nederlands (de "brontaal" waarin
+   * alles gegarandeerd bestaat) → Engels → de eerste vertaling die er
+   * toevallig is (zou niet moeten voorkomen bij de huidige, complete
+   * vertaaltabellen, maar voorkomt een crash mocht een categorie ooit
+   * onvolledig vertaald worden toegevoegd).
+   */
+  function resolveTranslation(translations, uiLanguage) {
+    return (
+      translations[uiLanguage] ||
+      translations[DEFAULT_UI_LANGUAGE] ||
+      translations.en ||
+      Object.values(translations)[0]
+    );
   }
 
-  async function runGpsTtsTest() {
-    setGpsError('')
-    setGpsResult('')
-    try {
-      // requestPermissions() is op het web niet geïmplementeerd door de
-      // Capacitor-Geolocation-plugin; alleen op native (Android/iOS) is een
-      // aparte toestemmingsaanvraag nodig. Op het web regelt de browser dit
-      // zelf zodra getCurrentPosition() wordt aangeroepen.
-      if (Capacitor.isNativePlatform()) {
-        const permission = await Geolocation.requestPermissions()
-        if (
-          permission.location !== 'granted' &&
-          permission.coarseLocation !== 'granted'
-        ) {
-          setGpsError('Geen toestemming gekregen voor locatie.')
-          return
+  /**
+   * De taalcodes waarvoor de categorienamen daadwerkelijk vertaald zijn.
+   */
+  function getSupportedUiLanguages() {
+    return SUPPORTED_UI_LANGUAGES.slice();
+  }
+
+  /**
+   * Haalt de primaire taalsubtag uit een BCP47-achtige locale-string, bijv.
+   * "fr-FR" → "fr", "pt_BR" → "pt", "de-DE" → "de". Hoofdletterongevoelig.
+   * Geeft null terug als er geen bruikbare taalcode uit te halen valt.
+   */
+  function normalizeLocale(locale) {
+    if (!locale) return null;
+    const primary = String(locale).split(/[-_]/)[0].toLowerCase();
+    return /^[a-z]{2,3}$/.test(primary) ? primary : null;
+  }
+
+  /**
+   * Bepaalt welke UI-taal gebruikt moet worden op basis van de
+   * apparaat-/browserlocale van de gebruiker (bijv. `navigator.language`
+   * in een PWA, of het Capacitor-equivalent in de native app — het
+   * uitlezen daarvan is aan de aanroeper, deze functie doet alleen de
+   * vertaling naar "wat kan WikiPoi ermee").
+   *
+   * Staat de taal van het apparaat in de ondersteunde lijst
+   * (getSupportedUiLanguages()), dan wordt die gebruikt. Staat hij er
+   * niet in (bijv. Portugees, Italiaans, Pools), dan valt de UI terug op
+   * Engels — expliciet gekozen in plaats van Nederlands, omdat Engels
+   * voor een willekeurige buitenlandse toerist een neutralere/breder
+   * begrepen keuze is dan Nederlands.
+   *
+   * @param {string} [deviceLocale] - bijv. "fr-FR", "pt-BR", "nl"
+   * @returns {string} een taalcode uit getSupportedUiLanguages()
+   */
+  function resolveUiLanguage(deviceLocale) {
+    const primary = normalizeLocale(deviceLocale);
+    if (primary && SUPPORTED_UI_LANGUAGES.includes(primary)) {
+      return primary;
+    }
+    return 'en';
+  }
+
+  /**
+   * Bouwt, op basis van diezelfde apparaatlocale, de taalprioriteitsketen
+   * die direct als `languages`-optie aan
+   * wikidata-search.js#searchWikidataBox() kan worden meegegeven — zodat
+   * de UI-taal en de inhoud-taal met één instelling in de pas lopen.
+   *
+   * De keten is: [herkende voorkeurstaal, 'en', 'nl'] (dubbele talen
+   * verwijderd) — dus bij een niet-ondersteunde apparaattaal wordt dat
+   * gewoon ['en', 'nl']. Nederlands staat altijd als laatste vangnet in
+   * de keten, ongeacht de voorkeurstaal, omdat dat nu eenmaal de taal is
+   * waarin de meeste Nederlandse POI's het rijkst gedocumenteerd zijn.
+   *
+   * @param {string} [deviceLocale]
+   * @returns {string[]}
+   */
+  function getContentLanguageChain(deviceLocale) {
+    const uiLanguage = resolveUiLanguage(deviceLocale);
+    const chain = [uiLanguage];
+    if (!chain.includes('en')) chain.push('en');
+    if (!chain.includes('nl')) chain.push('nl');
+    return chain;
+  }
+
+  /**
+   * Geeft de volledige categorie-tabel terug, bijv. om een aanvinklijstje
+   * mee op te bouwen in de UI. `label` en `description` zijn — net als
+   * voorheen — gewone strings; welke taal dat is, bepaalt `uiLanguage`
+   * (standaard Nederlands, zoals altijd).
+   *
+   * @param {string} [uiLanguage='nl'] - taalcode voor label/description,
+   *   bijv. 'fr' voor een Franstalige gebruiker
+   */
+  function getCategories(uiLanguage) {
+    const lang = uiLanguage || DEFAULT_UI_LANGUAGE;
+    // Kopie teruggeven zodat de aanroeper de vaste tabel niet per ongeluk
+    // kan muteren.
+    return CATEGORIES.map((c) => ({
+      key: c.key,
+      label: resolveTranslation(c.labels, lang),
+      description: resolveTranslation(c.descriptions, lang),
+      qids: c.qids.slice(),
+      osmTags: c.osmTags.map((group) => group.map((tag) => Object.assign({}, tag))),
+      defaultEnabled: c.defaultEnabled,
+      searchRadiusMeters: c.searchRadiusMeters || null,
+      hasProperty: c.hasProperty || null,
+      group: c.group || null,
+    }));
+  }
+
+  /**
+   * De keys van de categorieën die standaard aangevinkt zouden moeten
+   * staan wanneer de gebruiker de zoekopdracht voor het eerst opent.
+   */
+  function getDefaultSelectedKeys() {
+    return CATEGORIES.filter((c) => c.defaultEnabled).map((c) => c.key);
+  }
+
+  /**
+   * Zet een lijst van aangevinkte categorie-keys (zoals door de UI
+   * teruggegeven) om naar een platte, gededupliceerde lijst van
+   * Wikidata-QID's — direct bruikbaar als `instanceOf`-optie voor
+   * wikidata-search.js: buildBoxQuery(bbox, { instanceOf: qidsFor(keys) }).
+   *
+   * Onbekende keys worden genegeerd (geen foutmelding) zodat een oude,
+   * opgeslagen selectie van de gebruiker niet crasht als een categorie
+   * ooit hernoemd of verwijderd wordt.
+   *
+   * @param {string[]} selectedKeys
+   * @returns {string[]} unieke Wikidata-QID's
+   */
+  function qidsForKeys(selectedKeys) {
+    const keys = new Set(selectedKeys || []);
+    const qids = new Set();
+    for (const category of CATEGORIES) {
+      if (keys.has(category.key)) {
+        for (const qid of category.qids) {
+          qids.add(qid);
         }
       }
-
-      const position = await Geolocation.getCurrentPosition({
-        enableHighAccuracy: true,
-        timeout: 20000,
-      })
-      const { latitude, longitude } = position.coords
-      const plusCode = window.EuroPoiCsv.OLC.encode(latitude, longitude, 10)
-      const resultText = `Positie gevonden: breedtegraad ${latitude.toFixed(
-        5
-      )}, lengtegraad ${longitude.toFixed(5)}. PlusCode: ${plusCode}.`
-      setGpsResult(resultText)
-
-      await TextToSpeech.speak({
-        text: resultText,
-        lang: 'nl-NL',
-        rate: 1.0,
-        pitch: 1.0,
-        volume: 1.0,
-      })
-    } catch (err) {
-      setGpsError('Fout: ' + (err && err.message ? err.message : String(err)))
     }
+    return Array.from(qids);
   }
 
-  async function runWikidataTest() {
-    setWikidataError('')
-    setWikidataResults(null)
-    setWikidataLoading(true)
-    try {
-      if (
-        !window.WikiPoiWikidataSearch ||
-        typeof window.WikiPoiWikidataSearch.searchWikidataBox !== 'function'
-      ) {
-        setWikidataError(
-          'Fout: window.WikiPoiWikidataSearch is niet beschikbaar (wikidata-search.js is niet correct geladen).'
-        )
-        return
-      }
-      // Vast testgebied rond het eerdere GPS-testpunt bij Zutphen
-      // (ca. 1,1 x 0,7 km), zodat deze knop zonder live locatie of GPX-
-      // route te testen is.
-      const testBbox = {
-        minLat: 52.1276,
-        maxLat: 52.1376,
-        minLng: 6.2133,
-        maxLng: 6.2333,
-      }
-      const results = await window.WikiPoiWikidataSearch.searchWikidataBox(testBbox)
-      setWikidataResults(results)
-    } catch (err) {
-      setWikidataError('Fout: ' + (err && err.message ? err.message : String(err)))
-    } finally {
-      setWikidataLoading(false)
-    }
-  }
-
-  function handleGpxFileChange(event) {
-    setRouteError('')
-    setRouteInfo(null)
-    const file = event.target.files && event.target.files[0]
-    if (!file) return
-
-    if (
-      !window.WikiPoiRouteBuffer ||
-      typeof window.WikiPoiRouteBuffer.parseGpxLineString !== 'function'
-    ) {
-      setRouteError(
-        'Fout: window.WikiPoiRouteBuffer is niet beschikbaar (route-buffer.js is niet correct geladen).'
-      )
-      return
-    }
-
-    const reader = new FileReader()
-    reader.onload = () => {
-      try {
-        const gpxText = String(reader.result)
-        const parsed = window.WikiPoiRouteBuffer.parseGpxLineString(gpxText)
-        if (!parsed.points || parsed.points.length === 0) {
-          setRouteError(
-            'Geen track- of routepunten gevonden in dit GPX-bestand (verwacht <trkpt> of <rtept>-elementen).'
-          )
-          return
+  /**
+   * Zet een lijst van aangevinkte categorie-keys om naar een platte lijst
+   * van OSM-tagfiltergroepen — direct bruikbaar voor osm-fallback.js.
+   * Elke filtergroep is een array van {key, value}-paren (AND binnen een
+   * groep); de teruggegeven array is de OR van alle groepen van alle
+   * aangevinkte categorieën. Onbekende keys worden net als bij
+   * qidsForKeys() stilzwijgend genegeerd.
+   *
+   * @param {string[]} selectedKeys
+   * @returns {Array<Array<{key:string, value:string}>>}
+   */
+  function osmTagFiltersForKeys(selectedKeys) {
+    const keys = new Set(selectedKeys || []);
+    const groups = [];
+    for (const category of CATEGORIES) {
+      if (keys.has(category.key)) {
+        for (const group of category.osmTags) {
+          groups.push(group.map((tag) => Object.assign({}, tag)));
         }
-        const bbox = window.WikiPoiRouteBuffer.getBoundingBox(
-          parsed.points,
-          SEARCH_RADIUS_METERS
-        )
-        setRouteInfo({
-          fileName: file.name,
-          pointCount: parsed.points.length,
-          source: parsed.source,
-          name: parsed.name,
-          bbox: bbox,
-        })
-      } catch (err) {
-        setRouteError('Fout: ' + (err && err.message ? err.message : String(err)))
       }
     }
-    reader.onerror = () => {
-      setRouteError('Fout: kon het bestand niet lezen.')
-    }
-    reader.readAsText(file)
+    return groups;
   }
 
-  return (
-    <>
-      <h1>WikiPoi — smoketest</h1>
+  /**
+   * Zet een lijst van aangevinkte categorie-keys om naar een platte,
+   * gededupliceerde lijst van Wikidata-property-ID's (PID's, bijv.
+   * 'P359') van categorieën die een hasProperty-filter gebruiken in
+   * plaats van (of naast) instanceOf-QID's — zie wikidata-search.js#
+   * buildBoxQuery() voor hoe deze modus werkt. Op dit moment gebruikt
+   * alléén "Gebouwd erfgoed" (P359) deze modus.
+   *
+   * LET OP — nog niet aangesloten op poc-gpx-naar-csv.js: de pijplijn
+   * roept momenteel alleen qidsForKeys()/instanceOf aan; om een
+   * hasProperty-categorie als "Gebouwd erfgoed" daadwerkelijk te laten
+   * meezoeken is een aanvullende aanpassing aan runPipeline() nodig (een
+   * aparte Wikidata-aanroep per hasProperty-waarde, naast de bestaande
+   * instanceOf-aanroep per straal-groep). Deze functie levert alvast de
+   * bouwsteen daarvoor.
+   *
+   * @param {string[]} selectedKeys
+   * @returns {string[]} unieke property-ID's (PID's)
+   */
+  function hasPropertyForKeys(selectedKeys) {
+    const keys = new Set(selectedKeys || []);
+    const properties = new Set();
+    for (const category of CATEGORIES) {
+      if (keys.has(category.key) && category.hasProperty) {
+        properties.add(category.hasProperty);
+      }
+    }
+    return Array.from(properties);
+  }
 
-      <section style={{ marginBottom: '2em' }}>
-        <h2>Test 1: bestaande CSV-pijplijn hergebruiken</h2>
-        <button onClick={runSmokeTest}>
-          Genereer testregel via europoi-csv.js
-        </button>
-        {csv && (
-          <pre style={{ textAlign: 'left', background: '#eee', padding: '1em' }}>
-            {csv}
-          </pre>
-        )}
-        {csvError && <p style={{ color: 'red' }}>{csvError}</p>}
-      </section>
+  /**
+   * Geeft de keys van alle categorieën met group:'nieuw' terug — d.w.z.
+   * de categorieën waarop de "kies max. 2"-regel van toepassing is (zie
+   * MAX_EXTRA_CATEGORIES en validateCategorySelection()).
+   *
+   * @returns {string[]}
+   */
+  function getExtraCategoryKeys() {
+    return CATEGORIES.filter((c) => c.group === 'nieuw').map((c) => c.key);
+  }
 
-      <section style={{ marginBottom: '2em' }}>
-        <h2>Test 2: GPS-positie opvragen + voorlezen</h2>
-        <button onClick={runGpsTtsTest}>Vraag positie op en lees voor</button>
-        {gpsResult && <p>{gpsResult}</p>}
-        {gpsError && <p style={{ color: 'red' }}>{gpsError}</p>}
-      </section>
+  /**
+   * Controleert of een selectie van categorie-keys voldoet aan de "kies
+   * max. MAX_EXTRA_CATEGORIES van de group:'nieuw'-categorieën"-regel.
+   * De 7 kernvaste categorieën (zonder group) tellen niet mee voor deze
+   * limiet — die mag de gebruiker allemaal tegelijk aanvinken.
+   *
+   * Bedoeld voor gebruik in zowel een toekomstige UI (om vooraf te
+   * voorkomen dat de gebruiker er te veel aanvinkt) als eventuele
+   * server-/CLI-kant validatie (om een ongeldige, bijv. handmatig
+   * samengestelde, categorielijst alsnog af te vangen).
+   *
+   * @param {string[]} selectedKeys
+   * @returns {{
+   *   valid: boolean,
+   *   extraSelectedKeys: string[],
+   *   maxExtraCategories: number
+   * }}
+   *   extraSelectedKeys bevat ALLE geselecteerde group:'nieuw'-keys (ook
+   *   als dat er te veel zijn) — de aanroeper kan dus zelf tonen welke
+   *   er precies te veel zijn.
+   */
+  function validateCategorySelection(selectedKeys) {
+    const extraKeys = new Set(getExtraCategoryKeys());
+    const keys = selectedKeys || [];
+    const extraSelectedKeys = keys.filter((k) => extraKeys.has(k));
+    return {
+      valid: extraSelectedKeys.length <= MAX_EXTRA_CATEGORIES,
+      extraSelectedKeys: extraSelectedKeys,
+      maxExtraCategories: MAX_EXTRA_CATEGORIES,
+    };
+  }
 
-      <section style={{ marginBottom: '2em' }}>
-        <h2>Test 3: POI's zoeken via Wikidata</h2>
-        <button onClick={runWikidataTest} disabled={wikidataLoading}>
-          {wikidataLoading
-            ? 'Bezig met zoeken...'
-            : "Zoek POI's via Wikidata (testgebied Zutphen)"}
-        </button>
-        {wikidataResults && (
-          <div style={{ textAlign: 'left', marginTop: '1em' }}>
-            <p>{wikidataResults.length} resultaat/resultaten gevonden:</p>
-            <ul>
-              {wikidataResults.map((poi) => (
-                <li key={poi.id} style={{ marginBottom: '0.75em' }}>
-                  <strong>{poi.label}</strong>
-                  {poi.description ? ` — ${poi.description}` : ''}
-                  <br />
-                  <small>
-                    {poi.lat.toFixed(5)}, {poi.lng.toFixed(5)}
-                    {poi.wikipediaUrl && (
-                      <>
-                        {' · '}
-                        <a href={poi.wikipediaUrl} target="_blank" rel="noreferrer">
-                          Wikipedia
-                        </a>
-                      </>
-                    )}
-                  </small>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-        {wikidataError && <p style={{ color: 'red' }}>{wikidataError}</p>}
-      </section>
+  /**
+   * Groepeert aangevinkte categorie-keys op hun EFFECTIEVE zoekstraal —
+   * dat is category.searchRadiusMeters als die gezet is, anders
+   * defaultRadiusMeters. Bedoeld voor poc-gpx-naar-csv.js/runPipeline():
+   * omdat verschillende categorieën verschillende zoekstralen kunnen
+   * hebben (bijv. een dichte categorie als toekomstige "Gebouwd erfgoed"
+   * op 150m, de rest op de standaard ~400m), kan de pijplijn niet langer
+   * met één gedeelde bounding box werken. Deze functie levert de indeling
+   * waarmee de pijplijn per straal een aparte bbox + Wikidata/OSM-
+   * zoekopdracht kan uitvoeren.
+   *
+   * Bevatten alle aangevinkte categorieën geen eigen searchRadiusMeters
+   * (de situatie voor alle 7 huidige categorieën), dan levert dit precies
+   * ÉÉN groep op met defaultRadiusMeters — het gedrag van de pijplijn
+   * blijft dan identiek aan vóór deze functie bestond.
+   *
+   * Onbekende keys worden, net als bij qidsForKeys() en
+   * osmTagFiltersForKeys(), stilzwijgend genegeerd.
+   *
+   * @param {string[]} selectedKeys
+   * @param {number} defaultRadiusMeters - straal voor categorieën zonder
+   *   eigen searchRadiusMeters (in de pijplijn: DEFAULT_SEARCH_RADIUS_M of
+   *   de door de gebruiker opgegeven waarde)
+   * @returns {Array<{radiusMeters:number, keys:string[]}>} groepen, in de
+   *   volgorde waarin de eerste categorie van elke groep in CATEGORIES
+   *   voorkomt (deterministisch, handig voor voorspelbare logregels)
+   */
+  function groupSelectedKeysByRadius(selectedKeys, defaultRadiusMeters) {
+    const keys = new Set(selectedKeys || []);
+    const order = []; // volgorde waarin radii voor het eerst gezien worden
+    const keysByRadius = new Map();
+    for (const category of CATEGORIES) {
+      if (!keys.has(category.key)) continue;
+      const radius = category.searchRadiusMeters || defaultRadiusMeters;
+      if (!keysByRadius.has(radius)) {
+        keysByRadius.set(radius, []);
+        order.push(radius);
+      }
+      keysByRadius.get(radius).push(category.key);
+    }
+    return order.map((radiusMeters) => ({
+      radiusMeters,
+      keys: keysByRadius.get(radiusMeters),
+    }));
+  }
 
-      <section>
-        <h2>Test 4: GPX-route inladen + bounding box berekenen</h2>
-        <input type="file" accept=".gpx" onChange={handleGpxFileChange} />
-        {routeInfo && (
-          <div style={{ textAlign: 'left', marginTop: '1em' }}>
-            <p>
-              Bestand: <strong>{routeInfo.fileName}</strong>
-              <br />
-              Type: {routeInfo.source === 'track' ? 'track (<trkpt>)' : 'route (<rtept>)'}
-              <br />
-              Naam in bestand: {routeInfo.name || '(geen naam gevonden)'}
-              <br />
-              Aantal punten: {routeInfo.pointCount}
-            </p>
-            <p>
-              Berekende bounding box (marge {SEARCH_RADIUS_METERS}m):
-              <br />
-              <code>
-                minLat: {routeInfo.bbox.minLat.toFixed(5)}, maxLat:{' '}
-                {routeInfo.bbox.maxLat.toFixed(5)}
-                <br />
-                minLng: {routeInfo.bbox.minLng.toFixed(5)}, maxLng:{' '}
-                {routeInfo.bbox.maxLng.toFixed(5)}
-              </code>
-            </p>
-          </div>
-        )}
-        {routeError && <p style={{ color: 'red' }}>{routeError}</p>}
-      </section>
-    </>
-  )
-}
-
-export default App
+  return {
+    getCategories,
+    getDefaultSelectedKeys,
+    qidsForKeys,
+    hasPropertyForKeys,
+    osmTagFiltersForKeys,
+    groupSelectedKeysByRadius,
+    getExtraCategoryKeys,
+    validateCategorySelection,
+    getSupportedUiLanguages,
+    resolveUiLanguage,
+    getContentLanguageChain,
+  };
+});
