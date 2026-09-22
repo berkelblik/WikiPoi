@@ -58,6 +58,22 @@ function App() {
     ? window.WikiPoiCategories.validateCategorySelection(selectedCategoryKeys)
     : { valid: true, extraSelectedKeys: [], maxExtraCategories: 2 }
 
+  // Test 5-resultaten worden, vóór weergave én vóór gebruik in Test 6,
+  // gefilterd tegen de Test 3-resultaten: dedupliceren op wikidataId/
+  // Wikipedia-titel (dubbel met Wikidata) en "lege" punten (geen QID,
+  // geen wikipediaUrl, geen description) overslaan — zie
+  // osm-fallback.js#filterAndDedupeOsmCandidates(). Herberekend bij elke
+  // render, dus reageert automatisch op nieuwe Test 3- of Test 5-runs.
+  const osmFilterAvailable =
+    !!window.WikiPoiOsmFallback &&
+    typeof window.WikiPoiOsmFallback.filterAndDedupeOsmCandidates === 'function'
+  const filteredOsmResults =
+    osmResults && osmFilterAvailable
+      ? window.WikiPoiOsmFallback.filterAndDedupeOsmCandidates(osmResults, wikidataResults || [])
+      : osmResults
+  const osmSkippedCount =
+    osmResults && filteredOsmResults ? osmResults.length - filteredOsmResults.length : 0
+
   function toggleCategory(key) {
     setSelectedCategoryKeys((prev) =>
       prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]
@@ -304,8 +320,12 @@ function App() {
         return
       }
       // Combineert de Test 3- (Wikidata) en Test 5- (OSM) resultaten tot
-      // één lijst van kandidaten; beide kunnen een wikipediaUrl hebben.
-      const candidates = [...(wikidataResults || []), ...(osmResults || [])]
+      // één lijst van kandidaten. De OSM-kant gebruikt hier bewust
+      // filteredOsmResults i.p.v. de ruwe osmResults: duplicaten met Test 3
+      // (dedupe op wikidataId/Wikipedia-titel) en "lege" OSM-punten zonder
+      // bruikbare tekst zijn dan al weggefilterd, zodat deze niet als
+      // zinloze "Geen samenvatting"-regel in Test 6 verschijnen.
+      const candidates = [...(wikidataResults || []), ...(filteredOsmResults || [])]
       if (candidates.length === 0) {
         setSummaryError(
           'Geen kandidaten beschikbaar — voer eerst Test 3 en/of Test 5 uit.'
@@ -497,9 +517,28 @@ function App() {
         </button>
         {osmResults && (
           <div style={{ textAlign: 'left', marginTop: '1em' }}>
-            <p>{osmResults.length} resultaat/resultaten gevonden:</p>
+            <p>
+              {osmResults.length} resultaat/resultaten gevonden via Overpass.
+              {osmFilterAvailable && (
+                <>
+                  {' '}
+                  Na filteren op duplicaten met Test 3 (Wikidata) en punten zonder bruikbare
+                  tekst blijven er <strong>{filteredOsmResults.length}</strong> over (
+                  {osmSkippedCount} overgeslagen).
+                </>
+              )}
+              {!osmFilterAvailable && (
+                <>
+                  {' '}
+                  <span style={{ color: 'red' }}>
+                    Let op: filterAndDedupeOsmCandidates() niet beschikbaar — toont ongefilterde
+                    resultaten (osm-fallback.js niet correct geladen of verouderd).
+                  </span>
+                </>
+              )}
+            </p>
             <ul>
-              {osmResults.map((poi) => (
+              {filteredOsmResults.map((poi) => (
                 <li key={poi.id} style={{ marginBottom: '0.75em' }}>
                   <strong>{poi.label}</strong>
                   {poi.description ? ` — ${poi.description}` : ''}
@@ -527,9 +566,9 @@ function App() {
         <h2>Test 6: Wikipedia-samenvattingen ophalen</h2>
         <p style={{ fontStyle: 'italic', marginBottom: '0.5em' }}>
           Verrijkt de hierboven gevonden Test 3- (Wikidata) en Test 5-
-          (OSM) resultaten samen met hun Wikipedia-samenvatting (max. 3
-          zinnen), via wikipedia-summary.js. Voer eerst Test 3 en/of Test
-          5 uit.
+          (OSM, gefilterd) resultaten samen met hun Wikipedia-samenvatting
+          (max. 3 zinnen), via wikipedia-summary.js. Voer eerst Test 3
+          en/of Test 5 uit.
         </p>
         <button onClick={runWikipediaSummaryTest} disabled={summaryLoading}>
           {summaryLoading ? 'Bezig met ophalen...' : 'Haal Wikipedia-samenvattingen op'}
