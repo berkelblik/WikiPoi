@@ -23,10 +23,20 @@
  */
 
 (function (root, factory) {
+  // BELANGRIJK: beide toewijzingen zijn hier onvoorwaardelijk (twee losse
+  // `if`-blokken), NIET als `if`/`else if`. Vite/Rollup detecteert
+  // automatisch `module.exports`-syntax en injecteert soms zelf een nep-
+  // `module`-object voor CommonJS-interop, ook bij een ESM side-effect-
+  // import — waardoor een `else if (typeof window !== 'undefined')`-tak
+  // stilzwijgend wordt overgeslagen en window.WikiPoiCategories undefined
+  // blijft. Zie europoi-csv.js / wikidata-search.js / route-buffer.js /
+  // osm-fallback.js / wikipedia-summary.js voor dezelfde fix.
+  var mod = factory();
   if (typeof module === 'object' && module.exports) {
-    module.exports = factory();
-  } else {
-    root.WikiPoiCategories = factory();
+    module.exports = mod;
+  }
+  if (typeof window !== 'undefined') {
+    window.WikiPoiCategories = mod;
   }
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
