@@ -1,184 +1,394 @@
-.counter {
-  font-size: 16px;
-  padding: 5px 10px;
-  border-radius: 5px;
-  color: var(--accent);
-  background: var(--accent-bg);
-  border: 2px solid transparent;
-  transition: border-color 0.3s;
-  margin-bottom: 24px;
+/*
+ * App.css — WikiPoi
+ *
+ * Stijl in lijn met EuroPoi: donkerblauwe kopbalk, zandkleurige achtergrond,
+ * donkerblauwe kaarten en dikke pastelknoppen met een donkere "3D-rand"
+ * aan de onderkant die bij indrukken inzakt.
+ *
+ * Knopkleuren staan op .btn.btn-… (twee klassen): zo winnen ze van eventuele
+ * algemene button:hover-regels in index.css (Vite-sjabloon).
+ */
 
-  &:hover {
-    border-color: var(--accent-border);
-  }
-  &:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-  }
+:root {
+  --wp-navy-dark: #0b1430;
+  --wp-navy: #13204a;
+  --wp-navy-light: #1c2c5e;
+  --wp-sand: #f3e4b5;
+  --wp-gold: #facc15;
+  --wp-text: #e2e8f0;
+  --wp-muted: #94a3b8;
+  --wp-error: #fca5a5;
+  --wp-success: #86efac;
 }
 
-.hero {
-  position: relative;
-
-  .base,
-  .framework,
-  .vite {
-    inset-inline: 0;
-    margin: 0 auto;
-  }
-
-  .base {
-    width: 170px;
-    position: relative;
-    z-index: 0;
-  }
-
-  .framework,
-  .vite {
-    position: absolute;
-  }
-
-  .framework {
-    z-index: 1;
-    top: 34px;
-    height: 28px;
-    transform: perspective(2000px) rotateZ(300deg) rotateX(44deg) rotateY(39deg)
-      scale(1.4);
-  }
-
-  .vite {
-    z-index: 0;
-    top: 107px;
-    height: 26px;
-    width: auto;
-    transform: perspective(2000px) rotateZ(300deg) rotateX(40deg) rotateY(39deg)
-      scale(0.8);
-  }
+body {
+  margin: 0;
+  min-width: 0;
+  display: block;
+  background: var(--wp-sand);
+  color: var(--wp-text);
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
 }
 
-#center {
+#root {
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  text-align: left;
+}
+
+/* Kopbalk */
+
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: calc(12px + env(safe-area-inset-top, 0px)) 18px 12px;
+  background: var(--wp-navy-dark);
+  border-bottom: 1px solid #1e2b55;
+}
+
+.app-logo {
+  flex: 0 0 auto;
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  background: var(--wp-gold);
+  color: var(--wp-navy-dark);
+  font-size: 28px;
+  font-weight: 900;
+  font-style: italic;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 0 #a16207;
+}
+
+.app-title {
+  font-size: 30px;
+  font-weight: 900;
+  font-style: italic;
+  line-height: 1.1;
+  color: #ffffff;
+}
+
+.app-subtitle {
+  font-size: 14px;
+  color: #7aa2f7;
+}
+
+/* Stappen */
+
+.app-main {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 16px 12px calc(32px + env(safe-area-inset-bottom, 0px));
   display: flex;
   flex-direction: column;
-  gap: 25px;
-  place-content: center;
-  place-items: center;
-  flex-grow: 1;
-
-  @media (max-width: 1024px) {
-    padding: 32px 20px 24px;
-    gap: 18px;
-  }
+  gap: 16px;
 }
 
-#next-steps {
+.step {
+  background: var(--wp-navy);
+  border-radius: 24px;
+  padding: 18px 18px 20px;
+  box-shadow: 0 4px 14px rgba(15, 27, 61, 0.25);
+}
+
+.step-disabled {
+  opacity: 0.6;
+}
+
+.step-title {
   display: flex;
-  border-top: 1px solid var(--border);
-  text-align: left;
-
-  & > div {
-    flex: 1 1 0;
-    padding: 32px;
-    @media (max-width: 1024px) {
-      padding: 24px 20px;
-    }
-  }
-
-  .icon {
-    margin-bottom: 16px;
-    width: 22px;
-    height: 22px;
-  }
-
-  @media (max-width: 1024px) {
-    flex-direction: column;
-    text-align: center;
-  }
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 14px;
+  font-size: 24px;
+  font-weight: 900;
+  font-style: italic;
+  color: var(--wp-gold);
 }
 
-#docs {
-  border-right: 1px solid var(--border);
-
-  @media (max-width: 1024px) {
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-  }
+.step-number {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--wp-gold);
+  color: var(--wp-navy-dark);
+  font-size: 17px;
+  font-style: normal;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-#next-steps ul {
+.step-hint {
+  margin: 0;
+  color: var(--wp-muted);
+  font-style: italic;
+}
+
+.step p {
+  margin: 0.6em 0;
+  line-height: 1.45;
+}
+
+.muted {
+  color: var(--wp-muted);
+  font-size: 0.9em;
+}
+
+.error {
+  color: var(--wp-error);
+}
+
+.success {
+  color: var(--wp-success);
+}
+
+/* Knoppen */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-height: 54px;
+  padding: 0 22px;
+  border: none;
+  border-bottom: 6px solid transparent;
+  border-radius: 18px;
+  font-family: inherit;
+  font-size: 18px;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: transform 0.05s, border-bottom-width 0.05s;
+}
+
+.btn:active:not(:disabled):not(.is-disabled) {
+  transform: translateY(3px);
+  border-bottom-width: 3px;
+}
+
+.btn:focus-visible {
+  outline: 3px solid #ffffff;
+  outline-offset: 2px;
+}
+
+.btn:disabled,
+.btn.is-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn.btn-yellow {
+  background: #fdf08a;
+  color: #7c2d12;
+  border-bottom-color: #9a3412;
+}
+
+.btn.btn-blue {
+  background: #bae6fd;
+  color: #1e3a8a;
+  border-bottom-color: #0369a1;
+}
+
+.btn.btn-indigo {
+  background: #c7d2fe;
+  color: #312e81;
+  border-bottom-color: #4338ca;
+}
+
+.btn.btn-green {
+  background: #bbf7d0;
+  color: #14532d;
+  border-bottom-color: #15803d;
+}
+
+.btn.btn-pink {
+  background: #fbcfe8;
+  color: #9f1239;
+  border-bottom-color: #be123c;
+}
+
+.btn.btn-small {
+  min-height: 40px;
+  padding: 0 16px;
+  border-radius: 12px;
+  border-bottom-width: 4px;
+  font-size: 13px;
+}
+
+.btn.btn-wide {
+  width: 100%;
+}
+
+/* Categorieën */
+
+.category-list {
   list-style: none;
+  margin: 0;
   padding: 0;
   display: flex;
-  gap: 8px;
-  margin: 32px 0 0;
-
-  .logo {
-    height: 18px;
-  }
-
-  a {
-    color: var(--text-h);
-    font-size: 16px;
-    border-radius: 6px;
-    background: var(--social-bg);
-    display: flex;
-    padding: 6px 12px;
-    align-items: center;
-    gap: 8px;
-    text-decoration: none;
-    transition: box-shadow 0.3s;
-
-    &:hover {
-      box-shadow: var(--shadow);
-    }
-    .button-icon {
-      height: 18px;
-      width: 18px;
-    }
-  }
-
-  @media (max-width: 1024px) {
-    margin-top: 20px;
-    flex-wrap: wrap;
-    justify-content: center;
-
-    li {
-      flex: 1 1 calc(50% - 8px);
-    }
-
-    a {
-      width: 100%;
-      justify-content: center;
-      box-sizing: border-box;
-    }
-  }
+  flex-direction: column;
+  gap: 6px;
 }
 
-#spacer {
-  height: 88px;
-  border-top: 1px solid var(--border);
-  @media (max-width: 1024px) {
-    height: 48px;
-  }
+.category-group-title {
+  font-weight: 800;
+  color: #ffffff;
 }
 
-.ticks {
-  position: relative;
+.category-item label,
+.toggle-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: var(--wp-navy-light);
+  cursor: pointer;
+}
+
+.toggle-row {
+  margin-top: 14px;
+}
+
+.category-item input,
+.toggle-row input {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  margin: 1px 0 0;
+  accent-color: var(--wp-gold);
+}
+
+.category-item.is-disabled label,
+.toggle-row.is-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.category-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.category-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 800;
+  color: #ffffff;
+}
+
+.category-desc {
+  font-size: 13px;
+  color: var(--wp-muted);
+}
+
+.category-dot {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 0.8em;
+  height: 0.8em;
+  border-radius: 50%;
+}
+
+/* Kaart en corridor */
+
+.map-frame {
+  overflow: hidden;
+  margin-top: 12px;
+  border-radius: 16px;
+}
+
+/* Leaflet-divIcon zonder standaard witte achtergrond en rand. */
+.wikipoi-marker {
+  background: transparent;
+  border: none;
+}
+
+.field-label {
+  display: block;
+  margin: 14px 0 6px;
+  font-weight: 800;
+  color: #ffffff;
+}
+
+.corridor-slider {
+  display: block;
   width: 100%;
+  accent-color: var(--wp-gold);
+}
 
-  &::before,
-  &::after {
-    content: '';
-    position: absolute;
-    top: -4.5px;
-    border: 5px solid transparent;
-  }
+.text-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 50px;
+  padding: 0 14px;
+  border: 1px solid #2b3b70;
+  border-radius: 14px;
+  background: var(--wp-navy-dark);
+  color: #ffffff;
+  font-family: inherit;
+  font-size: 16px;
+}
 
-  &::before {
-    left: 0;
-    border-left-color: var(--border);
-  }
-  &::after {
-    right: 0;
-    border-right-color: var(--border);
-  }
+.text-input:focus-visible {
+  outline: 3px solid var(--wp-gold);
+  outline-offset: 1px;
+}
+
+/* POI-lijsten */
+
+.poi-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.poi-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.poi-list li.is-out {
+  color: #64748b;
+}
+
+.poi-list.summary-list li {
+  display: block;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: var(--wp-navy-light);
+}
+
+.poi-list.summary-list li::after {
+  content: '';
+  display: block;
+  clear: both;
+}
+
+.summary-list img {
+  float: right;
+  max-width: 72px;
+  max-height: 72px;
+  margin: 0 0 6px 10px;
+  border-radius: 8px;
+}
+
+.step p.summary-text {
+  margin: 4px 0 0;
+  font-size: 13px;
 }

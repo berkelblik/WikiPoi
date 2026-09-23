@@ -6,19 +6,21 @@ import '../../src/osm-fallback.js'
 import '../../src/wikipedia-summary.js'
 import '../../src/poi-categories.js'
 import { Capacitor } from '@capacitor/core'
-import { Geolocation } from '@capacitor/geolocation'
-import { TextToSpeech } from '@capacitor-community/text-to-speech'
 import RouteMap from './components/RouteMap.jsx'
 import { getCategoryStyle } from './components/poi-icons.js'
 import './App.css'
 
+// WikiPoi — één doorlopende flow in zes stappen:
+//   1. Route (GPX)  2. Categorieën (+ optioneel OSM)  3. Zoeken
+//   4. Kaart met corridor-slider  5. Wikipedia-samenvattingen  6. CSV voor EuroPoi
+// Een stap wordt pas bruikbaar als de vorige klaar is. Wie route, categorieën
+// of de OSM-schakelaar wijzigt, maakt eerdere zoekresultaten ongeldig; die
+// worden dan gewist (resetResults).
+
 // Corridor langs de route: de slider bepaalt hoe breed de strook aan
 // weerszijden van de route is waarbinnen POI's meegaan. De bounding box van
-// de Wikidata/OSM-zoekopdracht krijgt aan alle kanten een marge van de
-// MAXIMALE corridorbreedte, zodat elke POI die bij enige sliderstand binnen
-// de corridor valt ook echt opgehaald is. Schuiven filtert daarna alleen nog
-// lokaal, zonder nieuwe zoekopdracht. 500m gekozen omdat WikiPoi voor
-// wandelaars en fietsers is; eventueel later te verhogen (max. ~1000m).
+// de zoekopdracht krijgt aan alle kanten een marge van de MAXIMALE
+// corridorbreedte, zodat schuiven daarna alleen nog lokaal filtert.
 const CORRIDOR_MAX_METERS = 500
 const CORRIDOR_MIN_METERS = 50
 const CORRIDOR_STEP_METERS = 25
@@ -28,14 +30,13 @@ const CORRIDOR_DEFAULT_METERS = 250
 // worden als één POI behandeld (één gebouw, meerdere items).
 const WIKIDATA_MERGE_METERS = 10
 
-// Vast testgebied rond het eerdere GPS-testpunt bij Zutphen (ca. 1,1 x
-// 0,7 km), gebruikt als fallback zolang er nog geen GPX-route is geladen.
-const FALLBACK_TEST_BBOX = {
-  minLat: 52.1276,
-  maxLat: 52.1376,
-  minLng: 6.2133,
-  maxLng: 6.2333,
-}
+const SUMMARY_MAX_SENTENCES = 3
+
+// Triggerstraal per POI in de EuroPoi-CSV. Voorlopig vast; later eventueel
+// per categorie of instelbaar.
+const DEFAULT_TRIGGER_RADIUS_METERS = 50
+
+const MAP_HEIGHT = '320px'
 
 // Zoekresultaten van meerdere categorieën samenvoegen: bij hetzelfde id wint
 // het EERST gevonden item (en dus diens categoryKey). De zoekopdrachten
@@ -52,48 +53,75 @@ function dedupeFirstWins(items) {
   })
 }
 
+function errorText(err) {
+  return 'Fout: ' + (err && err.message ? err.message : String(err))
+}
+
+// Routenaam = bestandsnaam van de GPX zonder extensie.
+function routeNameFromFileName(fileName) {
+  return String(fileName || '').replace(/\.gpx$/i, '').trim()
+}
+
+// Bestandsnaam voor de CSV, zonder tekens die Windows/Android weigeren.
+function csvFileName(routeName) {
+  const safe = routeName.replace(/[\\/:*?"<>|]+/g, '-').trim()
+  return (safe || 'wikipoi') + '.csv'
+}
+
 // Klein gekleurd rondje in de categoriekleur, voor de lijsten.
 function CategoryDot({ categoryKey, faded }) {
   return (
     <span
       aria-hidden="true"
+      className="category-dot"
       style={{
-        display: 'inline-block',
-        width: '0.8em',
-        height: '0.8em',
-        borderRadius: '50%',
         background: getCategoryStyle(categoryKey).color,
         opacity: faded ? 0.45 : 1,
-        verticalAlign: 'middle',
       }}
     />
   )
 }
 
+// Eén genummerde stap. Zolang de stap nog niet bruikbaar is, staat er
+// alleen een aanwijzing wat eerst moet gebeuren.
+function Step({ number, title, disabled, hint, children }) {
+  return (
+    <section className={disabled ? 'step step-disabled' : 'step'}>
+      <h2 className="step-title">
+        <span className="step-number">{number}</span>
+        {title}
+      </h2>
+      {disabled ? <p className="step-hint">{hint}</p> : children}
+    </section>
+  )
+}
+
 function App() {
-  const [csv, setCsv] = useState('')
-  const [csvError, setCsvError] = useState('')
-  const [gpsResult, setGpsResult] = useState('')
-  const [gpsError, setGpsError] = useState('')
   const [routeInfo, setRouteInfo] = useState(null)
   const [routeError, setRouteError] = useState('')
   const [selectedCategoryKeys, setSelectedCategoryKeys] = useState([])
+  const [useOsm, setUseOsm] = useState(false)
   const [wikidataResults, setWikidataResults] = useState(null)
-  const [wikidataError, setWikidataError] = useState('')
-  const [wikidataLoading, setWikidataLoading] = useState(false)
-  const [wikidataMergedCount, setWikidataMergedCount] = useState(0)
   const [osmResults, setOsmResults] = useState(null)
-  const [osmError, setOsmError] = useState('')
-  const [osmLoading, setOsmLoading] = useState(false)
-  const [summaryResults, setSummaryResults] = useState(null)
-  const [summaryError, setSummaryError] = useState('')
-  const [summaryLoading, setSummaryLoading] = useState(false)
+  const [mergedCount, setMergedCount] = useState(0)
+  const [searchLoading, setSearchLoading] = useState(false)
+  const [searchProgress, setSearchProgress] = useState('')
+  const [searchError, setSearchError] = useState('')
   const [showMap, setShowMap] = useState(true)
   const [corridorMeters, setCorridorMeters] = useState(CORRIDOR_DEFAULT_METERS)
+  // Samenvattingen per POI-id: { summary, summaryError }. Een id dat hier
+  // (nog) niet in staat, is nog niet opgehaald.
+  const [summariesById, setSummariesById] = useState({})
+  const [summaryLoading, setSummaryLoading] = useState(false)
+  const [summaryError, setSummaryError] = useState('')
+  const [routeName, setRouteName] = useState('')
+  const [exportMessage, setExportMessage] = useState('')
+  const [exportError, setExportError] = useState('')
 
-  // De standaard-aangevinkte categorieën komen uit poi-categories.js zelf
-  // (getDefaultSelectedKeys()); dat kan pas ná de module-import ingelezen
-  // worden, dus in een effect i.p.v. direct in useState().
+  const isNative = Capacitor.isNativePlatform()
+
+  // De standaard-aangevinkte categorieën komen uit poi-categories.js zelf;
+  // dat kan pas ná de module-import ingelezen worden, dus in een effect.
   useEffect(() => {
     if (window.WikiPoiCategories && typeof window.WikiPoiCategories.getDefaultSelectedKeys === 'function') {
       setSelectedCategoryKeys(window.WikiPoiCategories.getDefaultSelectedKeys())
@@ -102,61 +130,45 @@ function App() {
 
   const categoriesAvailable =
     !!window.WikiPoiCategories && typeof window.WikiPoiCategories.getCategories === 'function'
-  const categoryList = categoriesAvailable ? window.WikiPoiCategories.getCategories('nl') : []
+  const categoryList = useMemo(
+    () => (categoriesAvailable ? window.WikiPoiCategories.getCategories('nl') : []),
+    [categoriesAvailable]
+  )
   const coreCategories = categoryList.filter((c) => !c.group)
   const extraCategories = categoryList.filter((c) => c.group === 'nieuw')
-  const categoryValidation = categoriesAvailable
-    ? window.WikiPoiCategories.validateCategorySelection(selectedCategoryKeys)
-    : { valid: true, extraSelectedKeys: [], maxExtraCategories: 2 }
+  const maxExtraCategories = categoriesAvailable
+    ? window.WikiPoiCategories.validateCategorySelection(selectedCategoryKeys).maxExtraCategories
+    : 2
+  const extraSelectedCount = extraCategories.filter((c) => selectedCategoryKeys.includes(c.key)).length
 
-  // Categorienaam per key, voor popups, legenda en lijsten. Eenmalig
-  // opgebouwd (useMemo zonder afhankelijkheden), zodat de kaart-POI's
-  // hieronder niet bij elke render opnieuw berekend worden.
+  // Categorienaam per key, voor popups, legenda en lijsten.
   const categoryLabelByKey = useMemo(() => {
     const labels = {}
-    if (window.WikiPoiCategories && typeof window.WikiPoiCategories.getCategories === 'function') {
-      window.WikiPoiCategories.getCategories('nl').forEach((c) => {
-        labels[c.key] = c.label
-      })
-    }
+    categoryList.forEach((c) => {
+      labels[c.key] = c.label
+    })
     return labels
-  }, [])
+  }, [categoryList])
 
-  // Test 5-resultaten worden, vóór weergave én vóór gebruik in Test 6,
-  // gefilterd tegen de Test 3-resultaten: dedupliceren op wikidataId/
-  // Wikipedia-titel (dubbel met Wikidata) en "lege" punten (geen QID,
-  // geen wikipediaUrl, geen description) overslaan — zie
-  // osm-fallback.js#filterAndDedupeOsmCandidates(). Herberekend bij elke
-  // render, dus reageert automatisch op nieuwe Test 3- of Test 5-runs.
-  const osmFilterAvailable =
-    !!window.WikiPoiOsmFallback &&
-    typeof window.WikiPoiOsmFallback.filterAndDedupeOsmCandidates === 'function'
-  // useMemo i.p.v. herberekenen bij elke render: de kaart-POI's hieronder
-  // hangen hiervan af, en een steeds nieuwe array zou die (dure) afstand-
-  // tot-route-berekening bij elke sliderbeweging opnieuw laten draaien.
-  const filteredOsmResults = useMemo(
-    () =>
-      osmResults && osmFilterAvailable
-        ? window.WikiPoiOsmFallback.filterAndDedupeOsmCandidates(osmResults, wikidataResults || [])
-        : osmResults,
-    [osmResults, wikidataResults, osmFilterAvailable]
+  const searchDone = wikidataResults !== null
+
+  // Alle gevonden POI's (Wikidata + eventueel OSM, al gefilterd bij het zoeken).
+  const allPois = useMemo(
+    () => [...(wikidataResults || []), ...(osmResults || [])],
+    [wikidataResults, osmResults]
   )
-  const osmSkippedCount =
-    osmResults && filteredOsmResults ? osmResults.length - filteredOsmResults.length : 0
 
-  // Kaart-POI's: Test 3 (Wikidata) + Test 5 (OSM, gefilterd), met per POI
-  // de afstand tot de route en het dichtstbijzijnde routepunt (= waar
+  // Per POI de afstand tot de route en het dichtstbijzijnde routepunt (= waar
   // EuroPoi straks aankondigt). Alleen herberekend bij een nieuwe route of
   // nieuwe zoekresultaten — niet bij het verschuiven van de slider.
   const routeMeasuredPois = useMemo(() => {
-    const candidates = [...(wikidataResults || []), ...(filteredOsmResults || [])]
     const routePoints = routeInfo ? routeInfo.points : null
     const canMeasure =
       !!routePoints &&
       routePoints.length > 0 &&
       !!window.WikiPoiRouteBuffer &&
       typeof window.WikiPoiRouteBuffer.closestPointOnRoute === 'function'
-    return candidates.map((c) => {
+    return allPois.map((c) => {
       const categoryLabel = categoryLabelByKey[c.categoryKey] || 'Onbekende categorie'
       if (!canMeasure) {
         return { ...c, categoryLabel, distanceToRoute: null, snapPoint: null }
@@ -164,10 +176,10 @@ function App() {
       const r = window.WikiPoiRouteBuffer.closestPointOnRoute(c, routePoints)
       return { ...c, categoryLabel, distanceToRoute: r.distance, snapPoint: r.point }
     })
-  }, [wikidataResults, filteredOsmResults, routeInfo, categoryLabelByKey])
+  }, [allPois, routeInfo, categoryLabelByKey])
 
   // Goedkope stap die wél bij elke sliderbeweging draait: binnen/buiten de
-  // corridor markeren. Zonder route valt alles "binnen" (niets te toetsen).
+  // corridor markeren.
   const mapPois = useMemo(
     () =>
       routeMeasuredPois.map((p) => ({
@@ -176,138 +188,82 @@ function App() {
       })),
     [routeMeasuredPois, corridorMeters]
   )
-  const poisInCorridorCount = mapPois.filter((p) => p.inCorridor).length
-  const mapPoisSorted = [...mapPois].sort(
-    (a, b) => (a.distanceToRoute ?? 0) - (b.distanceToRoute ?? 0)
+  const mapPoisSorted = useMemo(
+    () => [...mapPois].sort((a, b) => (a.distanceToRoute ?? 0) - (b.distanceToRoute ?? 0)),
+    [mapPois]
   )
+  const corridorPois = mapPoisSorted.filter((p) => p.inCorridor)
+  const summaryMissingPois = corridorPois.filter((p) => !(p.id in summariesById))
+  const summaryFoundCount = corridorPois.filter(
+    (p) => summariesById[p.id] && summariesById[p.id].summary
+  ).length
+
+  function resetResults() {
+    setWikidataResults(null)
+    setOsmResults(null)
+    setMergedCount(0)
+    setSearchProgress('')
+    setSearchError('')
+    setSummariesById({})
+    setSummaryError('')
+    setExportMessage('')
+    setExportError('')
+  }
 
   function toggleCategory(key) {
-    setSelectedCategoryKeys((prev) =>
-      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]
+    if (searchLoading) return
+    const isSelected = selectedCategoryKeys.includes(key)
+    if (!isSelected) {
+      const cat = categoryList.find((c) => c.key === key)
+      if (cat && cat.group === 'nieuw' && extraSelectedCount >= maxExtraCategories) return
+    }
+    setSelectedCategoryKeys(
+      isSelected ? selectedCategoryKeys.filter((k) => k !== key) : [...selectedCategoryKeys, key]
     )
+    resetResults()
   }
 
-  function runSmokeTest() {
-    setCsvError('')
-    setCsv('')
-    try {
-      if (!window.EuroPoiCsv || typeof window.EuroPoiCsv.toEuroPoiCsv !== 'function') {
-        setCsvError(
-          'Fout: window.EuroPoiCsv is niet beschikbaar (europoi-csv.js is niet correct geladen).'
-        )
-        return
-      }
-      const testPois = [
-        {
-          lat: 52.1326,
-          lng: 6.2233,
-          name: 'Testpunt Zutphen',
-          desc: 'Smoketest voor de fase 1-integratie.',
-          category: 'Testroute',
-          radius: 50,
-          mp3: '',
-        },
-      ]
-      const result = window.EuroPoiCsv.toEuroPoiCsv(testPois)
-      setCsv(result)
-    } catch (err) {
-      setCsvError('Fout: ' + (err && err.message ? err.message : String(err)))
-    }
-  }
-
-  async function runGpsTtsTest() {
-    setGpsError('')
-    setGpsResult('')
-    try {
-      // requestPermissions() is op het web niet geïmplementeerd door de
-      // Capacitor-Geolocation-plugin; alleen op native (Android/iOS) is een
-      // aparte toestemmingsaanvraag nodig. Op het web regelt de browser dit
-      // zelf zodra getCurrentPosition() wordt aangeroepen.
-      if (Capacitor.isNativePlatform()) {
-        const permission = await Geolocation.requestPermissions()
-        if (
-          permission.location !== 'granted' &&
-          permission.coarseLocation !== 'granted'
-        ) {
-          setGpsError('Geen toestemming gekregen voor locatie.')
-          return
-        }
-      }
-
-      const position = await Geolocation.getCurrentPosition({
-        enableHighAccuracy: true,
-        timeout: 20000,
-      })
-      const { latitude, longitude } = position.coords
-      const plusCode = window.EuroPoiCsv.OLC.encode(latitude, longitude, 10)
-      const resultText = `Positie gevonden: breedtegraad ${latitude.toFixed(
-        5
-      )}, lengtegraad ${longitude.toFixed(5)}. PlusCode: ${plusCode}.`
-      setGpsResult(resultText)
-
-      await TextToSpeech.speak({
-        text: resultText,
-        lang: 'nl-NL',
-        rate: 1.0,
-        pitch: 1.0,
-        volume: 1.0,
-      })
-    } catch (err) {
-      setGpsError('Fout: ' + (err && err.message ? err.message : String(err)))
-    }
+  function toggleOsm() {
+    if (searchLoading) return
+    setUseOsm((v) => !v)
+    resetResults()
   }
 
   function handleGpxFileChange(event) {
+    const file = event.target.files && event.target.files[0]
+    // Zelfde bestand opnieuw kiezen moet ook weer een change-event geven.
+    event.target.value = ''
+    if (!file) return
     setRouteError('')
     setRouteInfo(null)
-    // Een nieuwe route maakt eerdere resultaten (van de vorige route of
-    // het testgebied) ongeldig; laat de gebruiker niet naar resultaten
-    // kijken die niet meer bij de huidige route horen.
-    setWikidataResults(null)
-    setWikidataError('')
-    setOsmResults(null)
-    setOsmError('')
-    setSummaryResults(null)
-    setSummaryError('')
-
-    const file = event.target.files && event.target.files[0]
-    if (!file) return
+    resetResults()
 
     if (
       !window.WikiPoiRouteBuffer ||
       typeof window.WikiPoiRouteBuffer.parseGpxLineString !== 'function'
     ) {
-      setRouteError(
-        'Fout: window.WikiPoiRouteBuffer is niet beschikbaar (route-buffer.js is niet correct geladen).'
-      )
+      setRouteError('Fout: route-buffer.js is niet correct geladen.')
       return
     }
 
     const reader = new FileReader()
     reader.onload = () => {
       try {
-        const gpxText = String(reader.result)
-        const parsed = window.WikiPoiRouteBuffer.parseGpxLineString(gpxText)
+        const parsed = window.WikiPoiRouteBuffer.parseGpxLineString(String(reader.result))
         if (!parsed.points || parsed.points.length === 0) {
-          setRouteError(
-            'Geen track- of routepunten gevonden in dit GPX-bestand (verwacht <trkpt> of <rtept>-elementen).'
-          )
+          setRouteError('Geen track- of routepunten gevonden in dit GPX-bestand.')
           return
         }
-        const bbox = window.WikiPoiRouteBuffer.getBoundingBox(
-          parsed.points,
-          CORRIDOR_MAX_METERS
-        )
         setRouteInfo({
           fileName: file.name,
           points: parsed.points,
           pointCount: parsed.points.length,
-          source: parsed.source,
           name: parsed.name,
-          bbox: bbox,
+          bbox: window.WikiPoiRouteBuffer.getBoundingBox(parsed.points, CORRIDOR_MAX_METERS),
         })
+        setRouteName(routeNameFromFileName(file.name))
       } catch (err) {
-        setRouteError('Fout: ' + (err && err.message ? err.message : String(err)))
+        setRouteError(errorText(err))
       }
     }
     reader.onerror = () => {
@@ -316,515 +272,436 @@ function App() {
     reader.readAsText(file)
   }
 
-  async function runWikidataTest() {
-    setWikidataError('')
-    setWikidataResults(null)
-    setWikidataLoading(true)
+  async function runSearch() {
+    if (!routeInfo) return
+    resetResults()
+    setSearchLoading(true)
     try {
       if (
         !window.WikiPoiWikidataSearch ||
         typeof window.WikiPoiWikidataSearch.searchWikidataBox !== 'function'
       ) {
-        setWikidataError(
-          'Fout: window.WikiPoiWikidataSearch is niet beschikbaar (wikidata-search.js is niet correct geladen).'
-        )
+        setSearchError('Fout: wikidata-search.js is niet correct geladen.')
         return
       }
       if (!categoriesAvailable) {
-        setWikidataError(
-          'Fout: window.WikiPoiCategories is niet beschikbaar (poi-categories.js is niet correct geladen).'
-        )
+        setSearchError('Fout: poi-categories.js is niet correct geladen.')
+        return
+      }
+      if (
+        useOsm &&
+        (!window.WikiPoiOsmFallback || typeof window.WikiPoiOsmFallback.searchOverpass !== 'function')
+      ) {
+        setSearchError('Fout: osm-fallback.js is niet correct geladen.')
         return
       }
 
       // Per aangevinkte categorie een eigen zoekopdracht, zodat elk
       // resultaat weet via welke categorie het gevonden is (categoryKey →
-      // kleur en icoon op de kaart). Eerst de instanceOf-categorieën, daarna
-      // de hasProperty-categorieën ("Gebouwd erfgoed"), zie dedupeFirstWins().
-      const selectedCategories = categoryList.filter((c) => selectedCategoryKeys.includes(c.key))
-      const instanceOfCategories = selectedCategories.filter((c) => c.qids.length > 0)
-      const propertyCategories = selectedCategories.filter((c) => c.hasProperty)
-      if (instanceOfCategories.length === 0 && propertyCategories.length === 0) {
-        setWikidataError('Selecteer minimaal één categorie hierboven.')
+      // kleur en icoon). Eerst instanceOf, daarna hasProperty ("Gebouwd
+      // erfgoed"), zie dedupeFirstWins().
+      const selected = categoryList.filter((c) => selectedCategoryKeys.includes(c.key))
+      const wikidataJobs = [
+        ...selected
+          .filter((c) => c.qids.length > 0)
+          .map((c) => ({ category: c, query: { instanceOf: c.qids } })),
+        ...selected
+          .filter((c) => c.hasProperty)
+          .map((c) => ({ category: c, query: { hasProperty: c.hasProperty } })),
+      ]
+      if (wikidataJobs.length === 0) {
+        setSearchError('Kies minimaal één categorie bij stap 2.')
         return
       }
-
-      // Gebruik de bounding box van de geladen GPX-route (Test 4) als die
-      // er is; anders het vaste testgebied bij Zutphen als fallback.
-      const bbox = routeInfo ? routeInfo.bbox : FALLBACK_TEST_BBOX
+      const osmCategories = useOsm ? selected.filter((c) => c.osmTags && c.osmTags.length > 0) : []
+      const total = wikidataJobs.length + osmCategories.length
+      let done = 0
 
       let results = []
-      for (const category of instanceOfCategories) {
-        const found = await window.WikiPoiWikidataSearch.searchWikidataBox(bbox, {
-          instanceOf: category.qids,
-        })
-        results = results.concat(found.map((item) => ({ ...item, categoryKey: category.key })))
+      for (const job of wikidataJobs) {
+        done += 1
+        setSearchProgress(`Wikidata: ${job.category.label} (${done} van ${total})`)
+        const found = await window.WikiPoiWikidataSearch.searchWikidataBox(routeInfo.bbox, job.query)
+        results = results.concat(found.map((item) => ({ ...item, categoryKey: job.category.key })))
       }
-      for (const category of propertyCategories) {
-        const found = await window.WikiPoiWikidataSearch.searchWikidataBox(bbox, {
-          hasProperty: category.hasProperty,
-        })
-        results = results.concat(found.map((item) => ({ ...item, categoryKey: category.key })))
-      }
-      // Eigen dedupe (eerst gevonden wint) i.p.v. dedupeById(): zo is zeker
-      // welke categorie een item houdt dat via meerdere categorieën binnenkwam.
       results = dedupeFirstWins(results)
       const categoryKeyById = new Map(results.map((item) => [item.id, item.categoryKey]))
 
-      // Daarna: verschillende QID's op (vrijwel) dezelfde plek samenvoegen
-      // (drempel 10m), bijv. Broederenkerk + Waalse kerk in Zutphen — één
-      // pand, twee Wikidata-items. Zie wikidata-search.js#dedupeByProximity().
+      // Verschillende QID's op (vrijwel) dezelfde plek samenvoegen, bijv.
+      // Broederenkerk + Waalse kerk in Zutphen — één pand, twee items.
+      let merged = 0
       if (typeof window.WikiPoiWikidataSearch.dedupeByProximity === 'function') {
         const before = results.length
         results = window.WikiPoiWikidataSearch.dedupeByProximity(results, {
           thresholdMeters: WIKIDATA_MERGE_METERS,
         })
-        setWikidataMergedCount(before - results.length)
-      } else {
-        setWikidataMergedCount(0)
+        merged = before - results.length
       }
-      // Vangnet: mocht dedupeByProximity() een samengevoegd item zonder de
-      // extra velden teruggeven, dan de categorie via het id herstellen.
+      // Vangnet: categorie via het id herstellen als die bij samenvoegen wegviel.
       results = results.map((item) =>
         item.categoryKey ? item : { ...item, categoryKey: categoryKeyById.get(item.id) || null }
       )
-      setWikidataResults(results)
-    } catch (err) {
-      setWikidataError('Fout: ' + (err && err.message ? err.message : String(err)))
-    } finally {
-      setWikidataLoading(false)
-    }
-  }
 
-  async function runOsmFallbackTest() {
-    setOsmError('')
-    setOsmResults(null)
-    setOsmLoading(true)
-    try {
-      if (
-        !window.WikiPoiOsmFallback ||
-        typeof window.WikiPoiOsmFallback.searchOverpass !== 'function'
-      ) {
-        setOsmError(
-          'Fout: window.WikiPoiOsmFallback is niet beschikbaar (osm-fallback.js is niet correct geladen).'
-        )
-        return
-      }
-      if (!categoriesAvailable) {
-        setOsmError(
-          'Fout: window.WikiPoiCategories is niet beschikbaar (poi-categories.js is niet correct geladen).'
-        )
-        return
-      }
-
-      // Net als bij Wikidata: per categorie een eigen Overpass-opdracht,
-      // zodat elk resultaat een categoryKey krijgt.
-      const selectedCategories = categoryList.filter(
-        (c) => selectedCategoryKeys.includes(c.key) && c.osmTags.length > 0
-      )
-      if (selectedCategories.length === 0) {
-        setOsmError('Selecteer minimaal één categorie hierboven.')
-        return
-      }
-
-      const bbox = routeInfo ? routeInfo.bbox : FALLBACK_TEST_BBOX
-      let results = []
-      for (const category of selectedCategories) {
+      let osm = []
+      for (const category of osmCategories) {
+        done += 1
+        setSearchProgress(`OpenStreetMap: ${category.label} (${done} van ${total})`)
         const tagFilterGroups = window.WikiPoiCategories.osmTagFiltersForKeys([category.key])
-        const found = await window.WikiPoiOsmFallback.searchOverpass(bbox, tagFilterGroups)
-        results = results.concat(found.map((item) => ({ ...item, categoryKey: category.key })))
+        const found = await window.WikiPoiOsmFallback.searchOverpass(routeInfo.bbox, tagFilterGroups)
+        osm = osm.concat(found.map((item) => ({ ...item, categoryKey: category.key })))
       }
-      setOsmResults(dedupeFirstWins(results))
+      osm = dedupeFirstWins(osm)
+      // OSM-punten die al via Wikidata gevonden zijn, of geen bruikbare
+      // tekst hebben, vallen af (osm-fallback.js).
+      if (
+        osm.length > 0 &&
+        typeof window.WikiPoiOsmFallback.filterAndDedupeOsmCandidates === 'function'
+      ) {
+        osm = window.WikiPoiOsmFallback.filterAndDedupeOsmCandidates(osm, results)
+      }
+
+      setMergedCount(merged)
+      setOsmResults(osm)
+      setWikidataResults(results)
+      setSearchProgress('')
     } catch (err) {
-      setOsmError('Fout: ' + (err && err.message ? err.message : String(err)))
+      setSearchError(errorText(err))
+      setSearchProgress('')
     } finally {
-      setOsmLoading(false)
+      setSearchLoading(false)
     }
   }
 
-  async function runWikipediaSummaryTest() {
+  // Alleen voor POI's binnen de corridor, en alleen voor die nog niet
+  // opgehaald zijn: wie de slider verbreedt, haalt daarna alleen de nieuwe op.
+  async function runSummaries() {
     setSummaryError('')
-    setSummaryResults(null)
+    setExportMessage('')
+    if (
+      !window.WikiPoiWikipediaSummary ||
+      typeof window.WikiPoiWikipediaSummary.fetchSummariesForCandidates !== 'function'
+    ) {
+      setSummaryError('Fout: wikipedia-summary.js is niet correct geladen.')
+      return
+    }
+    const candidates = summaryMissingPois
+    if (candidates.length === 0) return
     setSummaryLoading(true)
     try {
-      if (
-        !window.WikiPoiWikipediaSummary ||
-        typeof window.WikiPoiWikipediaSummary.fetchSummariesForCandidates !== 'function'
-      ) {
-        setSummaryError(
-          'Fout: window.WikiPoiWikipediaSummary is niet beschikbaar (wikipedia-summary.js is niet correct geladen).'
-        )
-        return
-      }
-      // Combineert de Test 3- (Wikidata) en Test 5- (OSM) resultaten tot
-      // één lijst van kandidaten. De OSM-kant gebruikt hier bewust
-      // filteredOsmResults i.p.v. de ruwe osmResults: duplicaten met Test 3
-      // (dedupe op wikidataId/Wikipedia-titel) en "lege" OSM-punten zonder
-      // bruikbare tekst zijn dan al weggefilterd, zodat deze niet als
-      // zinloze "Geen samenvatting"-regel in Test 6 verschijnen.
-      const candidates = [...(wikidataResults || []), ...(filteredOsmResults || [])]
-      if (candidates.length === 0) {
-        setSummaryError(
-          'Geen kandidaten beschikbaar — voer eerst Test 3 en/of Test 5 uit.'
-        )
-        return
-      }
-      const enriched = await window.WikiPoiWikipediaSummary.fetchSummariesForCandidates(
-        candidates,
-        { maxSentences: 3 }
-      )
-      setSummaryResults(enriched)
+      const enriched = await window.WikiPoiWikipediaSummary.fetchSummariesForCandidates(candidates, {
+        maxSentences: SUMMARY_MAX_SENTENCES,
+      })
+      setSummariesById((prev) => {
+        const next = { ...prev }
+        enriched.forEach((item, index) => {
+          const id = item.id || candidates[index].id
+          next[id] = { summary: item.summary || null, summaryError: item.summaryError || '' }
+        })
+        return next
+      })
     } catch (err) {
-      setSummaryError('Fout: ' + (err && err.message ? err.message : String(err)))
+      setSummaryError(errorText(err))
     } finally {
       setSummaryLoading(false)
     }
   }
 
+  function exportCsv() {
+    setExportError('')
+    setExportMessage('')
+    try {
+      if (!window.EuroPoiCsv || typeof window.EuroPoiCsv.toEuroPoiCsv !== 'function') {
+        setExportError('Fout: europoi-csv.js is niet correct geladen.')
+        return
+      }
+      const category = routeName.trim()
+      if (!category) {
+        setExportError('Vul een routenaam in; die wordt de categorie in EuroPoi.')
+        return
+      }
+      if (corridorPois.length === 0) {
+        setExportError('Er liggen geen POI\'s binnen de corridor. Verbreed de strook bij stap 4.')
+        return
+      }
+      // Tekst: Wikipedia-samenvatting met bronvermelding (CC BY-SA vraagt om
+      // naamsvermelding); zonder samenvatting de Wikidata-omschrijving.
+      const rows = corridorPois.map((p) => {
+        const entry = summariesById[p.id]
+        const summary = entry && entry.summary
+        const desc = summary
+          ? [summary.extractShort, summary.attribution].filter(Boolean).join(' ')
+          : p.description || ''
+        return {
+          lat: p.lat,
+          lng: p.lng,
+          name: p.label || '(zonder naam)',
+          desc,
+          category,
+          radius: DEFAULT_TRIGGER_RADIUS_METERS,
+          mp3: '',
+        }
+      })
+      const csvText = window.EuroPoiCsv.toEuroPoiCsv(rows)
+      const fileName = csvFileName(category)
+      const blob = new Blob([csvText], { type: 'text/csv;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = fileName
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+      setExportMessage(`${rows.length} POI's opgeslagen in "${fileName}".`)
+    } catch (err) {
+      setExportError(errorText(err))
+    }
+  }
+
+  function renderCategoryItem(cat, isExtra) {
+    const checked = selectedCategoryKeys.includes(cat.key)
+    const blocked = isExtra && !checked && extraSelectedCount >= maxExtraCategories
+    const disabled = searchLoading || blocked
+    return (
+      <li key={cat.key} className={disabled ? 'category-item is-disabled' : 'category-item'}>
+        <label>
+          <input
+            type="checkbox"
+            checked={checked}
+            disabled={disabled}
+            onChange={() => toggleCategory(cat.key)}
+          />
+          <span className="category-text">
+            <span className="category-name">
+              <CategoryDot categoryKey={cat.key} />
+              {cat.label}
+            </span>
+            <span className="category-desc">{cat.description}</span>
+          </span>
+        </label>
+      </li>
+    )
+  }
+
+  const osmFoundCount = osmResults ? osmResults.length : 0
+
   return (
     <>
-      <h1>WikiPoi — smoketest</h1>
-
-      <section style={{ marginBottom: '2em' }}>
-        <h2>Test 1: bestaande CSV-pijplijn hergebruiken</h2>
-        <button onClick={runSmokeTest}>
-          Genereer testregel via europoi-csv.js
-        </button>
-        {csv && (
-          <pre style={{ textAlign: 'left', background: '#eee', padding: '1em' }}>
-            {csv}
-          </pre>
-        )}
-        {csvError && <p style={{ color: 'red' }}>{csvError}</p>}
-      </section>
-
-      <section style={{ marginBottom: '2em' }}>
-        <h2>Test 2: GPS-positie opvragen + voorlezen</h2>
-        <button onClick={runGpsTtsTest}>Vraag positie op en lees voor</button>
-        {gpsResult && <p>{gpsResult}</p>}
-        {gpsError && <p style={{ color: 'red' }}>{gpsError}</p>}
-      </section>
-
-      <section style={{ marginBottom: '2em' }}>
-        <h2>Test 4: GPX-route inladen + bounding box berekenen</h2>
-        <input type="file" accept=".gpx" onChange={handleGpxFileChange} />
-        {routeInfo && (
-          <div style={{ textAlign: 'left', marginTop: '1em' }}>
-            <p>
-              Bestand: <strong>{routeInfo.fileName}</strong>
-              <br />
-              Type: {routeInfo.source === 'track' ? 'track (<trkpt>)' : 'route (<rtept>)'}
-              <br />
-              Naam in bestand: {routeInfo.name || '(geen naam gevonden)'}
-              <br />
-              Aantal punten: {routeInfo.pointCount}
-            </p>
-            <p>
-              Berekende bounding box (marge {CORRIDOR_MAX_METERS}m = maximale corridorbreedte):
-              <br />
-              <code>
-                minLat: {routeInfo.bbox.minLat.toFixed(5)}, maxLat:{' '}
-                {routeInfo.bbox.maxLat.toFixed(5)}
-                <br />
-                minLng: {routeInfo.bbox.minLng.toFixed(5)}, maxLng:{' '}
-                {routeInfo.bbox.maxLng.toFixed(5)}
-              </code>
-            </p>
-          </div>
-        )}
-        {routeError && <p style={{ color: 'red' }}>{routeError}</p>}
-      </section>
-
-      <section style={{ marginBottom: '2em' }}>
-        <h2>Categorieën selecteren (poi-categories.js)</h2>
-        <p style={{ fontStyle: 'italic', marginBottom: '0.5em' }}>
-          Bepaalt welke Wikidata-QID's en OSM-tagfilters Test 3 en Test 5 hieronder gebruiken.
-        </p>
-        {!categoriesAvailable && (
-          <p style={{ color: 'red' }}>
-            Fout: window.WikiPoiCategories is niet beschikbaar (poi-categories.js is niet correct
-            geladen).
-          </p>
-        )}
-        {categoriesAvailable && (
-          <div style={{ textAlign: 'left' }}>
-            <p>
-              <strong>Kerncategorieën</strong> (geen limiet):
-            </p>
-            <ul style={{ listStyle: 'none', paddingLeft: 0 }}>
-              {coreCategories.map((cat) => (
-                <li key={cat.key} style={{ marginBottom: '0.4em' }}>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={selectedCategoryKeys.includes(cat.key)}
-                      onChange={() => toggleCategory(cat.key)}
-                    />{' '}
-                    <CategoryDot categoryKey={cat.key} /> <strong>{cat.label}</strong> —{' '}
-                    {cat.description}
-                  </label>
-                </li>
-              ))}
-            </ul>
-            <p>
-              <strong>Nieuwe verzamelcategorieën</strong> (max.{' '}
-              {categoryValidation.maxExtraCategories} tegelijk):
-            </p>
-            <ul style={{ listStyle: 'none', paddingLeft: 0 }}>
-              {extraCategories.map((cat) => (
-                <li key={cat.key} style={{ marginBottom: '0.4em' }}>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={selectedCategoryKeys.includes(cat.key)}
-                      onChange={() => toggleCategory(cat.key)}
-                    />{' '}
-                    <CategoryDot categoryKey={cat.key} /> <strong>{cat.label}</strong> —{' '}
-                    {cat.description}
-                    {cat.searchRadiusMeters && (
-                      <> (zoekstraal {cat.searchRadiusMeters}m i.p.v. standaard)</>
-                    )}
-                  </label>
-                </li>
-              ))}
-            </ul>
-            {!categoryValidation.valid && (
-              <p style={{ color: 'red' }}>
-                Je hebt {categoryValidation.extraSelectedKeys.length} nieuwe verzamelcategorieën
-                aangevinkt (max. {categoryValidation.maxExtraCategories}):{' '}
-                {categoryValidation.extraSelectedKeys.join(', ')}. Test 3/5 werken hierdoor nog wel,
-                maar dit overschrijdt de afgesproken UI-regel.
-              </p>
-            )}
-          </div>
-        )}
-      </section>
-
-      <section style={{ marginBottom: '2em' }}>
-        <h2>Test 3: POI's zoeken via Wikidata</h2>
-        <p style={{ fontStyle: 'italic', marginBottom: '0.5em' }}>
-          {routeInfo
-            ? `Zoekt binnen de bounding box van "${routeInfo.fileName}" (Test 4 hierboven), met één zoekopdracht per aangevinkte categorie.`
-            : 'Nog geen route geladen bij Test 4 — gebruikt het vaste testgebied bij Zutphen, met één zoekopdracht per aangevinkte categorie.'}
-        </p>
-        <button onClick={runWikidataTest} disabled={wikidataLoading}>
-          {wikidataLoading
-            ? 'Bezig met zoeken...'
-            : routeInfo
-              ? "Zoek POI's via Wikidata voor deze route"
-              : "Zoek POI's via Wikidata (testgebied Zutphen)"}
-        </button>
-        {wikidataResults && (
-          <div style={{ textAlign: 'left', marginTop: '1em' }}>
-            <p>
-              {wikidataResults.length} resultaat/resultaten gevonden
-              {wikidataMergedCount > 0 &&
-                ` (${wikidataMergedCount} item(s) samengevoegd omdat ze binnen ${WIKIDATA_MERGE_METERS}m van een ander item lagen)`}
-              :
-            </p>
-            <ul>
-              {wikidataResults.map((poi) => (
-                <li key={poi.id} style={{ marginBottom: '0.75em' }}>
-                  <CategoryDot categoryKey={poi.categoryKey} /> <strong>{poi.label}</strong>
-                  {poi.description ? ` — ${poi.description}` : ''}
-                  <br />
-                  <small>
-                    {categoryLabelByKey[poi.categoryKey] || 'Onbekende categorie'}
-                    {' · '}
-                    {poi.lat.toFixed(5)}, {poi.lng.toFixed(5)}
-                    {poi.wikipediaUrl && (
-                      <>
-                        {' · '}
-                        <a href={poi.wikipediaUrl} target="_blank" rel="noreferrer">
-                          Wikipedia
-                        </a>
-                      </>
-                    )}
-                  </small>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-        {wikidataError && <p style={{ color: 'red' }}>{wikidataError}</p>}
-      </section>
-
-      <section style={{ marginBottom: '2em' }}>
-        <h2>Test 5: OSM-fallback zoeken via Overpass</h2>
-        <p style={{ fontStyle: 'italic', marginBottom: '0.5em' }}>
-          Gebruikt de OSM-tagfilters van de hierboven aangevinkte categorieën, met één
-          Overpass-opdracht per categorie.{' '}
-          {routeInfo
-            ? `Zoekt binnen de bounding box van "${routeInfo.fileName}" (Test 4 hierboven).`
-            : 'Nog geen route geladen bij Test 4 — gebruikt het vaste testgebied bij Zutphen.'}
-        </p>
-        <button onClick={runOsmFallbackTest} disabled={osmLoading}>
-          {osmLoading ? 'Bezig met zoeken...' : "Zoek POI's via Overpass (OSM)"}
-        </button>
-        {osmResults && (
-          <div style={{ textAlign: 'left', marginTop: '1em' }}>
-            <p>
-              {osmResults.length} resultaat/resultaten gevonden via Overpass.
-              {osmFilterAvailable && (
-                <>
-                  {' '}
-                  Na filteren op duplicaten met Test 3 (Wikidata) en punten zonder bruikbare
-                  tekst blijven er <strong>{filteredOsmResults.length}</strong> over (
-                  {osmSkippedCount} overgeslagen).
-                </>
-              )}
-              {!osmFilterAvailable && (
-                <>
-                  {' '}
-                  <span style={{ color: 'red' }}>
-                    Let op: filterAndDedupeOsmCandidates() niet beschikbaar — toont ongefilterde
-                    resultaten (osm-fallback.js niet correct geladen of verouderd).
-                  </span>
-                </>
-              )}
-            </p>
-            <ul>
-              {filteredOsmResults.map((poi) => (
-                <li key={poi.id} style={{ marginBottom: '0.75em' }}>
-                  <CategoryDot categoryKey={poi.categoryKey} /> <strong>{poi.label}</strong>
-                  {poi.description ? ` — ${poi.description}` : ''}
-                  <br />
-                  <small>
-                    {categoryLabelByKey[poi.categoryKey] || 'Onbekende categorie'}
-                    {' · '}
-                    {poi.lat.toFixed(5)}, {poi.lng.toFixed(5)}
-                    {poi.wikipediaUrl && (
-                      <>
-                        {' · '}
-                        <a href={poi.wikipediaUrl} target="_blank" rel="noreferrer">
-                          Wikipedia
-                        </a>
-                      </>
-                    )}
-                  </small>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-        {osmError && <p style={{ color: 'red' }}>{osmError}</p>}
-      </section>
-
-      <section>
-        <h2>Test 6: Wikipedia-samenvattingen ophalen</h2>
-        <p style={{ fontStyle: 'italic', marginBottom: '0.5em' }}>
-          Verrijkt de hierboven gevonden Test 3- (Wikidata) en Test 5-
-          (OSM, gefilterd) resultaten samen met hun Wikipedia-samenvatting
-          (max. 3 zinnen), via wikipedia-summary.js. Voer eerst Test 3
-          en/of Test 5 uit.
-        </p>
-        <button onClick={runWikipediaSummaryTest} disabled={summaryLoading}>
-          {summaryLoading ? 'Bezig met ophalen...' : 'Haal Wikipedia-samenvattingen op'}
-        </button>
-        {summaryResults && (
-          <div style={{ textAlign: 'left', marginTop: '1em' }}>
-            <p>{summaryResults.length} kandidaat/kandidaten verwerkt:</p>
-            <ul>
-              {summaryResults.map((item, index) => (
-                <li key={item.id || index} style={{ marginBottom: '1em' }}>
-                  <strong>{item.label}</strong>
-                  <br />
-                  {item.summary ? (
-                    <>
-                      {item.summary.thumbnailUrl && (
-                        <img
-                          src={item.summary.thumbnailUrl}
-                          alt=""
-                          style={{ maxWidth: '150px', display: 'block', margin: '0.5em 0' }}
-                        />
-                      )}
-                      <span>{item.summary.extractShort}</span>
-                      <br />
-                      <small>{item.summary.attribution}</small>
-                    </>
-                  ) : (
-                    <span style={{ color: 'red' }}>
-                      Geen samenvatting: {item.summaryError}
-                    </span>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-        {summaryError && <p style={{ color: 'red' }}>{summaryError}</p>}
-      </section>
-
-      <section style={{ marginTop: '2em' }}>
-        <h2>Test 7: routekaart met corridor</h2>
-        <p style={{ fontStyle: 'italic', marginBottom: '0.5em' }}>
-          Toont de route van Test 4 en de POI's van Test 3 en Test 5 (gefilterd). Kleur en icoon
-          geven de categorie aan (zie de legenda linksonder op de kaart). Vol = binnen de corridor
-          (met stippellijn naar het punt op de route waar EuroPoi aankondigt), klein en vervaagd =
-          erbuiten. De slider filtert alleen lokaal; er wordt niet opnieuw gezocht.
-        </p>
-        <button type="button" onClick={() => setShowMap((v) => !v)}>
-          {showMap ? 'Kaart verbergen' : 'Kaart tonen'}
-        </button>
-
-        {/* Kaart blijft altijd in de pagina staan; alleen de hoogte wisselt
-            (zoals EuroPoi), zodat Leaflet zijn toestand behoudt. */}
-        <div
-          style={{
-            height: showMap ? '320px' : '0px',
-            overflow: 'hidden',
-            marginTop: '0.75em',
-            borderRadius: '12px',
-          }}
-        >
-          <RouteMap routePoints={routeInfo ? routeInfo.points : null} pois={mapPois} corridorMeters={corridorMeters} />
+      <header className="app-header">
+        <div className="app-logo" aria-hidden="true">
+          W
         </div>
+        <div>
+          <div className="app-title">WikiPoi</div>
+          <div className="app-subtitle">Bezienswaardigheden langs je route</div>
+        </div>
+      </header>
 
-        <div style={{ textAlign: 'left', marginTop: '0.75em' }}>
-          <label htmlFor="corridor-slider">
-            Corridor: <strong>{corridorMeters} m</strong> aan weerszijden van de route
+      <main className="app-main">
+        <Step number={1} title="Route">
+          <label className={searchLoading ? 'btn btn-blue is-disabled' : 'btn btn-blue'}>
+            <input
+              type="file"
+              accept=".gpx"
+              onChange={handleGpxFileChange}
+              disabled={searchLoading}
+              hidden
+            />
+            {routeInfo ? 'Andere route' : 'GPX kiezen'}
+          </label>
+          {routeInfo && (
+            <p>
+              <strong>{routeInfo.fileName}</strong>
+              <br />
+              <span className="muted">{routeInfo.pointCount} routepunten</span>
+            </p>
+          )}
+          {!routeInfo && !routeError && (
+            <p className="muted">Kies het GPX-bestand van je fiets- of wandelroute.</p>
+          )}
+          {routeError && <p className="error">{routeError}</p>}
+        </Step>
+
+        <Step number={2} title="Categorieën">
+          {!categoriesAvailable && <p className="error">Fout: poi-categories.js is niet correct geladen.</p>}
+          {categoriesAvailable && (
+            <>
+              <ul className="category-list">{coreCategories.map((cat) => renderCategoryItem(cat, false))}</ul>
+              <p className="category-group-title">
+                Verzamelcategorieën <span className="muted">(max. {maxExtraCategories} tegelijk)</span>
+              </p>
+              <ul className="category-list">{extraCategories.map((cat) => renderCategoryItem(cat, true))}</ul>
+              <label className={searchLoading ? 'toggle-row is-disabled' : 'toggle-row'}>
+                <input type="checkbox" checked={useOsm} disabled={searchLoading} onChange={toggleOsm} />
+                <span>
+                  Ook OpenStreetMap doorzoeken
+                  <br />
+                  <span className="muted">Vindt soms extra punten, maar maakt het zoeken trager.</span>
+                </span>
+              </label>
+            </>
+          )}
+        </Step>
+
+        <Step number={3} title="Zoeken" disabled={!routeInfo} hint="Kies eerst een route bij stap 1.">
+          <button
+            type="button"
+            className="btn btn-yellow btn-wide"
+            onClick={runSearch}
+            disabled={searchLoading || selectedCategoryKeys.length === 0}
+          >
+            {searchLoading ? 'Bezig met zoeken…' : searchDone ? 'Opnieuw zoeken' : "POI's zoeken"}
+          </button>
+          {selectedCategoryKeys.length === 0 && <p className="muted">Kies minimaal één categorie bij stap 2.</p>}
+          {searchProgress && <p className="muted">{searchProgress}</p>}
+          {searchDone && (
+            <p>
+              <strong>{allPois.length}</strong> POI's gevonden
+              {mergedCount > 0 && `, ${mergedCount} dubbele samengevoegd`}
+              {useOsm && `, waarvan ${osmFoundCount} via OpenStreetMap`}.
+            </p>
+          )}
+          {searchError && <p className="error">{searchError}</p>}
+        </Step>
+
+        <Step number={4} title="Kaart" disabled={!routeInfo} hint="Kies eerst een route bij stap 1.">
+          <button type="button" className="btn btn-indigo btn-small" onClick={() => setShowMap((v) => !v)}>
+            {showMap ? 'Kaart verbergen' : 'Kaart tonen'}
+          </button>
+          {/* Kaart blijft in de pagina staan; alleen de hoogte wisselt, zodat
+              Leaflet zijn toestand behoudt. */}
+          <div className="map-frame" style={{ height: showMap ? MAP_HEIGHT : '0px' }}>
+            <RouteMap
+              routePoints={routeInfo ? routeInfo.points : null}
+              pois={mapPois}
+              corridorMeters={corridorMeters}
+            />
+          </div>
+          <label htmlFor="corridor-slider" className="field-label">
+            Corridor: {corridorMeters} m aan weerszijden van de route
           </label>
           <input
             id="corridor-slider"
+            className="corridor-slider"
             type="range"
             min={CORRIDOR_MIN_METERS}
             max={CORRIDOR_MAX_METERS}
             step={CORRIDOR_STEP_METERS}
             value={corridorMeters}
             onChange={(e) => setCorridorMeters(Number(e.target.value))}
-            disabled={!routeInfo}
-            style={{ width: '100%', display: 'block', marginTop: '0.4em' }}
           />
-          {!routeInfo && (
-            <p>Laad eerst een GPX-route bij Test 4; zonder route is er geen corridor te meten.</p>
+          {!searchDone && <p className="muted">Na het zoeken bij stap 3 verschijnen hier de POI's.</p>}
+          {searchDone && mapPois.length === 0 && (
+            <p className="muted">Geen POI's gevonden. Kies andere categorieën bij stap 2.</p>
           )}
-          {routeInfo && mapPois.length === 0 && (
-            <p>Nog geen POI's gevonden — voer eerst Test 3 (en eventueel Test 5) uit.</p>
-          )}
-          {routeInfo && mapPois.length > 0 && (
+          {searchDone && mapPois.length > 0 && (
             <>
               <p>
-                <strong>{poisInCorridorCount}</strong> van {mapPois.length} POI's binnen de
-                corridor.
+                <strong>{corridorPois.length}</strong> van {mapPois.length} POI's binnen de corridor.
               </p>
-              <ul style={{ listStyle: 'none', paddingLeft: 0 }}>
+              <ul className="poi-list">
                 {mapPoisSorted.map((poi) => (
-                  <li
-                    key={poi.id}
-                    style={{ marginBottom: '0.4em', color: poi.inCorridor ? 'inherit' : '#94a3b8' }}
-                  >
-                    <CategoryDot categoryKey={poi.categoryKey} faded={!poi.inCorridor} /> {poi.label}{' '}
-                    ({poi.categoryLabel}) —{' '}
-                    {Number.isFinite(poi.distanceToRoute)
-                      ? `${Math.round(poi.distanceToRoute)} m van de route`
-                      : 'afstand onbekend'}
+                  <li key={poi.id} className={poi.inCorridor ? '' : 'is-out'}>
+                    <CategoryDot categoryKey={poi.categoryKey} faded={!poi.inCorridor} />
+                    <span>
+                      {poi.label}{' '}
+                      <span className="muted">
+                        ({poi.categoryLabel},{' '}
+                        {Number.isFinite(poi.distanceToRoute)
+                          ? `${Math.round(poi.distanceToRoute)} m`
+                          : 'afstand onbekend'}
+                        )
+                      </span>
+                    </span>
                   </li>
                 ))}
               </ul>
             </>
           )}
-        </div>
-      </section>
+        </Step>
+
+        <Step number={5} title="Samenvattingen" disabled={!searchDone} hint="Zoek eerst POI's bij stap 3.">
+          <p>
+            <strong>{summaryFoundCount}</strong> van {corridorPois.length} POI's binnen de corridor
+            hebben een Wikipedia-samenvatting.
+          </p>
+          <button
+            type="button"
+            className="btn btn-green btn-wide"
+            onClick={runSummaries}
+            disabled={summaryLoading || summaryMissingPois.length === 0}
+          >
+            {summaryLoading
+              ? 'Bezig met ophalen…'
+              : summaryMissingPois.length > 0
+                ? `Samenvattingen ophalen (${summaryMissingPois.length})`
+                : 'Alles opgehaald'}
+          </button>
+          {summaryError && <p className="error">{summaryError}</p>}
+          {corridorPois.some((p) => p.id in summariesById) && (
+            <ul className="poi-list summary-list">
+              {corridorPois
+                .filter((p) => p.id in summariesById)
+                .map((poi) => {
+                  const entry = summariesById[poi.id]
+                  return (
+                    <li key={poi.id}>
+                      {entry.summary && entry.summary.thumbnailUrl && (
+                        <img src={entry.summary.thumbnailUrl} alt="" />
+                      )}
+                      <span className="category-name">
+                        <CategoryDot categoryKey={poi.categoryKey} />
+                        {poi.label}
+                      </span>
+                      {entry.summary ? (
+                        <p className="summary-text">{entry.summary.extractShort}</p>
+                      ) : (
+                        <p className="summary-text muted">
+                          Geen samenvatting ({entry.summaryError || 'onbekende reden'}); de CSV
+                          gebruikt de Wikidata-omschrijving.
+                        </p>
+                      )}
+                    </li>
+                  )
+                })}
+            </ul>
+          )}
+        </Step>
+
+        <Step number={6} title="Exporteren" disabled={!searchDone} hint="Zoek eerst POI's bij stap 3.">
+          <label htmlFor="route-name" className="field-label">
+            Routenaam (categorie in EuroPoi)
+          </label>
+          <input
+            id="route-name"
+            className="text-input"
+            type="text"
+            value={routeName}
+            onChange={(e) => setRouteName(e.target.value)}
+          />
+          {summaryMissingPois.length > 0 && (
+            <p className="muted">
+              Voor {summaryMissingPois.length} POI's is de samenvatting nog niet opgehaald (stap 5).
+            </p>
+          )}
+          {isNative ? (
+            <p className="muted">
+              Opslaan werkt nog niet in de Android-app. Gebruik voorlopig de browserversie.
+            </p>
+          ) : (
+            <button
+              type="button"
+              className="btn btn-pink btn-wide"
+              onClick={exportCsv}
+              disabled={corridorPois.length === 0}
+            >
+              CSV opslaan ({corridorPois.length} POI's)
+            </button>
+          )}
+          {exportMessage && <p className="success">{exportMessage}</p>}
+          {exportError && <p className="error">{exportError}</p>}
+        </Step>
+      </main>
     </>
   )
 }
