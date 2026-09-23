@@ -705,7 +705,7 @@ function App() {
             borderRadius: '12px',
           }}
         >
-          <RouteMap routePoints={routeInfo ? routeInfo.points : null} pois={mapPois} />
+          <RouteMap routePoints={routeInfo ? routeInfo.points : null} pois={mapPois} corridorMeters={corridorMeters} />
         </div>
 
         <div style={{ textAlign: 'left', marginTop: '0.75em' }}>
