@@ -20,11 +20,11 @@ export const CATEGORY_STYLES = {
   molens: { color: '#0d9488', icon: 'windmill' },
   musea: { color: '#c026d3', icon: 'museum' },
   kastelen: { color: '#ea580c', icon: 'castle' },
-  oorlogsgeschiedenis: { color: '#991b1b', icon: 'swords' },
+  oorlogsgeschiedenis: { color: '#18181b', icon: 'swords' },
   archeologie: { color: '#92400e', icon: 'amphora' },
   natuur: { color: '#15803d', icon: 'tree' },
   gebouwd_erfgoed: { color: '#db2777', icon: 'gable' },
-  prehistorie_archeologie: { color: '#57534e', icon: 'dolmen' },
+  prehistorie_archeologie: { color: '#4d7c0f', icon: 'dolmen' },
   waterstaat_infrastructuur: { color: '#0284c7', icon: 'lighthouse' },
   kunst_gedenktekens: { color: '#4f46e5', icon: 'statue' },
 }
