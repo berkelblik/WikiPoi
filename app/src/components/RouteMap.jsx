@@ -15,9 +15,15 @@
  *
  * Leaflet komt hier uit npm (import) i.p.v. dynamisch van unpkg zoals in
  * EuroPoi: dan zit het in de app-bundel en werkt de kaartcode ook zonder
- * CDN. Markers zijn L.circleMarker (vector), zodat de bekende
- * Vite/Leaflet-kwestie met ontbrekende standaard-markerafbeeldingen niet
- * speelt.
+ * CDN.
+ *
+ * POI-markers: L.divIcon met een rond categorie-icoon (kleur + wit SVG-
+ * icoon uit poi-icons.js). Geen afbeeldingsbestanden, dus de bekende
+ * Vite/Leaflet-kwestie met ontbrekende standaard-markerafbeeldingen speelt
+ * niet. Binnen de corridor: groot en vol; erbuiten: kleiner en vervaagd.
+ * De stippellijn naar het triggerpunt krijgt de categoriekleur. Linksonder
+ * staat een uitklapbare legenda met alleen de categorieën die op de kaart
+ * voorkomen.
  *
  * Corridorstrook: onder de routelijn ligt een tweede, brede en
  * halfdoorzichtige lijn over dezelfde route. De lijndikte in pixels is
@@ -30,17 +36,21 @@
  *
  * Props:
  *   routePoints    Array<{lat,lng}>        — routelijn (mag leeg zijn)
- *   pois           Array<{id,label,lat,lng,distanceToRoute,snapPoint,inCorridor}>
+ *   pois           Array<{id,label,lat,lng,distanceToRoute,snapPoint,
+ *                         inCorridor,categoryKey,categoryLabel}>
  *                                            — distanceToRoute/snapPoint mogen
- *                                              null zijn als er geen route is
+ *                                              null zijn als er geen route is;
+ *                                              categoryKey null → grijze
+ *                                              standaardmarker
  *   corridorMeters number                  — corridorbreedte aan weerszijden
  *                                              van de route; zonder geldige
  *                                              waarde wordt geen strook getoond
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
+import { CATEGORY_STYLES, getCategoryStyle, markerHtml } from './poi-icons.js'
 
 const MAP_TILES = {
   osm: {
@@ -62,12 +72,16 @@ const DEFAULT_CENTER = [52.1326, 6.2233]
 const DEFAULT_ZOOM = 13
 
 const COLOR_ROUTE = '#facc15'
-const COLOR_IN = '#16a34a'
-const COLOR_OUT = '#94a3b8'
 // Corridorstrook: paars (route is geel), licht en halfdoorzichtig,
 // zodat routelijn en POI's er goed boven zichtbaar blijven.
 const COLOR_CORRIDOR = '#7c3aed'
 const CORRIDOR_OPACITY = 0.2
+
+// Markergrootte in pixels: binnen de corridor groot genoeg om het icoon op
+// een telefoon te herkennen, erbuiten kleiner (en vervaagd, zie poi-icons.js).
+const MARKER_SIZE_IN = 28
+const MARKER_SIZE_OUT = 22
+const LEGEND_SWATCH_SIZE = 18
 
 // Omtrek van de aarde aan de evenaar (WGS84) en de tegelgrootte: de
 // grootheden waarmee Leaflet (Web Mercator, EPSG:3857) rekent.
@@ -108,6 +122,26 @@ function RouteMap({ routePoints, pois, corridorMeters }) {
   // tot de ResizeObserver ziet dat de kaart zichtbaar is geworden.
   const needsFitRef = useRef(false)
   const [tileKey, setTileKey] = useState('osm')
+  // Legenda standaard ingeklapt: op een telefoon is de kaart maar 320 px hoog.
+  const [legendOpen, setLegendOpen] = useState(false)
+
+  // Legenda: alleen de categorieën die in de huidige POI-lijst voorkomen, in
+  // de vaste volgorde van CATEGORY_STYLES (onbekende categorie achteraan).
+  const legendItems = useMemo(() => {
+    const labelByKey = new Map()
+    ;(pois || []).forEach((p) => {
+      const key = p.categoryKey || null
+      if (!labelByKey.has(key)) labelByKey.set(key, p.categoryLabel || 'Onbekende categorie')
+    })
+    const order = Object.keys(CATEGORY_STYLES)
+    const rank = (key) => {
+      const i = order.indexOf(key)
+      return i === -1 ? order.length : i
+    }
+    return Array.from(labelByKey.entries())
+      .map(([key, label]) => ({ key, label }))
+      .sort((a, b) => rank(a.key) - rank(b.key))
+  }, [pois])
 
   function fitToRouteIfPossible() {
     const map = mapRef.current
@@ -218,7 +252,8 @@ function RouteMap({ routePoints, pois, corridorMeters }) {
     }).addTo(map)
     routeLatRef.current = routeLayerRef.current.getBounds().getCenter().lat
 
-    // Tekenvolgorde van onder naar boven: strook, routelijn, POI's.
+    // Tekenvolgorde van onder naar boven: strook, routelijn, stippellijnen.
+    // De POI-markers zelf staan in Leaflets markerPane, altijd daarboven.
     routeLayerRef.current.bringToBack()
     corridorLayerRef.current.bringToBack()
     updateCorridorWidth()
@@ -239,7 +274,7 @@ function RouteMap({ routePoints, pois, corridorMeters }) {
     layer.clearLayers()
     ;(pois || []).forEach((p) => {
       if (!Number.isFinite(p.lat) || !Number.isFinite(p.lng)) return
-      const color = p.inCorridor ? COLOR_IN : COLOR_OUT
+      const style = getCategoryStyle(p.categoryKey)
 
       if (p.inCorridor && p.snapPoint) {
         L.polyline(
@@ -247,21 +282,34 @@ function RouteMap({ routePoints, pois, corridorMeters }) {
             [p.lat, p.lng],
             [p.snapPoint.lat, p.snapPoint.lng],
           ],
-          { color: COLOR_IN, weight: 2, opacity: 0.8, dashArray: '4 5' }
+          { color: style.color, weight: 2, opacity: 0.85, dashArray: '4 5' }
         ).addTo(layer)
       }
+
+      const size = p.inCorridor ? MARKER_SIZE_IN : MARKER_SIZE_OUT
+      // className eigen naam: voorkomt Leaflets standaardklasse
+      // leaflet-div-icon (witte achtergrond met rand om het icoon).
+      const icon = L.divIcon({
+        className: 'wikipoi-marker',
+        html: markerHtml(p.categoryKey, { sizePx: size, faded: !p.inCorridor }),
+        iconSize: [size, size],
+        iconAnchor: [size / 2, size / 2],
+        popupAnchor: [0, -size / 2],
+      })
 
       const distanceText = Number.isFinite(p.distanceToRoute)
         ? `${Math.round(p.distanceToRoute)} m van de route`
         : 'Geen route geladen'
-      L.circleMarker([p.lat, p.lng], {
-        radius: p.inCorridor ? 8 : 6,
-        color: '#ffffff',
-        weight: 2,
-        fillColor: color,
-        fillOpacity: p.inCorridor ? 0.95 : 0.7,
+      const categoryText = p.categoryLabel ? `${escapeHtml(p.categoryLabel)}<br>` : ''
+      L.marker([p.lat, p.lng], {
+        icon,
+        keyboard: false,
+        // POI's binnen de corridor bovenop de vervaagde exemplaren.
+        zIndexOffset: p.inCorridor ? 1000 : 0,
       })
-        .bindPopup(`<strong>${escapeHtml(p.label || '(zonder naam)')}</strong><br>${distanceText}`)
+        .bindPopup(
+          `<strong>${escapeHtml(p.label || '(zonder naam)')}</strong><br>${categoryText}${distanceText}`
+        )
         .addTo(layer)
     })
   }, [pois])
@@ -269,6 +317,65 @@ function RouteMap({ routePoints, pois, corridorMeters }) {
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
       <div ref={containerRef} style={{ position: 'absolute', inset: 0 }} />
+
+      {/* Legenda — linksonder, uitklapbaar */}
+      {legendItems.length > 0 && (
+        <div
+          style={{
+            position: 'absolute',
+            bottom: '8px',
+            left: '8px',
+            zIndex: 1000,
+            maxWidth: '70%',
+            maxHeight: 'calc(100% - 60px)',
+            overflowY: 'auto',
+            background: 'rgba(255,255,255,0.88)',
+            borderRadius: '10px',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+            color: '#1e293b',
+            fontSize: '11px',
+            textAlign: 'left',
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => setLegendOpen((v) => !v)}
+            aria-expanded={legendOpen}
+            style={{
+              display: 'block',
+              width: '100%',
+              padding: '4px 10px',
+              border: 'none',
+              background: 'transparent',
+              fontSize: '11px',
+              fontWeight: 800,
+              color: 'inherit',
+              cursor: 'pointer',
+              textAlign: 'left',
+            }}
+          >
+            {legendOpen ? 'Legenda ▾' : 'Legenda ▸'}
+          </button>
+          {legendOpen && (
+            <ul style={{ listStyle: 'none', margin: 0, padding: '0 10px 6px' }}>
+              {legendItems.map((item) => (
+                <li
+                  key={item.key || 'onbekend'}
+                  style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}
+                >
+                  <span
+                    style={{ flex: '0 0 auto' }}
+                    dangerouslySetInnerHTML={{
+                      __html: markerHtml(item.key, { sizePx: LEGEND_SWATCH_SIZE }),
+                    }}
+                  />
+                  <span>{item.label}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {/* Bronvermelding — rechtsonder */}
       <div

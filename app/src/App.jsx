@@ -9,6 +9,7 @@ import { Capacitor } from '@capacitor/core'
 import { Geolocation } from '@capacitor/geolocation'
 import { TextToSpeech } from '@capacitor-community/text-to-speech'
 import RouteMap from './components/RouteMap.jsx'
+import { getCategoryStyle } from './components/poi-icons.js'
 import './App.css'
 
 // Corridor langs de route: de slider bepaalt hoe breed de strook aan
@@ -34,6 +35,39 @@ const FALLBACK_TEST_BBOX = {
   maxLat: 52.1376,
   minLng: 6.2133,
   maxLng: 6.2333,
+}
+
+// Zoekresultaten van meerdere categorieën samenvoegen: bij hetzelfde id wint
+// het EERST gevonden item (en dus diens categoryKey). De zoekopdrachten
+// draaien in de volgorde van poi-categories.js, met "Gebouwd erfgoed"
+// (hasProperty) als laatste — een kerk die ook rijksmonument is, houdt zo
+// het specifiekere kerk-icoon. Items zonder id worden altijd behouden.
+function dedupeFirstWins(items) {
+  const seen = new Set()
+  return items.filter((item) => {
+    if (!item.id) return true
+    if (seen.has(item.id)) return false
+    seen.add(item.id)
+    return true
+  })
+}
+
+// Klein gekleurd rondje in de categoriekleur, voor de lijsten.
+function CategoryDot({ categoryKey, faded }) {
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        display: 'inline-block',
+        width: '0.8em',
+        height: '0.8em',
+        borderRadius: '50%',
+        background: getCategoryStyle(categoryKey).color,
+        opacity: faded ? 0.45 : 1,
+        verticalAlign: 'middle',
+      }}
+    />
+  )
 }
 
 function App() {
@@ -75,6 +109,19 @@ function App() {
     ? window.WikiPoiCategories.validateCategorySelection(selectedCategoryKeys)
     : { valid: true, extraSelectedKeys: [], maxExtraCategories: 2 }
 
+  // Categorienaam per key, voor popups, legenda en lijsten. Eenmalig
+  // opgebouwd (useMemo zonder afhankelijkheden), zodat de kaart-POI's
+  // hieronder niet bij elke render opnieuw berekend worden.
+  const categoryLabelByKey = useMemo(() => {
+    const labels = {}
+    if (window.WikiPoiCategories && typeof window.WikiPoiCategories.getCategories === 'function') {
+      window.WikiPoiCategories.getCategories('nl').forEach((c) => {
+        labels[c.key] = c.label
+      })
+    }
+    return labels
+  }, [])
+
   // Test 5-resultaten worden, vóór weergave én vóór gebruik in Test 6,
   // gefilterd tegen de Test 3-resultaten: dedupliceren op wikidataId/
   // Wikipedia-titel (dubbel met Wikidata) en "lege" punten (geen QID,
@@ -110,13 +157,14 @@ function App() {
       !!window.WikiPoiRouteBuffer &&
       typeof window.WikiPoiRouteBuffer.closestPointOnRoute === 'function'
     return candidates.map((c) => {
+      const categoryLabel = categoryLabelByKey[c.categoryKey] || 'Onbekende categorie'
       if (!canMeasure) {
-        return { ...c, distanceToRoute: null, snapPoint: null }
+        return { ...c, categoryLabel, distanceToRoute: null, snapPoint: null }
       }
       const r = window.WikiPoiRouteBuffer.closestPointOnRoute(c, routePoints)
-      return { ...c, distanceToRoute: r.distance, snapPoint: r.point }
+      return { ...c, categoryLabel, distanceToRoute: r.distance, snapPoint: r.point }
     })
-  }, [wikidataResults, filteredOsmResults, routeInfo])
+  }, [wikidataResults, filteredOsmResults, routeInfo, categoryLabelByKey])
 
   // Goedkope stap die wél bij elke sliderbeweging draait: binnen/buiten de
   // corridor markeren. Zonder route valt alles "binnen" (niets te toetsen).
@@ -289,9 +337,14 @@ function App() {
         return
       }
 
-      const qids = window.WikiPoiCategories.qidsForKeys(selectedCategoryKeys)
-      const hasProperties = window.WikiPoiCategories.hasPropertyForKeys(selectedCategoryKeys)
-      if (qids.length === 0 && hasProperties.length === 0) {
+      // Per aangevinkte categorie een eigen zoekopdracht, zodat elk
+      // resultaat weet via welke categorie het gevonden is (categoryKey →
+      // kleur en icoon op de kaart). Eerst de instanceOf-categorieën, daarna
+      // de hasProperty-categorieën ("Gebouwd erfgoed"), zie dedupeFirstWins().
+      const selectedCategories = categoryList.filter((c) => selectedCategoryKeys.includes(c.key))
+      const instanceOfCategories = selectedCategories.filter((c) => c.qids.length > 0)
+      const propertyCategories = selectedCategories.filter((c) => c.hasProperty)
+      if (instanceOfCategories.length === 0 && propertyCategories.length === 0) {
         setWikidataError('Selecteer minimaal één categorie hierboven.')
         return
       }
@@ -300,26 +353,24 @@ function App() {
       // er is; anders het vaste testgebied bij Zutphen als fallback.
       const bbox = routeInfo ? routeInfo.bbox : FALLBACK_TEST_BBOX
 
-      // instanceOf- en hasProperty-filters kunnen niet in één SPARQL-query
-      // gecombineerd worden (zie wikidata-search.js); is allebei
-      // geselecteerd (bijv. "Kerken" + "Gebouwd erfgoed"), dan draaien we
-      // ze als aparte zoekopdrachten en voegen de resultaten samen, met
-      // dedupeById() voor het geval hetzelfde item via beide paden gevonden
-      // wordt.
       let results = []
-      if (qids.length > 0) {
-        const instanceOfResults = await window.WikiPoiWikidataSearch.searchWikidataBox(bbox, {
-          instanceOf: qids,
+      for (const category of instanceOfCategories) {
+        const found = await window.WikiPoiWikidataSearch.searchWikidataBox(bbox, {
+          instanceOf: category.qids,
         })
-        results = results.concat(instanceOfResults)
+        results = results.concat(found.map((item) => ({ ...item, categoryKey: category.key })))
       }
-      for (const propertyId of hasProperties) {
-        const propertyResults = await window.WikiPoiWikidataSearch.searchWikidataBox(bbox, {
-          hasProperty: propertyId,
+      for (const category of propertyCategories) {
+        const found = await window.WikiPoiWikidataSearch.searchWikidataBox(bbox, {
+          hasProperty: category.hasProperty,
         })
-        results = results.concat(propertyResults)
+        results = results.concat(found.map((item) => ({ ...item, categoryKey: category.key })))
       }
-      results = window.WikiPoiWikidataSearch.dedupeById(results)
+      // Eigen dedupe (eerst gevonden wint) i.p.v. dedupeById(): zo is zeker
+      // welke categorie een item houdt dat via meerdere categorieën binnenkwam.
+      results = dedupeFirstWins(results)
+      const categoryKeyById = new Map(results.map((item) => [item.id, item.categoryKey]))
+
       // Daarna: verschillende QID's op (vrijwel) dezelfde plek samenvoegen
       // (drempel 10m), bijv. Broederenkerk + Waalse kerk in Zutphen — één
       // pand, twee Wikidata-items. Zie wikidata-search.js#dedupeByProximity().
@@ -332,6 +383,11 @@ function App() {
       } else {
         setWikidataMergedCount(0)
       }
+      // Vangnet: mocht dedupeByProximity() een samengevoegd item zonder de
+      // extra velden teruggeven, dan de categorie via het id herstellen.
+      results = results.map((item) =>
+        item.categoryKey ? item : { ...item, categoryKey: categoryKeyById.get(item.id) || null }
+      )
       setWikidataResults(results)
     } catch (err) {
       setWikidataError('Fout: ' + (err && err.message ? err.message : String(err)))
@@ -361,15 +417,24 @@ function App() {
         return
       }
 
-      const tagFilterGroups = window.WikiPoiCategories.osmTagFiltersForKeys(selectedCategoryKeys)
-      if (tagFilterGroups.length === 0) {
+      // Net als bij Wikidata: per categorie een eigen Overpass-opdracht,
+      // zodat elk resultaat een categoryKey krijgt.
+      const selectedCategories = categoryList.filter(
+        (c) => selectedCategoryKeys.includes(c.key) && c.osmTags.length > 0
+      )
+      if (selectedCategories.length === 0) {
         setOsmError('Selecteer minimaal één categorie hierboven.')
         return
       }
 
       const bbox = routeInfo ? routeInfo.bbox : FALLBACK_TEST_BBOX
-      const results = await window.WikiPoiOsmFallback.searchOverpass(bbox, tagFilterGroups)
-      setOsmResults(results)
+      let results = []
+      for (const category of selectedCategories) {
+        const tagFilterGroups = window.WikiPoiCategories.osmTagFiltersForKeys([category.key])
+        const found = await window.WikiPoiOsmFallback.searchOverpass(bbox, tagFilterGroups)
+        results = results.concat(found.map((item) => ({ ...item, categoryKey: category.key })))
+      }
+      setOsmResults(dedupeFirstWins(results))
     } catch (err) {
       setOsmError('Fout: ' + (err && err.message ? err.message : String(err)))
     } finally {
@@ -495,7 +560,8 @@ function App() {
                       checked={selectedCategoryKeys.includes(cat.key)}
                       onChange={() => toggleCategory(cat.key)}
                     />{' '}
-                    <strong>{cat.label}</strong> — {cat.description}
+                    <CategoryDot categoryKey={cat.key} /> <strong>{cat.label}</strong> —{' '}
+                    {cat.description}
                   </label>
                 </li>
               ))}
@@ -513,7 +579,8 @@ function App() {
                       checked={selectedCategoryKeys.includes(cat.key)}
                       onChange={() => toggleCategory(cat.key)}
                     />{' '}
-                    <strong>{cat.label}</strong> — {cat.description}
+                    <CategoryDot categoryKey={cat.key} /> <strong>{cat.label}</strong> —{' '}
+                    {cat.description}
                     {cat.searchRadiusMeters && (
                       <> (zoekstraal {cat.searchRadiusMeters}m i.p.v. standaard)</>
                     )}
@@ -537,8 +604,8 @@ function App() {
         <h2>Test 3: POI's zoeken via Wikidata</h2>
         <p style={{ fontStyle: 'italic', marginBottom: '0.5em' }}>
           {routeInfo
-            ? `Zoekt binnen de bounding box van "${routeInfo.fileName}" (Test 4 hierboven), gefilterd op de hierboven aangevinkte categorieën.`
-            : 'Nog geen route geladen bij Test 4 — gebruikt het vaste testgebied bij Zutphen, gefilterd op de hierboven aangevinkte categorieën.'}
+            ? `Zoekt binnen de bounding box van "${routeInfo.fileName}" (Test 4 hierboven), met één zoekopdracht per aangevinkte categorie.`
+            : 'Nog geen route geladen bij Test 4 — gebruikt het vaste testgebied bij Zutphen, met één zoekopdracht per aangevinkte categorie.'}
         </p>
         <button onClick={runWikidataTest} disabled={wikidataLoading}>
           {wikidataLoading
@@ -558,10 +625,12 @@ function App() {
             <ul>
               {wikidataResults.map((poi) => (
                 <li key={poi.id} style={{ marginBottom: '0.75em' }}>
-                  <strong>{poi.label}</strong>
+                  <CategoryDot categoryKey={poi.categoryKey} /> <strong>{poi.label}</strong>
                   {poi.description ? ` — ${poi.description}` : ''}
                   <br />
                   <small>
+                    {categoryLabelByKey[poi.categoryKey] || 'Onbekende categorie'}
+                    {' · '}
                     {poi.lat.toFixed(5)}, {poi.lng.toFixed(5)}
                     {poi.wikipediaUrl && (
                       <>
@@ -583,8 +652,8 @@ function App() {
       <section style={{ marginBottom: '2em' }}>
         <h2>Test 5: OSM-fallback zoeken via Overpass</h2>
         <p style={{ fontStyle: 'italic', marginBottom: '0.5em' }}>
-          Gebruikt de OSM-tagfilters van de hierboven aangevinkte categorieën (niet meer het
-          hardcoded voorbeeldfilter).{' '}
+          Gebruikt de OSM-tagfilters van de hierboven aangevinkte categorieën, met één
+          Overpass-opdracht per categorie.{' '}
           {routeInfo
             ? `Zoekt binnen de bounding box van "${routeInfo.fileName}" (Test 4 hierboven).`
             : 'Nog geen route geladen bij Test 4 — gebruikt het vaste testgebied bij Zutphen.'}
@@ -617,10 +686,12 @@ function App() {
             <ul>
               {filteredOsmResults.map((poi) => (
                 <li key={poi.id} style={{ marginBottom: '0.75em' }}>
-                  <strong>{poi.label}</strong>
+                  <CategoryDot categoryKey={poi.categoryKey} /> <strong>{poi.label}</strong>
                   {poi.description ? ` — ${poi.description}` : ''}
                   <br />
                   <small>
+                    {categoryLabelByKey[poi.categoryKey] || 'Onbekende categorie'}
+                    {' · '}
                     {poi.lat.toFixed(5)}, {poi.lng.toFixed(5)}
                     {poi.wikipediaUrl && (
                       <>
@@ -687,8 +758,9 @@ function App() {
       <section style={{ marginTop: '2em' }}>
         <h2>Test 7: routekaart met corridor</h2>
         <p style={{ fontStyle: 'italic', marginBottom: '0.5em' }}>
-          Toont de route van Test 4 en de POI's van Test 3 en Test 5 (gefilterd). Groen = binnen
-          de corridor (met stippellijn naar het punt op de route waar EuroPoi aankondigt), grijs =
+          Toont de route van Test 4 en de POI's van Test 3 en Test 5 (gefilterd). Kleur en icoon
+          geven de categorie aan (zie de legenda linksonder op de kaart). Vol = binnen de corridor
+          (met stippellijn naar het punt op de route waar EuroPoi aankondigt), klein en vervaagd =
           erbuiten. De slider filtert alleen lokaal; er wordt niet opnieuw gezocht.
         </p>
         <button type="button" onClick={() => setShowMap((v) => !v)}>
@@ -741,7 +813,8 @@ function App() {
                     key={poi.id}
                     style={{ marginBottom: '0.4em', color: poi.inCorridor ? 'inherit' : '#94a3b8' }}
                   >
-                    {poi.inCorridor ? '●' : '○'} {poi.label} —{' '}
+                    <CategoryDot categoryKey={poi.categoryKey} faded={!poi.inCorridor} /> {poi.label}{' '}
+                    ({poi.categoryLabel}) —{' '}
                     {Number.isFinite(poi.distanceToRoute)
                       ? `${Math.round(poi.distanceToRoute)} m van de route`
                       : 'afstand onbekend'}
