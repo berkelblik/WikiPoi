@@ -200,6 +200,107 @@
   }
 
   /**
+   * Haversine-afstand in meters tussen twee {lat,lng}-punten. Lokaal
+   * gehouden zodat deze module geen afhankelijkheid van route-buffer.js of
+   * osm-fallback.js krijgt.
+   */
+  function haversineMeters(a, b) {
+    const toRad = (deg) => (deg * Math.PI) / 180;
+    const dLat = toRad(b.lat - a.lat);
+    const dLng = toRad(b.lng - a.lng);
+    const h =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    return 6371000 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+  }
+
+  function hasCoords(it) {
+    return it && typeof it.lat === 'number' && typeof it.lng === 'number';
+  }
+
+  /**
+   * Voegt Wikidata-items samen die (vrijwel) op dezelfde plek liggen maar
+   * verschillende QID's hebben — bijv. één gebouw met een item voor het
+   * gebouw zelf én een item voor een latere functie. Praktijkgeval
+   * Zutphen: "Broederenkerk" en "Waalse kerk" zijn hetzelfde pand, met
+   * exact dezelfde coördinaat. Zonder samenvoegen zou EuroPoi op die plek
+   * twee keer aankondigen.
+   *
+   * Drempel standaard 10m: krap genoeg om echt verschillende objecten
+   * vlak naast elkaar (kerk + beeld ervoor) apart te laten, ruim genoeg
+   * voor kleine coördinaatverschillen tussen twee items van één gebouw.
+   *
+   * Welke blijft: het item met een Wikipedia-koppeling (levert straks de
+   * samenvatting); hebben ze die allebei of geen van beide, dan het eerst
+   * gevonden item. Het behouden item houdt zijn plek in de lijst.
+   * Met mergeLabels (standaard aan) komt de naam van de afgevallen
+   * item(s) tussen haakjes achter de naam, bijv. "Broederenkerk (Waalse
+   * kerk)"; `mergedFrom` bewaart id + naam van de afgevallen items.
+   * Items zonder coördinaten worden ongemoeid doorgegeven.
+   *
+   * @param {Array} items
+   * @param {{thresholdMeters?:number, mergeLabels?:boolean}} [options]
+   * @returns {Array}
+   */
+  function dedupeByProximity(items, options) {
+    const opts = options || {};
+    const threshold =
+      typeof opts.thresholdMeters === 'number' ? opts.thresholdMeters : 10;
+    const mergeLabels = opts.mergeLabels !== false;
+
+    // Clusters: { kept, others: [] } in volgorde van eerste voorkomen.
+    const clusters = [];
+    const passthrough = []; // {index, item} voor items zonder coördinaten
+    (items || []).forEach((it, index) => {
+      if (!hasCoords(it)) {
+        passthrough.push({ index: index, item: it });
+        return;
+      }
+      const cluster = clusters.find(
+        (c) => haversineMeters(c.kept, it) <= threshold
+      );
+      if (!cluster) {
+        clusters.push({ index: index, kept: it, others: [] });
+        return;
+      }
+      if (!cluster.kept.wikipediaUrl && it.wikipediaUrl) {
+        cluster.others.push(cluster.kept);
+        cluster.kept = it;
+      } else {
+        cluster.others.push(it);
+      }
+    });
+
+    const merged = clusters.map((c) => {
+      if (c.others.length === 0) return { index: c.index, item: c.kept };
+      const item = Object.assign({}, c.kept, {
+        mergedFrom: c.others.map((o) => ({ id: o.id, label: o.label })),
+      });
+      if (mergeLabels) {
+        const base = String(c.kept.label || '').trim();
+        const extra = [];
+        c.others.forEach((o) => {
+          const l = String(o.label || '').trim();
+          if (
+            l &&
+            l.toLowerCase() !== base.toLowerCase() &&
+            !extra.some((e) => e.toLowerCase() === l.toLowerCase())
+          ) {
+            extra.push(l);
+          }
+        });
+        if (extra.length > 0) item.label = base + ' (' + extra.join(', ') + ')';
+      }
+      return { index: c.index, item: item };
+    });
+
+    return merged
+      .concat(passthrough)
+      .sort((a, b) => a.index - b.index)
+      .map((x) => x.item);
+  }
+
+  /**
    * Eén enkele poging om de bounding-box-query uit te voeren — zonder
    * herhaling. Los gehouden van searchWikidataBox() zodat de
    * herhalingslogica daar overzichtelijk blijft.
@@ -291,6 +392,7 @@
     parseWktPoint,
     parseSparqlResults,
     dedupeById,
+    dedupeByProximity,
     searchWikidataBox,
   };
 });

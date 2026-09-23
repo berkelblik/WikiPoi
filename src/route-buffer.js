@@ -64,15 +64,18 @@
 
   /**
    * Projecteert punt p op segment a-b (in een lokale, vlakke benadering
-   * rond het segment) en geeft de kortste afstand in meters terug.
+   * rond het segment) en geeft zowel de kortste afstand in meters als het
+   * dichtstbijzijnde punt op het segment (als lat/lng) terug.
    *
    * Voor de afstanden die hier relevant zijn (segmenten van een fiets-/
    * wandelroute, doorgaans enkele tientallen meters lang, zoekstraal
    * ~honderden meters) is een vlakke equirectangular-benadering rond het
    * segment nauwkeurig genoeg en veel goedkoper dan een echte sferische
    * projectie.
+   *
+   * @returns {{ distance: number, point: {lat:number,lng:number} }}
    */
-  function distancePointToSegment(p, a, b) {
+  function closestPointOnSegment(p, a, b) {
     // Referentiebreedtegraad voor de lengtegraad-correctie (vlakke aarde
     // lokaal rond dit segment).
     const refLat = toRad((a.lat + b.lat) / 2);
@@ -105,7 +108,26 @@
     const closest = { x: A.x + t * abx, y: A.y + t * aby };
     const dx = P.x - closest.x;
     const dy = P.y - closest.y;
-    return Math.sqrt(dx * dx + dy * dy);
+
+    // Lokale meters terug naar lat/lng (inverse van toXY hierboven).
+    const degPerRad = 180 / Math.PI;
+    const point = {
+      lat: a.lat + (closest.y / EARTH_RADIUS_M) * degPerRad,
+      lng:
+        cosRefLat === 0
+          ? a.lng
+          : a.lng + (closest.x / (EARTH_RADIUS_M * cosRefLat)) * degPerRad,
+    };
+
+    return { distance: Math.sqrt(dx * dx + dy * dy), point: point };
+  }
+
+  /**
+   * Kortste afstand (in meters) van punt p tot segment a-b. Dunne wrapper
+   * rond closestPointOnSegment(), behouden voor bestaande aanroepen.
+   */
+  function distancePointToSegment(p, a, b) {
+    return closestPointOnSegment(p, a, b).distance;
   }
 
   /**
@@ -209,6 +231,33 @@
   }
 
   /**
+   * Zoekt het punt op de route dat het dichtst bij p ligt, plus de afstand
+   * daarnaartoe in meters. Dit is het punt waar EuroPoi een route-gekoppelde
+   * POI aankondigt (zie EuroPoi src/hooks/useTrigger.js → distanceToPolyline);
+   * de routekaart in de app tekent er een stippellijn naartoe.
+   *
+   * @returns {{ distance: number, point: {lat:number,lng:number}|null }}
+   */
+  function closestPointOnRoute(p, routePoints) {
+    if (!routePoints || routePoints.length === 0) {
+      return { distance: Infinity, point: null };
+    }
+    if (routePoints.length === 1) {
+      return {
+        distance: haversineDistance(p, routePoints[0]),
+        point: { lat: routePoints[0].lat, lng: routePoints[0].lng },
+      };
+    }
+
+    let best = { distance: Infinity, point: null };
+    for (let i = 0; i < routePoints.length - 1; i++) {
+      const r = closestPointOnSegment(p, routePoints[i], routePoints[i + 1]);
+      if (r.distance < best.distance) best = r;
+    }
+    return best;
+  }
+
+  /**
    * Geeft true terug als punt p binnen radiusMeters van de route ligt.
    * Handig als snelle filter; gebruik distanceToRoute() als de exacte
    * afstand ook nodig is (bijv. voor de preview-stap).
@@ -240,13 +289,20 @@
       if (pt.lng > maxLng) maxLng = pt.lng;
     }
 
-    // Marge omrekenen naar graden: ~111.320 m per breedtegraad; voor
-    // lengtegraad gecorrigeerd met de cosinus van de gemiddelde
-    // breedtegraad.
-    const avgLat = (minLat + maxLat) / 2;
-    const latMargin = radiusMeters / 111320;
+    // Marge omrekenen naar graden: meters per breedtegraad afgeleid van
+    // dezelfde EARTH_RADIUS_M als de afstandsfuncties hierboven (~111.195
+    // m), zodat bbox en afstandsberekening exact op elkaar aansluiten; voor
+    // lengtegraad gecorrigeerd met de cosinus van de breedtegraad die het
+    // verst van de evenaar ligt. Daar is een lengtegraad het kortst in
+    // meters, dus de marge in graden het grootst — zo is de marge langs de
+    // héle route minimaal radiusMeters (met de gemiddelde breedtegraad zou
+    // hij bij een lange noord-zuidroute aan het poolwaartse uiteinde
+    // enkele meters te krap uitvallen).
+    const extremeLat = Math.max(Math.abs(minLat), Math.abs(maxLat));
+    const metersPerDegree = (EARTH_RADIUS_M * Math.PI) / 180;
+    const latMargin = radiusMeters / metersPerDegree;
     const lngMargin =
-      radiusMeters / (111320 * Math.max(0.01, Math.cos(toRad(avgLat))));
+      radiusMeters / (metersPerDegree * Math.max(0.01, Math.cos(toRad(extremeLat))));
 
     return {
       minLat: minLat - latMargin,
@@ -259,6 +315,7 @@
   return {
     parseGpxLineString,
     distanceToRoute,
+    closestPointOnRoute,
     isWithinBuffer,
     getBoundingBox,
     haversineDistance, // los bruikbaar, bijv. voor sortering in de preview

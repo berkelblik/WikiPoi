@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import '../../src/europoi-csv.js'
 import '../../src/wikidata-search.js'
 import '../../src/route-buffer.js'
@@ -8,10 +8,24 @@ import '../../src/poi-categories.js'
 import { Capacitor } from '@capacitor/core'
 import { Geolocation } from '@capacitor/geolocation'
 import { TextToSpeech } from '@capacitor-community/text-to-speech'
+import RouteMap from './components/RouteMap.jsx'
 import './App.css'
 
-// Zoekstraal rond de route, zoals eerder afgesproken (~400m).
-const SEARCH_RADIUS_METERS = 400
+// Corridor langs de route: de slider bepaalt hoe breed de strook aan
+// weerszijden van de route is waarbinnen POI's meegaan. De bounding box van
+// de Wikidata/OSM-zoekopdracht krijgt aan alle kanten een marge van de
+// MAXIMALE corridorbreedte, zodat elke POI die bij enige sliderstand binnen
+// de corridor valt ook echt opgehaald is. Schuiven filtert daarna alleen nog
+// lokaal, zonder nieuwe zoekopdracht. 500m gekozen omdat WikiPoi voor
+// wandelaars en fietsers is; eventueel later te verhogen (max. ~1000m).
+const CORRIDOR_MAX_METERS = 500
+const CORRIDOR_MIN_METERS = 50
+const CORRIDOR_STEP_METERS = 25
+const CORRIDOR_DEFAULT_METERS = 250
+
+// Wikidata-items met verschillende QID's binnen deze afstand van elkaar
+// worden als één POI behandeld (één gebouw, meerdere items).
+const WIKIDATA_MERGE_METERS = 10
 
 // Vast testgebied rond het eerdere GPS-testpunt bij Zutphen (ca. 1,1 x
 // 0,7 km), gebruikt als fallback zolang er nog geen GPX-route is geladen.
@@ -33,12 +47,15 @@ function App() {
   const [wikidataResults, setWikidataResults] = useState(null)
   const [wikidataError, setWikidataError] = useState('')
   const [wikidataLoading, setWikidataLoading] = useState(false)
+  const [wikidataMergedCount, setWikidataMergedCount] = useState(0)
   const [osmResults, setOsmResults] = useState(null)
   const [osmError, setOsmError] = useState('')
   const [osmLoading, setOsmLoading] = useState(false)
   const [summaryResults, setSummaryResults] = useState(null)
   const [summaryError, setSummaryError] = useState('')
   const [summaryLoading, setSummaryLoading] = useState(false)
+  const [showMap, setShowMap] = useState(true)
+  const [corridorMeters, setCorridorMeters] = useState(CORRIDOR_DEFAULT_METERS)
 
   // De standaard-aangevinkte categorieën komen uit poi-categories.js zelf
   // (getDefaultSelectedKeys()); dat kan pas ná de module-import ingelezen
@@ -67,12 +84,54 @@ function App() {
   const osmFilterAvailable =
     !!window.WikiPoiOsmFallback &&
     typeof window.WikiPoiOsmFallback.filterAndDedupeOsmCandidates === 'function'
-  const filteredOsmResults =
-    osmResults && osmFilterAvailable
-      ? window.WikiPoiOsmFallback.filterAndDedupeOsmCandidates(osmResults, wikidataResults || [])
-      : osmResults
+  // useMemo i.p.v. herberekenen bij elke render: de kaart-POI's hieronder
+  // hangen hiervan af, en een steeds nieuwe array zou die (dure) afstand-
+  // tot-route-berekening bij elke sliderbeweging opnieuw laten draaien.
+  const filteredOsmResults = useMemo(
+    () =>
+      osmResults && osmFilterAvailable
+        ? window.WikiPoiOsmFallback.filterAndDedupeOsmCandidates(osmResults, wikidataResults || [])
+        : osmResults,
+    [osmResults, wikidataResults, osmFilterAvailable]
+  )
   const osmSkippedCount =
     osmResults && filteredOsmResults ? osmResults.length - filteredOsmResults.length : 0
+
+  // Kaart-POI's: Test 3 (Wikidata) + Test 5 (OSM, gefilterd), met per POI
+  // de afstand tot de route en het dichtstbijzijnde routepunt (= waar
+  // EuroPoi straks aankondigt). Alleen herberekend bij een nieuwe route of
+  // nieuwe zoekresultaten — niet bij het verschuiven van de slider.
+  const routeMeasuredPois = useMemo(() => {
+    const candidates = [...(wikidataResults || []), ...(filteredOsmResults || [])]
+    const routePoints = routeInfo ? routeInfo.points : null
+    const canMeasure =
+      !!routePoints &&
+      routePoints.length > 0 &&
+      !!window.WikiPoiRouteBuffer &&
+      typeof window.WikiPoiRouteBuffer.closestPointOnRoute === 'function'
+    return candidates.map((c) => {
+      if (!canMeasure) {
+        return { ...c, distanceToRoute: null, snapPoint: null }
+      }
+      const r = window.WikiPoiRouteBuffer.closestPointOnRoute(c, routePoints)
+      return { ...c, distanceToRoute: r.distance, snapPoint: r.point }
+    })
+  }, [wikidataResults, filteredOsmResults, routeInfo])
+
+  // Goedkope stap die wél bij elke sliderbeweging draait: binnen/buiten de
+  // corridor markeren. Zonder route valt alles "binnen" (niets te toetsen).
+  const mapPois = useMemo(
+    () =>
+      routeMeasuredPois.map((p) => ({
+        ...p,
+        inCorridor: p.distanceToRoute === null ? true : p.distanceToRoute <= corridorMeters,
+      })),
+    [routeMeasuredPois, corridorMeters]
+  )
+  const poisInCorridorCount = mapPois.filter((p) => p.inCorridor).length
+  const mapPoisSorted = [...mapPois].sort(
+    (a, b) => (a.distanceToRoute ?? 0) - (b.distanceToRoute ?? 0)
+  )
 
   function toggleCategory(key) {
     setSelectedCategoryKeys((prev) =>
@@ -189,10 +248,11 @@ function App() {
         }
         const bbox = window.WikiPoiRouteBuffer.getBoundingBox(
           parsed.points,
-          SEARCH_RADIUS_METERS
+          CORRIDOR_MAX_METERS
         )
         setRouteInfo({
           fileName: file.name,
+          points: parsed.points,
           pointCount: parsed.points.length,
           source: parsed.source,
           name: parsed.name,
@@ -260,6 +320,18 @@ function App() {
         results = results.concat(propertyResults)
       }
       results = window.WikiPoiWikidataSearch.dedupeById(results)
+      // Daarna: verschillende QID's op (vrijwel) dezelfde plek samenvoegen
+      // (drempel 10m), bijv. Broederenkerk + Waalse kerk in Zutphen — één
+      // pand, twee Wikidata-items. Zie wikidata-search.js#dedupeByProximity().
+      if (typeof window.WikiPoiWikidataSearch.dedupeByProximity === 'function') {
+        const before = results.length
+        results = window.WikiPoiWikidataSearch.dedupeByProximity(results, {
+          thresholdMeters: WIKIDATA_MERGE_METERS,
+        })
+        setWikidataMergedCount(before - results.length)
+      } else {
+        setWikidataMergedCount(0)
+      }
       setWikidataResults(results)
     } catch (err) {
       setWikidataError('Fout: ' + (err && err.message ? err.message : String(err)))
@@ -383,7 +455,7 @@ function App() {
               Aantal punten: {routeInfo.pointCount}
             </p>
             <p>
-              Berekende bounding box (marge {SEARCH_RADIUS_METERS}m):
+              Berekende bounding box (marge {CORRIDOR_MAX_METERS}m = maximale corridorbreedte):
               <br />
               <code>
                 minLat: {routeInfo.bbox.minLat.toFixed(5)}, maxLat:{' '}
@@ -477,7 +549,12 @@ function App() {
         </button>
         {wikidataResults && (
           <div style={{ textAlign: 'left', marginTop: '1em' }}>
-            <p>{wikidataResults.length} resultaat/resultaten gevonden:</p>
+            <p>
+              {wikidataResults.length} resultaat/resultaten gevonden
+              {wikidataMergedCount > 0 &&
+                ` (${wikidataMergedCount} item(s) samengevoegd omdat ze binnen ${WIKIDATA_MERGE_METERS}m van een ander item lagen)`}
+              :
+            </p>
             <ul>
               {wikidataResults.map((poi) => (
                 <li key={poi.id} style={{ marginBottom: '0.75em' }}>
@@ -605,6 +682,75 @@ function App() {
           </div>
         )}
         {summaryError && <p style={{ color: 'red' }}>{summaryError}</p>}
+      </section>
+
+      <section style={{ marginTop: '2em' }}>
+        <h2>Test 7: routekaart met corridor</h2>
+        <p style={{ fontStyle: 'italic', marginBottom: '0.5em' }}>
+          Toont de route van Test 4 en de POI's van Test 3 en Test 5 (gefilterd). Groen = binnen
+          de corridor (met stippellijn naar het punt op de route waar EuroPoi aankondigt), grijs =
+          erbuiten. De slider filtert alleen lokaal; er wordt niet opnieuw gezocht.
+        </p>
+        <button type="button" onClick={() => setShowMap((v) => !v)}>
+          {showMap ? 'Kaart verbergen' : 'Kaart tonen'}
+        </button>
+
+        {/* Kaart blijft altijd in de pagina staan; alleen de hoogte wisselt
+            (zoals EuroPoi), zodat Leaflet zijn toestand behoudt. */}
+        <div
+          style={{
+            height: showMap ? '320px' : '0px',
+            overflow: 'hidden',
+            marginTop: '0.75em',
+            borderRadius: '12px',
+          }}
+        >
+          <RouteMap routePoints={routeInfo ? routeInfo.points : null} pois={mapPois} />
+        </div>
+
+        <div style={{ textAlign: 'left', marginTop: '0.75em' }}>
+          <label htmlFor="corridor-slider">
+            Corridor: <strong>{corridorMeters} m</strong> aan weerszijden van de route
+          </label>
+          <input
+            id="corridor-slider"
+            type="range"
+            min={CORRIDOR_MIN_METERS}
+            max={CORRIDOR_MAX_METERS}
+            step={CORRIDOR_STEP_METERS}
+            value={corridorMeters}
+            onChange={(e) => setCorridorMeters(Number(e.target.value))}
+            disabled={!routeInfo}
+            style={{ width: '100%', display: 'block', marginTop: '0.4em' }}
+          />
+          {!routeInfo && (
+            <p>Laad eerst een GPX-route bij Test 4; zonder route is er geen corridor te meten.</p>
+          )}
+          {routeInfo && mapPois.length === 0 && (
+            <p>Nog geen POI's gevonden — voer eerst Test 3 (en eventueel Test 5) uit.</p>
+          )}
+          {routeInfo && mapPois.length > 0 && (
+            <>
+              <p>
+                <strong>{poisInCorridorCount}</strong> van {mapPois.length} POI's binnen de
+                corridor.
+              </p>
+              <ul style={{ listStyle: 'none', paddingLeft: 0 }}>
+                {mapPoisSorted.map((poi) => (
+                  <li
+                    key={poi.id}
+                    style={{ marginBottom: '0.4em', color: poi.inCorridor ? 'inherit' : '#94a3b8' }}
+                  >
+                    {poi.inCorridor ? '●' : '○'} {poi.label} —{' '}
+                    {Number.isFinite(poi.distanceToRoute)
+                      ? `${Math.round(poi.distanceToRoute)} m van de route`
+                      : 'afstand onbekend'}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
       </section>
     </>
   )
