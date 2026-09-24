@@ -254,9 +254,23 @@ async function runPipeline(options) {
     // groep dan ook) worden overgeslagen.
     if (nieuweWikidata < osmFallbackSkipThreshold) {
       const osmTagFilterGroups = poiCategories.osmTagFiltersForKeys(group.keys);
-      const osmCandidates = await searchOverpass(bbox, osmTagFilterGroups, {
-        userAgent: USER_AGENT,
-      });
+      // Een mislukte OSM-aanvulling (bijv. HTTP 504 van een overbelaste
+      // Overpass-server, ook na de automatische herhaling in
+      // osm-fallback.js) mag de hele pijplijn niet laten afbreken: dan
+      // gaat het script verder met alleen de Wikidata-resultaten.
+      let osmCandidates = [];
+      let osmFailed = false;
+      try {
+        osmCandidates = await searchOverpass(bbox, osmTagFilterGroups, {
+          userAgent: USER_AGENT,
+        });
+      } catch (err) {
+        osmFailed = true;
+        log(
+          `  Straal-groep ${group.radiusMeters}m [${group.keys.join(', ')}]: WAARSCHUWING — OSM-aanvulling ` +
+            `mislukt (${err.message}); verder met alleen de Wikidata-resultaten.`
+        );
+      }
 
       let toegevoegd = 0;
       for (const osmCandidate of osmCandidates) {
@@ -269,11 +283,13 @@ async function runPipeline(options) {
           toegevoegd++;
         }
       }
-      log(
-        `  Straal-groep ${group.radiusMeters}m [${group.keys.join(', ')}]: OSM leverde ` +
-          `${osmCandidates.length} kandidaten op, waarvan ${toegevoegd} nieuw ` +
-          `(${osmCandidates.length - toegevoegd} viel samen met een bestaande kandidaat).`
-      );
+      if (!osmFailed) {
+        log(
+          `  Straal-groep ${group.radiusMeters}m [${group.keys.join(', ')}]: OSM leverde ` +
+            `${osmCandidates.length} kandidaten op, waarvan ${toegevoegd} nieuw ` +
+            `(${osmCandidates.length - toegevoegd} viel samen met een bestaande kandidaat).`
+        );
+      }
     } else {
       log(
         `  Straal-groep ${group.radiusMeters}m [${group.keys.join(', ')}]: OSM-aanvulling ` +
