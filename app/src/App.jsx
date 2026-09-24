@@ -124,6 +124,8 @@ function App() {
   const [mergedCount, setMergedCount] = useState(0)
   const [searchLoading, setSearchLoading] = useState(false)
   const [searchProgress, setSearchProgress] = useState('')
+  // Seconden sinds de huidige voortgangsmelding verscheen (zie effect hieronder).
+  const [progressSeconds, setProgressSeconds] = useState(0)
   const [searchError, setSearchError] = useState('')
   const [showMap, setShowMap] = useState(true)
   const [corridorMeters, setCorridorMeters] = useState(CORRIDOR_DEFAULT_METERS)
@@ -145,6 +147,19 @@ function App() {
       setSelectedCategoryKeys(window.WikiPoiCategories.getDefaultSelectedKeys())
     }
   }, [])
+
+  // Verstreken tijd bij de voortgangsmelding van stap 3: elke nieuwe melding
+  // (volgende zoekopdracht) begint weer bij 0. Zo is bij een trage Wikidata-
+  // server te zien dat de app nog bezig is, en hoe lang één verzoek duurt.
+  useEffect(() => {
+    if (!searchProgress) return undefined
+    const startedAt = Date.now()
+    setProgressSeconds(0)
+    const timer = setInterval(() => {
+      setProgressSeconds(Math.floor((Date.now() - startedAt) / 1000))
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [searchProgress])
 
   const categoriesAvailable =
     !!window.WikiPoiCategories && typeof window.WikiPoiCategories.getCategories === 'function'
@@ -637,7 +652,12 @@ function App() {
             {searchLoading ? 'Bezig met zoeken…' : searchDone ? 'Opnieuw zoeken' : "POI's zoeken"}
           </button>
           {selectedCategoryKeys.length === 0 && <p className="muted">Kies minimaal één categorie bij stap 2.</p>}
-          {searchProgress && <p className="muted">{searchProgress}</p>}
+          {searchProgress && (
+            <p className="muted">
+              {searchProgress}
+              {progressSeconds > 0 ? ` — ${progressSeconds} s` : ''}
+            </p>
+          )}
           {searchDone && (
             <p>
               <strong>{allPois.length}</strong> POI's gevonden
