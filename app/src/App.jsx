@@ -230,6 +230,10 @@ function App() {
   const summaryFoundCount = corridorPois.filter(
     (p) => summariesById[p.id] && summariesById[p.id].summary
   ).length
+  // De categorie (= routenaam) koppelt de POI's in EuroPoi aan de route;
+  // die heet daar standaard naar het GPX-bestand. Waarschuwen bij verschil.
+  const fileRouteName = routeInfo ? routeNameFromFileName(routeInfo.fileName) : ''
+  const routeNameDiffers = fileRouteName !== '' && routeName.trim() !== fileRouteName
 
   function resetResults() {
     setWikidataResults(null)
@@ -792,6 +796,22 @@ function App() {
             value={routeName}
             onChange={(e) => setRouteName(e.target.value)}
           />
+          {routeNameDiffers && (
+            <div style={{ marginBottom: '14px' }}>
+              <p className="muted">
+                Let op: deze naam wijkt af van de GPX-bestandsnaam "{fileRouteName}". In EuroPoi
+                koppelt de categorie de POI's aan de route met dezelfde naam; bij een andere naam
+                worden ze niet aan deze route gekoppeld.
+              </p>
+              <button
+                type="button"
+                className="btn btn-indigo btn-small"
+                onClick={() => setRouteName(fileRouteName)}
+              >
+                Bestandsnaam gebruiken
+              </button>
+            </div>
+          )}
           {summaryMissingPois.length > 0 && (
             <p className="muted">
               Voor {summaryMissingPois.length} POI's wordt de samenvatting bij opslaan eerst
