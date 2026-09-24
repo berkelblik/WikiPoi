@@ -331,6 +331,7 @@ body {
   box-sizing: border-box;
   width: 100%;
   min-height: 50px;
+  margin-bottom: 14px;
   padding: 0 14px;
   border: 1px solid #2b3b70;
   border-radius: 14px;
