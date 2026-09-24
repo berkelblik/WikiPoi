@@ -17,6 +17,16 @@
  * dan genegeerd) — combineren van beide filters in één query wordt (nog)
  * niet ondersteund, was ook niet nodig voor de huidige categorieën.
  *
+ * In instanceOf-modus geeft elk resultaat ook `matchedTypes` terug: de
+ * QID('s) uit options.instanceOf waarlangs het item gevonden is. Zo kan de
+ * aanroeper de QID's van meerdere categorieën in ÉÉN verzoek combineren en
+ * daarna zelf per item de categorie bepalen (gemeten sept. 2026: één
+ * verzoek voor 4 categorieën ± 3× sneller dan 4 losse verzoeken).
+ *
+ * Opnieuw proberen gebeurt bij een timeout, bij HTTP 429/5xx (de publieke
+ * service geeft bij drukte geregeld 502/503/504) en bij een verbroken
+ * verbinding (fetch gooit dan een TypeError, bijv. "terminated").
+ *
  * Gebruikt de "wikibase:box"-geoservice van de publieke Wikidata Query
  * Service (query.wikidata.org/sparql). Deze service ondersteunt CORS, dus
  * de module werkt zowel in de browser als in Node (Node 18+, native
@@ -60,6 +70,10 @@
   const DEFAULT_TIMEOUT_MS = 40000;
   const DEFAULT_MAX_RETRIES = 2; // 2 automatische herhalingen = max. 3 pogingen totaal
   const RETRY_BACKOFF_MS = 3000; // korte pauze tussen pogingen, oplopend per poging
+  // HTTP-statussen waarbij opnieuw proberen zin heeft: te veel verzoeken
+  // (429) en tijdelijke serverproblemen (5xx). Andere fouten (bijv. 400 bij
+  // een ongeldige query) worden meteen doorgegeven.
+  const RETRYABLE_HTTP_STATUS = [429, 500, 502, 503, 504];
 
   /**
    * Bouwt de SPARQL-query voor een bounding-box-zoekopdracht.
@@ -77,6 +91,10 @@
    *   eigenschap". Wordt genegeerd als options.instanceOf ook is opgegeven.
    *   De waarde van de eigenschap wordt, indien aanwezig, meegenomen in het
    *   resultaat als `propertyValue` (zie parseSparqlResults()).
+   * @param {boolean} [options.optimizerHint=false] - zet de queryoptimizer
+   *   van de server uit (hint:Query hint:optimizer "None"), zodat de stappen
+   *   in de geschreven volgorde worden uitgevoerd. Metingen (sept. 2026)
+   *   waren wisselend: soms veel sneller, soms trager. Daarom standaard uit.
    * @returns {string} SPARQL-querytekst
    */
   function buildBoxQuery(bbox, options) {
@@ -89,9 +107,14 @@
     let typeClause = '';
     let propertyValueSelect = '';
     if (Array.isArray(instanceOf) && instanceOf.length > 0) {
-      const values = instanceOf.map((id) => 'wd:' + id).join(' ');
+      // Dubbele QID's weglaten (twee categorieën kunnen dezelfde QID delen).
+      const uniqueQids = Array.from(new Set(instanceOf));
+      const values = uniqueQids.map((id) => 'wd:' + id).join(' ');
       typeClause =
         '?item wdt:P31/wdt:P279* ?type .\n  VALUES ?type { ' + values + ' }\n  ';
+      // ?type meegeven, zodat elk resultaat weet via welke QID het gevonden
+      // is (matchedTypes, zie parseSparqlResults()).
+      propertyValueSelect = ' ?type';
     } else if (hasProperty) {
       typeClause = '?item wdt:' + hasProperty + ' ?propertyValue .\n  ';
       propertyValueSelect = ' ?propertyValue';
@@ -101,10 +124,13 @@
     // (WKT-volgorde is lng/lat, dus andersom dan de gebruikelijke lat/lng
     // volgorde in de rest van deze codebase — bewust hier lokaal gehouden
     // om verwarring elders te voorkomen).
+    const hintClause = options.optimizerHint ? '  hint:Query hint:optimizer "None" .\n' : '';
+
     return (
       'SELECT ?item ?itemLabel ?itemDescription ?location ?article' +
       propertyValueSelect +
       ' WHERE {\n' +
+      hintClause +
       '  SERVICE wikibase:box {\n' +
       '    ?item wdt:P625 ?location .\n' +
       '    bd:serviceParam wikibase:cornerWest "Point(' +
@@ -150,9 +176,13 @@
    * te testen is (bijv. met een opgeslagen voorbeeldrespons).
    *
    * @param {object} sparqlJson - de gedecodeerde JSON-respons
-   * @returns {Array<{id:string,label:string,description:?string,lat:number,lng:number,wikipediaUrl:?string,propertyValue:?string}>}
+   * @returns {Array<{id:string,label:string,description:?string,lat:number,lng:number,wikipediaUrl:?string,propertyValue:?string,matchedTypes:?string[]}>}
    *   `propertyValue` is alleen aanwezig als de query met options.hasProperty
    *   is opgebouwd en de binding een waarde voor ?propertyValue bevat.
+   *   `matchedTypes` is alleen aanwezig als de query met options.instanceOf
+   *   is opgebouwd: de QID uit die lijst waarlangs dit item gevonden is.
+   *   Eén item kan dan meerdere keren voorkomen (één keer per QID);
+   *   dedupeById() voegt de matchedTypes van zulke dubbelen samen.
    */
   function parseSparqlResults(sparqlJson) {
     const bindings =
@@ -178,6 +208,10 @@
       if (b.propertyValue && b.propertyValue.value !== undefined) {
         result.propertyValue = b.propertyValue.value;
       }
+      if (b.type && b.type.value) {
+        const typeUrl = b.type.value; // http://www.wikidata.org/entity/Q16970
+        result.matchedTypes = [typeUrl.substring(typeUrl.lastIndexOf('/') + 1)];
+      }
       results.push(result);
     }
     return results;
@@ -186,15 +220,30 @@
   /**
    * Verwijdert duplicaten op basis van Wikidata-id (kan voorkomen als
    * meerdere zoekopdrachten samengevoegd worden, bijv. bij een lange route
-   * die in meerdere bbox-stukken wordt opgedeeld).
+   * die in meerdere bbox-stukken wordt opgedeeld, of als één item via
+   * meerdere QID's uit options.instanceOf gevonden is). Het eerste item
+   * blijft; hebben de dubbelen `matchedTypes`, dan worden die samengevoegd
+   * in het behouden item (zonder dubbele QID's).
    */
   function dedupeById(items) {
-    const seen = new Set();
+    const keptById = new Map();
     const out = [];
     for (const it of items) {
-      if (!it.id || seen.has(it.id)) continue;
-      seen.add(it.id);
-      out.push(it);
+      if (!it.id) continue;
+      const kept = keptById.get(it.id);
+      if (!kept) {
+        const copy = Object.assign({}, it);
+        if (Array.isArray(it.matchedTypes)) copy.matchedTypes = it.matchedTypes.slice();
+        keptById.set(it.id, copy);
+        out.push(copy);
+        continue;
+      }
+      if (Array.isArray(it.matchedTypes)) {
+        if (!Array.isArray(kept.matchedTypes)) kept.matchedTypes = [];
+        for (const t of it.matchedTypes) {
+          if (!kept.matchedTypes.includes(t)) kept.matchedTypes.push(t);
+        }
+      }
     }
     return out;
   }
@@ -324,25 +373,42 @@
     }
 
     if (!response.ok) {
-      throw new Error(
+      const err = new Error(
         'Wikidata-query mislukt: HTTP ' + response.status + ' ' + response.statusText
       );
+      err.status = response.status;
+      err.retryable = RETRYABLE_HTTP_STATUS.includes(response.status);
+      throw err;
     }
 
     return response.json();
   }
 
   /**
+   * Bepaalt of een mislukte poging opnieuw geprobeerd mag worden:
+   * timeout (AbortError), HTTP 429/5xx (err.retryable) of een verbroken
+   * verbinding (TypeError uit fetch, bijv. "fetch failed" of "terminated").
+   */
+  function isRetryableError(err) {
+    if (!err) return false;
+    if (err.name === 'AbortError') return true;
+    if (err.retryable === true) return true;
+    if (err.name === 'TypeError') return true;
+    return false;
+  }
+
+  /**
    * Voert de bounding-box-zoekopdracht daadwerkelijk uit tegen de publieke
-   * Wikidata Query Service. Bij een timeout (de service reageert soms
-   * incidenteel traag) wordt de aanvraag automatisch één keer herhaald
-   * voordat de fout wordt doorgegeven — de aanroeper hoeft dus niet zelf
-   * handmatig opnieuw te proberen.
+   * Wikidata Query Service. Bij een timeout, HTTP 429/5xx of een verbroken
+   * verbinding (de service is soms incidenteel traag of overbelast) wordt de
+   * aanvraag automatisch herhaald voordat de fout wordt doorgegeven — de
+   * aanroeper hoeft dus niet zelf handmatig opnieuw te proberen.
    *
    * @param {{minLat:number,maxLat:number,minLng:number,maxLng:number}} bbox
    * @param {object} [options] - zie buildBoxQuery(); plus:
-   * @param {number} [options.timeoutMs=25000]
-   * @param {number} [options.maxRetries=1] - aantal automatische herhalingen bij een timeout
+   * @param {number} [options.timeoutMs=40000]
+   * @param {number} [options.maxRetries=2] - aantal automatische herhalingen
+   *   bij een timeout, HTTP 429/5xx of verbroken verbinding
    * @param {string} [options.userAgent] - alleen relevant bij server-side gebruik
    * @returns {Promise<Array>} kandidaat-POI's, zie parseSparqlResults()
    */
@@ -373,9 +439,8 @@
         return dedupeById(parseSparqlResults(data));
       } catch (err) {
         lastError = err;
-        const isTimeout = err.name === 'AbortError';
         const hasRetriesLeft = attempt < maxRetries;
-        if (!isTimeout || !hasRetriesLeft) {
+        if (!isRetryableError(err) || !hasRetriesLeft) {
           throw err;
         }
         // Korte, oplopende pauze vóór de volgende poging — geeft een

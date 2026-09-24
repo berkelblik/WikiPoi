@@ -32,6 +32,12 @@ const CORRIDOR_DEFAULT_METERS = 250
 // worden als één POI behandeld (één gebouw, meerdere items).
 const WIKIDATA_MERGE_METERS = 10
 
+// Alle categorieën met QID's gaan samen in één Wikidata-verzoek (gemeten:
+// ± 3× sneller dan één verzoek per categorie, en minder kans op een fout
+// bij drukte). De resultaatlimiet schaalt mee met het aantal categorieën,
+// zodat er niet minder POI's gevonden worden dan met losse verzoeken.
+const WIKIDATA_LIMIT_PER_CATEGORY = 300
+
 const SUMMARY_MAX_SENTENCES = 3
 
 // Triggerstraal per POI in de EuroPoi-CSV. Voorlopig vast; later eventueel
@@ -40,11 +46,11 @@ const DEFAULT_TRIGGER_RADIUS_METERS = 0
 
 const MAP_HEIGHT = '320px'
 
-// Zoekresultaten van meerdere categorieën samenvoegen: bij hetzelfde id wint
-// het EERST gevonden item (en dus diens categoryKey). De zoekopdrachten
-// draaien in de volgorde van poi-categories.js, met "Gebouwd erfgoed"
-// (hasProperty) als laatste — een kerk die ook rijksmonument is, houdt zo
-// het specifiekere kerk-icoon. Items zonder id worden altijd behouden.
+// Zoekresultaten van meerdere zoekopdrachten samenvoegen: bij hetzelfde id
+// wint het EERST gevonden item (en dus diens categoryKey). Het gecombineerde
+// QID-verzoek komt eerst, "Gebouwd erfgoed" (hasProperty) als laatste — een
+// kerk die ook rijksmonument is, houdt zo het specifiekere kerk-icoon.
+// Items zonder id worden altijd behouden.
 function dedupeFirstWins(items) {
   const seen = new Set()
   return items.filter((item) => {
@@ -53,6 +59,16 @@ function dedupeFirstWins(items) {
     seen.add(item.id)
     return true
   })
+}
+
+// Bepaalt de categorie van een item uit het gecombineerde QID-verzoek: de
+// eerste categorie (in de volgorde van poi-categories.js) waarvan een QID in
+// item.matchedTypes voorkomt. Zelfde "eerste wint"-principe als vroeger met
+// één verzoek per categorie.
+function categoryKeyForMatchedTypes(item, categories) {
+  const types = item.matchedTypes || []
+  const match = categories.find((c) => c.qids.some((qid) => types.includes(qid)))
+  return match ? match.key : null
 }
 
 function errorText(err) {
@@ -298,19 +314,32 @@ function App() {
         return
       }
 
-      // Per aangevinkte categorie een eigen zoekopdracht, zodat elk
-      // resultaat weet via welke categorie het gevonden is (categoryKey →
-      // kleur en icoon). Eerst instanceOf, daarna hasProperty ("Gebouwd
-      // erfgoed"), zie dedupeFirstWins().
+      // Eén gecombineerd verzoek voor alle aangevinkte categorieën met QID's;
+      // per item bepaalt matchedTypes daarna de categorie (categoryKey →
+      // kleur en icoon). Daarna één verzoek per hasProperty-categorie
+      // ("Gebouwd erfgoed"), zie dedupeFirstWins().
       const selected = categoryList.filter((c) => selectedCategoryKeys.includes(c.key))
-      const wikidataJobs = [
-        ...selected
-          .filter((c) => c.qids.length > 0)
-          .map((c) => ({ category: c, query: { instanceOf: c.qids } })),
-        ...selected
-          .filter((c) => c.hasProperty)
-          .map((c) => ({ category: c, query: { hasProperty: c.hasProperty } })),
-      ]
+      const qidCategories = selected.filter((c) => c.qids.length > 0)
+      const wikidataJobs = []
+      if (qidCategories.length > 0) {
+        wikidataJobs.push({
+          label: qidCategories.length === 1 ? qidCategories[0].label : 'alle categorieën',
+          query: {
+            instanceOf: qidCategories.flatMap((c) => c.qids),
+            limit: WIKIDATA_LIMIT_PER_CATEGORY * qidCategories.length,
+          },
+          categoryKeyFor: (item) => categoryKeyForMatchedTypes(item, qidCategories),
+        })
+      }
+      selected
+        .filter((c) => c.hasProperty)
+        .forEach((c) => {
+          wikidataJobs.push({
+            label: c.label,
+            query: { hasProperty: c.hasProperty },
+            categoryKeyFor: () => c.key,
+          })
+        })
       if (wikidataJobs.length === 0) {
         setSearchError('Kies minimaal één categorie bij stap 2.')
         return
@@ -322,9 +351,9 @@ function App() {
       let results = []
       for (const job of wikidataJobs) {
         done += 1
-        setSearchProgress(`Wikidata: ${job.category.label} (${done} van ${total})`)
+        setSearchProgress(`Wikidata: ${job.label} (${done} van ${total})`)
         const found = await window.WikiPoiWikidataSearch.searchWikidataBox(routeInfo.bbox, job.query)
-        results = results.concat(found.map((item) => ({ ...item, categoryKey: job.category.key })))
+        results = results.concat(found.map((item) => ({ ...item, categoryKey: job.categoryKeyFor(item) })))
       }
       results = dedupeFirstWins(results)
       const categoryKeyById = new Map(results.map((item) => [item.id, item.categoryKey]))
