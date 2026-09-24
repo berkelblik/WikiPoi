@@ -36,6 +36,33 @@
   const DEFAULT_MAX_SENTENCES = 3;
   const DEFAULT_CONCURRENCY = 4;
 
+  // Wikipedia telt afkortingen als "ds." soms als zinseinde. Daarom vragen
+  // we een paar zinnen extra op en korten we daarna zelf in.
+  const EXTRA_SENTENCES_FROM_API = 3;
+
+  // Afkortingen (kleine letters, zonder slotpunt) waarna een punt géén
+  // zinseinde is. Bewust niet opgenomen: "v.Chr" en "n.Chr", die vaak wél
+  // aan het eind van een zin staan.
+  const NON_SENTENCE_END_ABBREVIATIONS = [
+    'ds', 'dr', 'drs', 'ir', 'ing', 'mr', 'mw', 'mevr', 'dhr', 'hr', 'prof',
+    'st', 'jr', 'sr', 'bijv', 'bv', 'o.a', 'o.m', 'm.n', 'ca', 'c.q', 'e.a',
+    'enz', 'etc', 'resp', 'zgn', 'z.g', 'nr', 'no', 'blz', 'p', 'vs', 'ong',
+    'evt', 'd.w.z', 'm.b.t', 't.o.v', 'i.p.v', 'febr', 'sept', 'okt', 'kpl',
+    'mgr', 'pater', 'fam', 'gem', 'prov',
+  ];
+
+  /**
+   * Is de punt op positie `dotIndex` het slot van een afkorting of een
+   * initiaal (zoals "J." of "J.C.") in plaats van een zinseinde?
+   */
+  function isAbbreviationBefore(text, dotIndex) {
+    const match = text.slice(0, dotIndex).match(/(\S+)$/);
+    if (!match) return false;
+    const word = match[1].replace(/^[("'«„“]+/, '');
+    if (/^(?:[A-ZÀ-ÖØ-Þ]\.)*[A-ZÀ-ÖØ-Þ]$/.test(word)) return true;
+    return NON_SENTENCE_END_ABBREVIATIONS.includes(word.toLowerCase());
+  }
+
   /**
    * Haalt taalcode en paginatitel uit een Wikipedia-URL, bijv.
    * "https://nl.wikipedia.org/wiki/Ontzet_van_Lochem" →
@@ -85,19 +112,29 @@
   function truncateToSentences(text, maxSentences) {
     if (!text) return '';
     maxSentences = maxSentences || DEFAULT_MAX_SENTENCES;
+    const clean = text.replace(/\s+/g, ' ').trim();
 
-    const sentences = text.match(/[^.!?]+[.!?]+(?=\s+[A-ZÀ-ÖØ-Þ]|\s*$)/g);
-    if (!sentences || sentences.length === 0) {
+    // Kandidaat-zinseinde: punt/uitroepteken/vraagteken (eventueel gevolgd
+    // door een sluitend aanhalingsteken of haakje), dan een spatie en een
+    // hoofdletter, of het einde van de tekst.
+    const boundary = /[.!?]+["'»”)]*(?=\s+["'«„“(]?[A-ZÀ-ÖØ-Þ]|\s*$)/g;
+    let count = 0;
+    let end = 0;
+    let match;
+    while ((match = boundary.exec(clean)) !== null) {
+      if (match[0][0] === '.' && isAbbreviationBefore(clean, match.index)) continue;
+      count += 1;
+      end = match.index + match[0].length;
+      if (count >= maxSentences) break;
+    }
+    if (count === 0) {
       // Geen duidelijke zinsgrenzen gevonden (bijv. tekst zonder
       // eindpunt); geef de hele tekst terug.
-      return text.trim();
+      return clean;
     }
-
-    return sentences
-      .slice(0, maxSentences)
-      .map((s) => s.trim())
-      .join(' ')
-      .trim();
+    // Eindigt de tekst op een afkorting (afgebroken zin), dan valt dat
+    // laatste stuk weg: we stoppen bij het laatste echte zinseinde.
+    return clean.slice(0, end).trim();
   }
 
   /**
@@ -262,7 +299,7 @@
     const fullBodyExtract = await fetchFullBodyExtract(
       parsed.lang,
       data.title || parsed.title,
-      options.maxSentences,
+      (options.maxSentences || DEFAULT_MAX_SENTENCES) + EXTRA_SENTENCES_FROM_API,
       options
     );
     const richestExtract = stripSectionHeadings(fullBodyExtract || extract);
@@ -352,6 +389,7 @@
     buildFullBodyExtractEndpoint,
     fetchFullBodyExtract,
     truncateToSentences,
+    isAbbreviationBefore,
     stripSectionHeadings,
     fetchSummary,
     fetchSummariesForCandidates,
