@@ -6,6 +6,8 @@ import '../../src/osm-fallback.js'
 import '../../src/wikipedia-summary.js'
 import '../../src/poi-categories.js'
 import { Capacitor } from '@capacitor/core'
+import { Filesystem, Directory, Encoding } from '@capacitor/filesystem'
+import { Share } from '@capacitor/share'
 import RouteMap from './components/RouteMap.jsx'
 import { getCategoryStyle } from './components/poi-icons.js'
 import './App.css'
@@ -460,8 +462,14 @@ function App() {
           mp3: '',
         }
       })
-      const csvText = window.EuroPoiCsv.toEuroPoiCsv(rows)
+      // Met BOM, zodat ook spreadsheetprogramma's (Excel) de tekens goed
+      // tonen; EuroPoi leest het bestand met of zonder BOM.
+      const csvText = window.EuroPoiCsv.toEuroPoiCsvWithBom(rows)
       const fileName = csvFileName(category)
+      if (isNative) {
+        await shareCsvNative(csvText, fileName, rows.length)
+        return
+      }
       const blob = new Blob([csvText], { type: 'text/csv;charset=utf-8' })
       const url = URL.createObjectURL(blob)
       const link = document.createElement('a')
@@ -474,6 +482,34 @@ function App() {
       setExportMessage(`${rows.length} POI's opgeslagen in "${fileName}".`)
     } catch (err) {
       setExportError(errorText(err))
+    }
+  }
+
+  // Android-app: een download via de browser werkt in de WebView niet.
+  // Daarom het bestand in de cache van de app zetten en het Android-
+  // deelmenu openen; de gebruiker kiest zelf waarheen (Bestanden, Drive,
+  // e-mail, WhatsApp, of een app zoals EuroPoi die CSV-bestanden aanneemt).
+  async function shareCsvNative(csvText, fileName, count) {
+    const written = await Filesystem.writeFile({
+      path: fileName,
+      data: csvText,
+      directory: Directory.Cache,
+      encoding: Encoding.UTF8,
+    })
+    try {
+      await Share.share({
+        title: fileName,
+        files: [written.uri],
+        dialogTitle: 'CSV delen of opslaan',
+      })
+      setExportMessage(`"${fileName}" (${count} POI's) is aangeboden om te delen of op te slaan.`)
+    } catch (err) {
+      const text = err && err.message ? err.message : String(err)
+      if (/cancel/i.test(text)) {
+        setExportMessage('Delen geannuleerd. Druk opnieuw op de knop om het bestand alsnog te delen.')
+        return
+      }
+      throw err
     }
   }
 
@@ -712,22 +748,18 @@ function App() {
               opgehaald.
             </p>
           )}
-          {isNative ? (
-            <p className="muted">
-              Opslaan werkt nog niet in de Android-app. Gebruik voorlopig de browserversie.
-            </p>
-          ) : (
-            <button
-              type="button"
-              className="btn btn-pink btn-wide"
-              onClick={exportCsv}
-              disabled={corridorPois.length === 0 || summaryLoading}
-            >
-              {summaryLoading
-                ? 'Samenvattingen ophalen…'
+          <button
+            type="button"
+            className="btn btn-pink btn-wide"
+            onClick={exportCsv}
+            disabled={corridorPois.length === 0 || summaryLoading}
+          >
+            {summaryLoading
+              ? 'Samenvattingen ophalen…'
+              : isNative
+                ? `CSV delen of opslaan (${corridorPois.length} POI's)`
                 : `CSV opslaan (${corridorPois.length} POI's)`}
-            </button>
-          )}
+          </button>
           {exportMessage && <p className="success">{exportMessage}</p>}
           {exportError && <p className="error">{exportError}</p>}
         </Step>
