@@ -372,33 +372,38 @@ function App() {
     }
   }
 
-  // Alleen voor POI's binnen de corridor, en alleen voor die nog niet
-  // opgehaald zijn: wie de slider verbreedt, haalt daarna alleen de nieuwe op.
-  async function runSummaries() {
-    setSummaryError('')
-    setExportMessage('')
+  // Haalt de ontbrekende samenvattingen op, alleen voor POI's binnen de
+  // corridor: wie de slider verbreedt, haalt daarna alleen de nieuwe op.
+  // Geeft de volledige, bijgewerkte verzameling terug, zodat de export die
+  // direct kan gebruiken zonder op de state-update te wachten.
+  async function fetchMissingSummaries() {
+    const candidates = summaryMissingPois
+    if (candidates.length === 0) return summariesById
     if (
       !window.WikiPoiWikipediaSummary ||
       typeof window.WikiPoiWikipediaSummary.fetchSummariesForCandidates !== 'function'
     ) {
-      setSummaryError('Fout: wikipedia-summary.js is niet correct geladen.')
-      return
+      throw new Error('wikipedia-summary.js is niet correct geladen.')
     }
-    const candidates = summaryMissingPois
-    if (candidates.length === 0) return
+    const enriched = await window.WikiPoiWikipediaSummary.fetchSummariesForCandidates(candidates, {
+      maxSentences: SUMMARY_MAX_SENTENCES,
+    })
+    const added = {}
+    enriched.forEach((item, index) => {
+      const id = item.id || candidates[index].id
+      added[id] = { summary: item.summary || null, summaryError: item.summaryError || '' }
+    })
+    setSummariesById((prev) => ({ ...prev, ...added }))
+    return { ...summariesById, ...added }
+  }
+
+  async function runSummaries() {
+    setSummaryError('')
+    setExportMessage('')
+    if (summaryMissingPois.length === 0) return
     setSummaryLoading(true)
     try {
-      const enriched = await window.WikiPoiWikipediaSummary.fetchSummariesForCandidates(candidates, {
-        maxSentences: SUMMARY_MAX_SENTENCES,
-      })
-      setSummariesById((prev) => {
-        const next = { ...prev }
-        enriched.forEach((item, index) => {
-          const id = item.id || candidates[index].id
-          next[id] = { summary: item.summary || null, summaryError: item.summaryError || '' }
-        })
-        return next
-      })
+      await fetchMissingSummaries()
     } catch (err) {
       setSummaryError(errorText(err))
     } finally {
@@ -406,7 +411,7 @@ function App() {
     }
   }
 
-  function exportCsv() {
+  async function exportCsv() {
     setExportError('')
     setExportMessage('')
     try {
@@ -423,14 +428,28 @@ function App() {
         setExportError('Er liggen geen POI\'s binnen de corridor. Verbreed de strook bij stap 4.')
         return
       }
-      // Tekst: Wikipedia-samenvatting met bronvermelding (CC BY-SA vraagt om
-      // naamsvermelding); zonder samenvatting de Wikidata-omschrijving.
+      // Eerst de ontbrekende samenvattingen ophalen, zodat de CSV nooit per
+      // ongeluk alleen de korte Wikidata-omschrijvingen bevat.
+      let summaries = summariesById
+      if (summaryMissingPois.length > 0) {
+        setSummaryError('')
+        setSummaryLoading(true)
+        try {
+          summaries = await fetchMissingSummaries()
+        } catch (err) {
+          setExportError('Samenvattingen ophalen mislukt (' + errorText(err) + '). Probeer het opnieuw.')
+          return
+        } finally {
+          setSummaryLoading(false)
+        }
+      }
+      // Tekst: alleen de Wikipedia-samenvatting, zonder bronvermelding (die
+      // zou in EuroPoi worden voorgelezen; WikiPoi toont hem bij stap 5).
+      // Zonder samenvatting de Wikidata-omschrijving.
       const rows = corridorPois.map((p) => {
-        const entry = summariesById[p.id]
+        const entry = summaries[p.id]
         const summary = entry && entry.summary
-        const desc = summary
-          ? [summary.extractShort, summary.attribution].filter(Boolean).join(' ')
-          : p.description || ''
+        const desc = summary ? summary.extractShort || '' : p.description || ''
         return {
           lat: p.lat,
           lng: p.lng,
@@ -625,6 +644,9 @@ function App() {
             <strong>{summaryFoundCount}</strong> van {corridorPois.length} POI's binnen de corridor
             hebben een Wikipedia-samenvatting.
           </p>
+          <p className="muted">
+            Optioneel: bij opslaan (stap 6) worden ontbrekende samenvattingen automatisch opgehaald.
+          </p>
           <button
             type="button"
             className="btn btn-green btn-wide"
@@ -654,7 +676,12 @@ function App() {
                         {poi.label}
                       </span>
                       {entry.summary ? (
-                        <p className="summary-text">{entry.summary.extractShort}</p>
+                        <>
+                          <p className="summary-text">{entry.summary.extractShort}</p>
+                          {entry.summary.attribution && (
+                            <p className="summary-text muted">{entry.summary.attribution}</p>
+                          )}
+                        </>
                       ) : (
                         <p className="summary-text muted">
                           Geen samenvatting ({entry.summaryError || 'onbekende reden'}); de CSV
@@ -681,7 +708,8 @@ function App() {
           />
           {summaryMissingPois.length > 0 && (
             <p className="muted">
-              Voor {summaryMissingPois.length} POI's is de samenvatting nog niet opgehaald (stap 5).
+              Voor {summaryMissingPois.length} POI's wordt de samenvatting bij opslaan eerst
+              opgehaald.
             </p>
           )}
           {isNative ? (
@@ -693,9 +721,11 @@ function App() {
               type="button"
               className="btn btn-pink btn-wide"
               onClick={exportCsv}
-              disabled={corridorPois.length === 0}
+              disabled={corridorPois.length === 0 || summaryLoading}
             >
-              CSV opslaan ({corridorPois.length} POI's)
+              {summaryLoading
+                ? 'Samenvattingen ophalen…'
+                : `CSV opslaan (${corridorPois.length} POI's)`}
             </button>
           )}
           {exportMessage && <p className="success">{exportMessage}</p>}
