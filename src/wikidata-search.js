@@ -394,6 +394,7 @@
     if (err.name === 'AbortError') return true;
     if (err.retryable === true) return true;
     if (err.name === 'TypeError') return true;
+    if (err.name === 'SyntaxError') return true; // afgebroken/onvolledige JSON-respons
     return false;
   }
 

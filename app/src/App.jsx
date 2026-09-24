@@ -342,6 +342,7 @@ function App() {
           query: {
             instanceOf: qidCategories.flatMap((c) => c.qids),
             limit: WIKIDATA_LIMIT_PER_CATEGORY * qidCategories.length,
+            optimizerHint: qidCategories.length > 1,
           },
           categoryKeyFor: (item) => categoryKeyForMatchedTypes(item, qidCategories),
         })
