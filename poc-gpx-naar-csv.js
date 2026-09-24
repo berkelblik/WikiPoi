@@ -77,6 +77,9 @@ const DEFAULT_OSM_FALLBACK_SKIP_THRESHOLD = Infinity;
 // dezelfde fysieke plek beschouwd; de OSM-versie wordt dan overgeslagen
 // (Wikidata/Wikipedia levert immers de rijkere tekst).
 const DUPLICATE_DISTANCE_METERS = 30;
+// Gelijk aan de app (app/src/App.jsx): de limiet van het gecombineerde
+// instanceOf-verzoek schaalt mee met het aantal categorieën met QID's.
+const WIKIDATA_LIMIT_PER_CATEGORY = 300;
 
 /**
  * De kernpijplijn, los van bestands-I/O en CLI-argumenten — zodat dit
@@ -186,12 +189,22 @@ async function runPipeline(options) {
     const instanceOf = poiCategories.qidsForKeys(group.keys);
     const hasPropertyPids = poiCategories.hasPropertyForKeys(group.keys);
 
+    // Aantal categorieën in deze groep met QID's: bepaalt de limiet, en bij
+    // twee of meer wordt de optimizer-hint gebruikt (net als in de app; de
+    // meting van 24 sept. 2026 liet zien dat één gecombineerd verzoek met
+    // hint bij meerdere categorieën duidelijk sneller en betrouwbaarder is).
+    const qidCategoryCount = group.keys.filter(
+      (key) => poiCategories.qidsForKeys([key]).length > 0
+    ).length;
+
     let groupWikidataCandidates = [];
 
     if (instanceOf.length > 0) {
       const instanceOfCandidates = await searchWikidataBox(bbox, {
         language: language,
         instanceOf: instanceOf,
+        limit: WIKIDATA_LIMIT_PER_CATEGORY * qidCategoryCount,
+        optimizerHint: qidCategoryCount > 1,
         userAgent: USER_AGENT,
       });
       groupWikidataCandidates = groupWikidataCandidates.concat(instanceOfCandidates);
