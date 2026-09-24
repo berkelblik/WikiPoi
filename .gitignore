@@ -1,0 +1,7 @@
+# Door poc-gpx-naar-csv.js --preview gegenereerde kaarten
+*.preview.html
+
+# Algemeen
+node_modules/
+*.log
+.DS_Store
