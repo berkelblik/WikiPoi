@@ -33,8 +33,8 @@ const WIKIDATA_MERGE_METERS = 10
 const SUMMARY_MAX_SENTENCES = 3
 
 // Triggerstraal per POI in de EuroPoi-CSV. Voorlopig vast; later eventueel
-// per categorie of instelbaar.
-const DEFAULT_TRIGGER_RADIUS_METERS = 50
+// per categorie of instelbaar. 0 = EuroPoi kiest zelf (op basis van vervoerswijze).
+const DEFAULT_TRIGGER_RADIUS_METERS = 0
 
 const MAP_HEIGHT = '320px'
 
