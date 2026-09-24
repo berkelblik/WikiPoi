@@ -101,6 +101,24 @@
   }
 
   /**
+   * Verwijdert sectiekoppen zoals "== Geschiedenis ==" of
+   * "=== Interieur ===" uit platte tekst van de TextExtracts-API
+   * (`explaintext`). Die koppen komen mee als een artikel geen of een
+   * lege inleiding heeft, en horen niet in een voor te lezen tekst.
+   * Witruimte en regeleinden worden daarna samengevoegd tot één spatie.
+   *
+   * @param {string} text
+   * @returns {string}
+   */
+  function stripSectionHeadings(text) {
+    if (!text) return '';
+    return text
+      .replace(/^[ \t]*={2,}[^=\n]*={2,}[ \t]*$/gm, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  /**
    * Bouwt de URL voor de klassieke MediaWiki-actie-API met de
    * TextExtracts-extensie (`prop=extracts`). In tegenstelling tot de
    * REST /page/summary/-endpoint (die alleen de INLEIDENDE alinea vóór
@@ -247,7 +265,7 @@
       options.maxSentences,
       options
     );
-    const richestExtract = fullBodyExtract || extract;
+    const richestExtract = stripSectionHeadings(fullBodyExtract || extract);
 
     return {
       title: data.title || parsed.title,
@@ -334,6 +352,7 @@
     buildFullBodyExtractEndpoint,
     fetchFullBodyExtract,
     truncateToSentences,
+    stripSectionHeadings,
     fetchSummary,
     fetchSummariesForCandidates,
   };
