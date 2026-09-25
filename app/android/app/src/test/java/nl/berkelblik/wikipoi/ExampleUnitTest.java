@@ -1,4 +1,4 @@
-package com.getcapacitor.myapp;
+package nl.berkelblik.wikipoi;
 
 import static org.junit.Assert.*;
 
