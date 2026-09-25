@@ -30,26 +30,59 @@ WikiPoi hergebruikt bewust de CSV/Plus Code-aanpak uit EuroPoi's bestaande `gpx2
 
 ## Status
 
-🚧 Vroege ontwikkelfase. Eerste bouwsteen (CSV/Plus Code-module) is overgenomen uit EuroPoi. Wikidata/OSM-zoeklogica en Wikipedia-samenvatting volgen.
+✅ **Werkend.** WikiPoi bestaat uit een Android-app (React + Capacitor) en een opdrachtregelscript. Beide doorzoeken Wikidata (en optioneel OpenStreetMap) langs een GPX-route en leveren een CSV op die direct in EuroPoi te importeren is. De app is getest op Android; verdere verfijning volgt.
 
-## Architectuur (voorlopig)
+## Gebruik
+
+### De app (Android)
+
+De app leidt je in zes stappen van route naar CSV:
+
+1. **Route** — kies een GPX-bestand (track of route).
+2. **Categorieën** — vink aan wat je zoekt (bijv. kerken, molens, kastelen, oorlogsgeschiedenis); je hoeft niets van Wikidata te weten.
+3. **Zoeken** — WikiPoi doorzoekt Wikidata (en waar nodig OpenStreetMap) binnen de zoekstrook, met een voortgangsmelding en teller.
+4. **Kaart** — de route en de gevonden POI's op een kaart; met een schuifje stel je de breedte van de strook (corridor) in. Alleen POI's binnen die strook komen in de CSV.
+5. **Samenvattingen** — per POI de korte Wikipedia-tekst die EuroPoi onderweg voorleest.
+6. **Exporteren** — sla de CSV op en deel hem direct, bijvoorbeeld met EuroPoi.
+
+POI's die (vrijwel) op dezelfde plek liggen — zoals twee Wikidata-items voor één pand — worden automatisch samengevoegd tot één POI met gecombineerde naam.
+
+### Het script (Node.js)
+
+Voor ontwikkelaars en voor het in bulk verwerken van routes:
+
+```
+node poc-gpx-naar-csv.js <invoer.gpx> [uitvoer] [zoekstraal_m] [trigger_afstand_m] [categorieën,komma,gescheiden] [osm_skip_drempel] [--preview]
+```
+
+Voorbeeld met de meegeleverde testroute:
+
+```
+node poc-gpx-naar-csv.js examples/voorbeeldroute-achterhoek.gpx /tmp/test.csv 400 400 kerken,molens,kastelen,oorlogsgeschiedenis
+```
+
+Met `0` als zesde argument wordt de OpenStreetMap-aanvulling overgeslagen. Lukt de OSM-aanvulling niet (bijvoorbeeld omdat Overpass overbelast is), dan gaat het script door met alleen de Wikidata-resultaten.
+
+## Architectuur
 
 ```
 GPX-route
    │
    ▼
-[ Route-buffer berekenen ]         ~400m aan weerszijden van de lijn (ruime
-   │                               zoekstraal, proefondervindelijk te
-   │                               verfijnen — zie "Twee afstandsbegrippen")
+[ Route-buffer berekenen ]         zoekstrook (standaard ~400m) aan weerszijden
+   │                               van de lijn — zie "Twee afstandsbegrippen"
    ▼
-[ Wikidata SPARQL-query ]          monumenten/POI's binnen de buffer
-   │  (aangevuld met OpenStreetMap waar Wikidata leeg is)
+[ Wikidata SPARQL-query ]          POI's van de gekozen categorieën binnen de
+   │                               strook; dichtbij elkaar liggende items
+   │                               worden samengevoegd
+   │  (aangevuld met OpenStreetMap)
    ▼
 [ Wikipedia-samenvatting ophalen ] 2-3 zinnen per POI, via /page/summary/
    │
    ▼
-[ Preview & trigger-afstand ]      gebruiker ziet gevonden punten + afstand
-   │                               tot de route, stelt trigger-afstand in
+[ Kaart / preview ]                gebruiker ziet gevonden punten + afstand
+   │                               tot de route; app: strook instellen,
+   │                               script: trigger-afstand als argument
    ▼
 [ EuroPoi-CSV genereren ]          src/europoi-csv.js (hergebruikt);
    │                               category = routenaam, radius = trigger-afstand
@@ -76,12 +109,22 @@ Voordat de definitieve CSV wordt gegenereerd, toont WikiPoi een **preview**: all
 
 ## Bouwstenen (modulair, zoals ook EuroPoi is opgezet)
 
+De gedeelde modules staan in `src/` en worden zowel door het script als door de app gebruikt:
+
+- **`src/route-buffer.js`** — leest een GPX-track of -route en bepaalt of een punt binnen de zoekstrook ligt
+- **`src/poi-categories.js`** — de vaste, aanvinkbare categorieën met hun Wikidata-QID's en OSM-tags
+- **`src/wikidata-search.js`** — SPARQL-query naar de Wikidata Query Service, met herhaalpogingen bij drukte en samenvoegen van items op dezelfde plek
+- **`src/osm-fallback.js`** — aanvullende zoekactie via OpenStreetMap/Overpass
+- **`src/wikipedia-summary.js`** — haalt Wikipedia-samenvattingen op en kort ze in
 - **`src/europoi-csv.js`** — Plus Code-encoder + CSV-writer (overgenomen uit EuroPoi's `gpx2europoi.html`, ongewijzigd qua uitvoerformaat)
-- **`src/route-buffer.js`** *(nog te bouwen)* — berekent een zoekgebied (~400m) rond een GPX-track
-- **`src/wikidata-search.js`** *(nog te bouwen)* — SPARQL-query naar de Wikidata Query Service
-- **`src/wikipedia-summary.js`** *(nog te bouwen)* — haalt en verkort Wikipedia-samenvattingen
-- **`src/osm-fallback.js`** *(nog te bouwen)* — aanvullende zoekactie via OpenStreetMap/Overpass waar Wikidata niets oplevert
-- **`src/trigger-preview.js`** *(nog te bouwen)* — toont gevonden punten met afstand tot de route en laat de gebruiker de trigger-afstand instellen
+- **`src/preview-html.js`** — maakt een losse HTML-preview met kaart (optie `--preview` van het script)
+- **`src/test-wikidata-dedupe.js`** en **`src/test-osm-dedupe.js`** — netwerkloze tests van het samenvoegen en ontdubbelen
+
+Daarnaast:
+
+- **`app/`** — de React/Capacitor-app (Android); de kaart staat in `app/src/components/RouteMap.jsx`
+- **`poc-gpx-naar-csv.js`** — het opdrachtregelscript dat de modules tot één pijplijn verbindt
+- **`examples/`** — GPX-testroutes
 
 Elk blokje is losstaand testbaar en vervangbaar — als een van de externe bronnen (Wikidata, Wikipedia, OSM) van API verandert, hoeft alleen dat blokje aangepast te worden.
 
