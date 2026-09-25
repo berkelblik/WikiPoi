@@ -263,7 +263,7 @@
         // dus GEEN aparte hunebed-QID nodig. Overlapt met de bestaande,
         // los aanvinkbare "archeologie"-categorie hierboven — geen
         // probleem, qidsForKeys() dedupliceert QID's toch al.
-        'Q127418', // [aanname, NIET geverifieerd] burial mound (grafheuvel)
+        'Q34023', // [geverifieerd] tumulus/grafheuvel (eerder foutief Q127418 = inkt)
         'Q91203', // [afgeleid] schans (uit labelzoekopdracht "schans", Naarden/Bourtange/Achterhoek)
         'Q57821', // [afgeleid] verdedigingswerk/fortification (idem)
       ],
@@ -329,7 +329,7 @@
         es: 'Estatuas y monumentos conmemorativos (no bélicos; los monumentos de guerra ya están en Historia bélica)',
       },
       qids: [
-        'Q179700', // [aanname, NIET geverifieerd] statue (standbeeld)
+        'Q179700', // [geverifieerd] statue (standbeeld)
         'Q11734477', // [afgeleid] gedenksteen — uit labelzoekopdracht "monument", meestal samen met oorlogsmonument gevonden
         'Q721747', // [afgeleid] gedenkplaat
         'Q51845395', // [afgeleid] gedenkzuil
