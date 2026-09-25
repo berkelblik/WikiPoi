@@ -91,7 +91,21 @@ Zie [`CONTRIBUTING.md`](CONTRIBUTING.md). Dit project is open-source; iedereen d
 
 ## Licentie
 
-Nog te bepalen — waarschijnlijk MIT voor eigen code. De Plus Code-encoder in `src/europoi-csv.js` is een poort van Google's officiële [Open Location Code](https://github.com/google/open-location-code)-implementatie (Apache License 2.0) en behoudt die licentie/copyright-notice.
+Copyright (C) 2026 Peter Drukker (en diens rechthebbenden).
+
+WikiPoi is vrije software: je mag het verspreiden en/of aanpassen onder de voorwaarden van de **GNU General Public License**, zoals gepubliceerd door de Free Software Foundation, uitsluitend versie 3 (`GPL-3.0-only`). Wie een aangepaste versie verspreidt, moet die onder dezelfde licentie openbaar maken. WikiPoi wordt verspreid in de hoop dat het nuttig is, maar ZONDER ENIGE GARANTIE. Zie het bestand [`LICENSE`](LICENSE) voor de volledige tekst.
+
+De Plus Code-encoder in `src/europoi-csv.js` is een poort van Google's officiële [Open Location Code](https://github.com/google/open-location-code)-implementatie (Apache License 2.0) en behoudt die licentie/copyright-notice. Apache 2.0-code mag in een GPL-3.0-project worden opgenomen.
+
+### Gegevensbronnen
+
+De licentie hierboven geldt voor de programmacode. Voor de gegevens die WikiPoi ophaalt, en dus voor de inhoud van de gemaakte CSV-bestanden, gelden de voorwaarden van de bronnen:
+
+- **Wikidata** — [CC0](https://creativecommons.org/publicdomain/zero/1.0/) (vrij te gebruiken)
+- **Wikipedia**-samenvattingen — [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) (bronvermelding en gelijk delen)
+- **OpenStreetMap** — [ODbL](https://www.openstreetmap.org/copyright) (bronvermelding: © OpenStreetMap-bijdragers)
+
+Wie gemaakte CSV-bestanden openbaar deelt, vermeldt daarbij de bronnen.
 
 ## Gerelateerd
 
