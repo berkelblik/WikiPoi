@@ -40,8 +40,8 @@ const WIKIDATA_LIMIT_PER_CATEGORY = 300
 
 const SUMMARY_MAX_SENTENCES = 3
 
-// Triggerstraal per POI in de EuroPoi-CSV. Voorlopig vast; later eventueel
-// per categorie of instelbaar. 0 = EuroPoi kiest zelf (op basis van vervoerswijze).
+// Triggerstraal per POI in de EuroPoi-CSV: altijd 0, EuroPoi kiest zelf
+// (op basis van vervoerswijze en, in route-modus, de afstand tot de route).
 const DEFAULT_TRIGGER_RADIUS_METERS = 0
 
 const MAP_HEIGHT = '320px'

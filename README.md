@@ -61,6 +61,8 @@ Voorbeeld met de meegeleverde testroute:
 node poc-gpx-naar-csv.js examples/voorbeeldroute-achterhoek.gpx /tmp/test.csv 400 400 kerken,molens,kastelen,oorlogsgeschiedenis
 ```
 
+Het vierde argument (`trigger_afstand_m`) bepaalt welke gevonden POI's in de CSV komen: alleen punten binnen die afstand van de route gaan mee, net als de strook in de app. Het `radius`-veld in de CSV staat altijd op 0 (zie "Twee afstandsbegrippen").
+
 Met `0` als zesde argument wordt de OpenStreetMap-aanvulling overgeslagen. Lukt de OSM-aanvulling niet (bijvoorbeeld omdat Overpass overbelast is), dan gaat het script door met alleen de Wikidata-resultaten.
 
 ## Architectuur
@@ -82,10 +84,10 @@ GPX-route
    ▼
 [ Kaart / preview ]                gebruiker ziet gevonden punten + afstand
    │                               tot de route; app: strook instellen,
-   │                               script: trigger-afstand als argument
+   │                               script: afstand als vierde argument
    ▼
 [ EuroPoi-CSV genereren ]          src/europoi-csv.js (hergebruikt);
-   │                               category = routenaam, radius = trigger-afstand
+   │                               category = routenaam, radius = 0
    ▼
 CSV klaar voor import in EuroPoi
 ```
@@ -97,15 +99,17 @@ WikiPoi onderscheidt bewust twee verschillende afstanden, die niet hetzelfde zij
 | Parameter | Doel | Typische waarde |
 |---|---|---|
 | **Zoekstraal** | Hoe ver van de route Wikidata/OSM wordt doorzocht naar kandidaten | ~400m (ruim, om niets te missen) |
-| **Trigger-afstand** | Vanaf welke afstand de audio in EuroPoi daadwerkelijk afspeelt | Door de gebruiker instelbaar, per POI meegegeven als `radius`-veld in de CSV |
+| **Strook (corridor)** | Welke gevonden punten in de CSV komen | App: schuifje bij stap 4 (50–500m); script: vierde argument |
 
-Door ruim te zoeken (400m) maar de trigger-afstand apart en instelbaar te houden, kan de gebruiker na het zoeken — zonder opnieuw te hoeven zoeken — proefondervindelijk bepalen welke gevonden punten daadwerkelijk relevant genoeg zijn om onderweg te triggeren.
+Door ruim te zoeken maar de strook apart instelbaar te houden, kan de gebruiker na het zoeken — zonder opnieuw te hoeven zoeken — bepalen welke gevonden punten relevant genoeg zijn om mee te nemen.
+
+De **triggerstraal** (vanaf welke afstand EuroPoi de audio afspeelt) bepaalt WikiPoi bewust niet: het `radius`-veld in de CSV staat altijd op 0. EuroPoi kiest dan zelf de juiste straal, op basis van de vervoerswijze en, in route-modus, de afstand van het punt tot de route.
 
 ### Koppeling met EuroPoi's trigger-mechanisme
 
 EuroPoi triggert een POI alleen wanneer het `category`-veld van die POI *exact* overeenkomt met de naam van de ingeladen route (GPX-bestand). Omdat WikiPoi de route al vooraf inleest, vult het automatisch `category` met de routenaam (uit de `<name>`-tag in de GPX, met de bestandsnaam als fallback) voor elke gevonden POI. Zo werkt de gegenereerde CSV meteen correct in EuroPoi, zonder dat de gebruiker dat handmatig hoeft aan te passen.
 
-Voordat de definitieve CSV wordt gegenereerd, toont WikiPoi een **preview**: alle gevonden punten met hun afstand tot de route. De gebruiker stelt daar de trigger-afstand in en ziet direct welke punten daarmee wel of niet zouden triggeren.
+Voordat de definitieve CSV wordt gegenereerd, toont WikiPoi een **preview**: alle gevonden punten met hun afstand tot de route. De gebruiker stelt daar de breedte van de strook in en ziet direct welke punten daarmee wel of niet in de CSV komen.
 
 ## Bouwstenen (modulair, zoals ook EuroPoi is opgezet)
 

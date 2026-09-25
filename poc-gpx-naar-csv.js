@@ -392,7 +392,7 @@ async function runPipeline(options) {
       name: c.label,
       desc: desc,
       category: routeName,
-      radius: triggerDistanceMeters,
+      radius: 0, // altijd 0: EuroPoi bepaalt zelf de triggerstraal
       mp3: '',
     };
   });
