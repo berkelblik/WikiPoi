@@ -174,7 +174,7 @@
     for (const re of patterns) {
       const m = gpxText.match(re);
       if (m && m[1].trim()) {
-        return m[1].trim();
+        return m[1].trim().replace(/^<!\[CDATA\[([\s\S]*)\]\]>$/, "$1").replace(/&amp;/g, "&").trim();
       }
     }
     return null;

@@ -2,11 +2,20 @@
  * wikidata-search.js
  *
  * Zoekt Wikidata-items met een coördinaat (P625) binnen een bounding box
- * (zoals geleverd door route-buffer.js → getBoundingBox()), en die een
- * Wikipedia-artikel hebben in de gewenste taal.
+ * (zoals geleverd door route-buffer.js → getBoundingBox()).
+ *
+ * Taal (sinds sept. 2026): er is GEEN verplicht Wikipedia-artikel meer in
+ * één vaste taal. Daardoor vond WikiPoi buiten NL/Vlaanderen vrijwel niets
+ * (veldtest Morvan: 0 Wikidata-POI's). Nu wordt per item het beste artikel
+ * gekozen uit een lijst talen in voorkeursvolgorde (options.languages, of
+ * options.language gevolgd door DEFAULT_FALLBACK_LANGUAGES). Items zonder
+ * artikel in één van die talen komen ook mee (wikipediaUrl = null), tenzij
+ * options.requireArticle aan staat. Resultaten worden gesorteerd op het
+ * aantal Wikipedia-koppelingen (sitelinks), zodat bij het bereiken van de
+ * limiet de bekendste items blijven.
  *
  * Ondersteunt twee, elkaar uitsluitende, filtermodi bovenop de basis
- * coördinaat+artikel-voorwaarde:
+ * coördinaatvoorwaarde:
  *   - options.instanceOf  — "is instance-of/subclass-of één van deze QID's"
  *     (bestaande modus, bijv. voor kastelen, molens, kerken, ...)
  *   - options.hasProperty — "heeft deze eigenschap (PID)", bijv. P359
@@ -66,6 +75,16 @@
 
   const WIKIDATA_SPARQL_ENDPOINT = 'https://query.wikidata.org/sparql';
   const DEFAULT_LANGUAGE = 'nl';
+  // Terugvaltalen voor het Wikipedia-artikel, na de eerste (telefoon)taal.
+  // Elke taal is een extra OPTIONAL in de query; houd de lijst kort.
+  const DEFAULT_FALLBACK_LANGUAGES = ['en', 'fr', 'de'];
+  const MAX_LANGUAGES = 6;
+  // Extra labeltaal direct na de eerste taal: 'mul' = taalonafhankelijk
+  // label (Wikidata, sinds 2024), vaak gevuld bij eigennamen.
+  const LABEL_EXTRA_LANGUAGES = ['mul'];
+  // Toegestane taalcodes (bijv. 'nl', 'fr', 'be-tarask'); voorkomt dat een
+  // vreemde waarde uit navigator.language in de querytekst belandt.
+  const LANGUAGE_CODE_RE = /^[a-z]{2,3}(-[a-z0-9]+)*$/;
   const DEFAULT_LIMIT = 300;
   const DEFAULT_TIMEOUT_MS = 40000;
   const DEFAULT_MAX_RETRIES = 2; // 2 automatische herhalingen = max. 3 pogingen totaal
@@ -76,12 +95,59 @@
   const RETRYABLE_HTTP_STATUS = [429, 500, 502, 503, 504];
 
   /**
+   * Bepaalt de lijst talen (voorkeursvolgorde) voor artikel en label.
+   * - options.languages (array) heeft voorrang;
+   * - anders options.language (bijv. telefoontaal) gevolgd door
+   *   DEFAULT_FALLBACK_LANGUAGES.
+   * Codes worden naar kleine letters gezet; een regiovariant zoals 'nl-NL'
+   * of 'fr-BE' (uit navigator.language) wordt afgekapt tot 'nl' / 'fr'.
+   * Ongeldige en dubbele codes vallen weg; maximaal MAX_LANGUAGES. Blijft
+   * er niets over, dan DEFAULT_LANGUAGE + terugvaltalen.
+   *
+   * @param {object} [options]
+   * @returns {string[]}
+   */
+  function resolveLanguages(options) {
+    options = options || {};
+    let raw;
+    if (Array.isArray(options.languages) && options.languages.length > 0) {
+      raw = options.languages.slice();
+    } else {
+      raw = [options.language || DEFAULT_LANGUAGE].concat(DEFAULT_FALLBACK_LANGUAGES);
+    }
+    const out = [];
+    for (const code of raw) {
+      if (typeof code !== 'string') continue;
+      let c = code.trim().toLowerCase().replace(/_/g, '-');
+      // Regiovarianten als 'nl-nl', 'en-gb', 'fr-be' → 'nl', 'en', 'fr'.
+      if (/^[a-z]{2,3}-[a-z]{2}$/.test(c)) c = c.split('-')[0];
+      if (!LANGUAGE_CODE_RE.test(c)) continue;
+      if (!out.includes(c)) out.push(c);
+      if (out.length >= MAX_LANGUAGES) break;
+    }
+    if (out.length === 0) {
+      return [DEFAULT_LANGUAGE].concat(DEFAULT_FALLBACK_LANGUAGES);
+    }
+    return out;
+  }
+
+  /**
    * Bouwt de SPARQL-query voor een bounding-box-zoekopdracht.
+   *
+   * Per taal uit resolveLanguages() een aparte OPTIONAL-variabele ?art0,
+   * ?art1, … (genummerd, omdat taalcodes een streepje kunnen bevatten), zodat
+   * er één rij per item blijft. parseSparqlResults() kiest daarna het eerste
+   * gevulde artikel.
    *
    * @param {{minLat:number,maxLat:number,minLng:number,maxLng:number}} bbox
    * @param {object} [options]
-   * @param {string} [options.language='nl'] - taalcode voor label/artikel
-   * @param {number} [options.limit=500] - max. aantal resultaten
+   * @param {string} [options.language='nl'] - eerste (voorkeurs)taal voor
+   *   artikel en label, bijv. de telefoontaal
+   * @param {string[]} [options.languages] - volledige taallijst in
+   *   voorkeursvolgorde; heeft voorrang op options.language
+   * @param {boolean} [options.requireArticle=false] - alleen items met een
+   *   artikel in minstens één van de talen
+   * @param {number} [options.limit=300] - max. aantal resultaten
    * @param {string[]} [options.instanceOf] - optionele lijst Wikidata-QIDs
    *   (bijv. ['Q570116','Q2319498']) om te filteren op "instance of / subclass
    *   of" een van deze typen (bijv. monument, bezienswaardigheid). Heeft
@@ -99,7 +165,7 @@
    */
   function buildBoxQuery(bbox, options) {
     options = options || {};
-    const lang = options.language || DEFAULT_LANGUAGE;
+    const languages = resolveLanguages(options);
     const limit = options.limit || DEFAULT_LIMIT;
     const instanceOf = options.instanceOf;
     const hasProperty = options.hasProperty;
@@ -126,8 +192,30 @@
     // om verwarring elders te voorkomen).
     const hintClause = options.optimizerHint ? '  hint:Query hint:optimizer "None" .\n' : '';
 
+    const articleVars = languages.map((l, i) => '?art' + i);
+    const articleClauses = languages
+      .map(
+        (l, i) =>
+          '  OPTIONAL { ?art' +
+          i +
+          ' schema:about ?item ; schema:isPartOf <https://' +
+          l +
+          '.wikipedia.org/> . }\n'
+      )
+      .join('');
+    const requireClause = options.requireArticle
+      ? '  FILTER(' + articleVars.map((v) => 'BOUND(' + v + ')').join(' || ') + ')\n'
+      : '';
+    const labelLanguages = [];
+    [languages[0]]
+      .concat(LABEL_EXTRA_LANGUAGES, languages.slice(1))
+      .forEach((l) => {
+        if (!labelLanguages.includes(l)) labelLanguages.push(l);
+      });
+
     return (
-      'SELECT ?item ?itemLabel ?itemDescription ?location ?article' +
+      'SELECT ?item ?itemLabel ?itemDescription ?location ?sitelinks ' +
+      articleVars.join(' ') +
       propertyValueSelect +
       ' WHERE {\n' +
       hintClause +
@@ -144,16 +232,16 @@
       bbox.maxLat +
       ')"^^geo:wktLiteral .\n' +
       '  }\n' +
-      '  ?article schema:about ?item ;\n' +
-      '           schema:isPartOf <https://' +
-      lang +
-      '.wikipedia.org/> .\n' +
       '  ' +
       typeClause +
-      'SERVICE wikibase:label { bd:serviceParam wikibase:language "' +
-      lang +
-      ',en". }\n' +
+      '?item wikibase:sitelinks ?sitelinks .\n' +
+      articleClauses +
+      requireClause +
+      '  SERVICE wikibase:label { bd:serviceParam wikibase:language "' +
+      labelLanguages.join(',') +
+      '". }\n' +
       '}\n' +
+      'ORDER BY DESC(?sitelinks)\n' +
       'LIMIT ' +
       limit
     );
@@ -176,7 +264,15 @@
    * te testen is (bijv. met een opgeslagen voorbeeldrespons).
    *
    * @param {object} sparqlJson - de gedecodeerde JSON-respons
-   * @returns {Array<{id:string,label:string,description:?string,lat:number,lng:number,wikipediaUrl:?string,propertyValue:?string,matchedTypes:?string[]}>}
+   * @param {string[]} [languages] - de taallijst waarmee de query is
+   *   gebouwd (resolveLanguages()); ?art0 hoort bij languages[0], enz.
+   *   Zonder deze lijst wordt alleen het oude ?article-veld gelezen.
+   * @returns {Array<{id:string,label:string,description:?string,lat:number,lng:number,wikipediaUrl:?string,articleLanguage:?string,sitelinks:number,propertyValue:?string,matchedTypes:?string[]}>}
+   *   `wikipediaUrl` is het eerste gevonden artikel in voorkeursvolgorde,
+   *   `articleLanguage` de taal daarvan (null zonder artikel).
+   *   `articles` bevat ALLE gevonden artikelen als { taal: url }, zodat de
+   *   app later zelf een andere keuze kan maken (bijv. met DeepL-sleutel
+   *   liever het artikel in de lokale taal dan het Engelse).
    *   `propertyValue` is alleen aanwezig als de query met options.hasProperty
    *   is opgebouwd en de binding een waarde voor ?propertyValue bevat.
    *   `matchedTypes` is alleen aanwezig als de query met options.instanceOf
@@ -184,7 +280,7 @@
    *   Eén item kan dan meerdere keren voorkomen (één keer per QID);
    *   dedupeById() voegt de matchedTypes van zulke dubbelen samen.
    */
-  function parseSparqlResults(sparqlJson) {
+  function parseSparqlResults(sparqlJson, languages) {
     const bindings =
       (sparqlJson && sparqlJson.results && sparqlJson.results.bindings) || [];
 
@@ -203,8 +299,30 @@
         description: b.itemDescription ? b.itemDescription.value : null,
         lat: point.lat,
         lng: point.lng,
-        wikipediaUrl: b.article ? b.article.value : null,
+        wikipediaUrl: null,
+        articleLanguage: null,
+        sitelinks: b.sitelinks ? parseInt(b.sitelinks.value, 10) || 0 : 0,
+        articles: {},
       };
+      if (Array.isArray(languages)) {
+        for (let i = 0; i < languages.length; i++) {
+          const art = b['art' + i];
+          if (art && art.value) {
+            result.articles[languages[i]] = art.value;
+            if (!result.wikipediaUrl) {
+              result.wikipediaUrl = art.value;
+              result.articleLanguage = languages[i];
+            }
+          }
+        }
+      }
+      if (!result.wikipediaUrl && b.article && b.article.value) {
+        // Oud formaat (één ?article): taal uit de URL halen.
+        result.wikipediaUrl = b.article.value;
+        const m = /^https?:\/\/([a-z0-9-]+)\.wikipedia\.org\//i.exec(b.article.value);
+        result.articleLanguage = m ? m[1].toLowerCase() : null;
+        if (result.articleLanguage) result.articles[result.articleLanguage] = result.wikipediaUrl;
+      }
       if (b.propertyValue && b.propertyValue.value !== undefined) {
         result.propertyValue = b.propertyValue.value;
       }
@@ -415,6 +533,7 @@
    */
   async function searchWikidataBox(bbox, options) {
     options = options || {};
+    const languages = resolveLanguages(options);
     const query = buildBoxQuery(bbox, options);
     const url =
       WIKIDATA_SPARQL_ENDPOINT + '?format=json&query=' + encodeURIComponent(query);
@@ -437,7 +556,7 @@
         // hiërarchie aan het instanceOf-filter voldoet. Dedupliceren
         // voorkomt dat de aanroeper (en uiteindelijk de CSV) hetzelfde
         // punt dubbel krijgt.
-        return dedupeById(parseSparqlResults(data));
+        return dedupeById(parseSparqlResults(data, languages));
       } catch (err) {
         lastError = err;
         const hasRetriesLeft = attempt < maxRetries;
@@ -454,6 +573,7 @@
   }
 
   return {
+    resolveLanguages,
     buildBoxQuery,
     parseWktPoint,
     parseSparqlResults,
