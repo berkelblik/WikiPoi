@@ -127,6 +127,8 @@ function App() {
   // Seconden sinds de huidige voortgangsmelding verscheen (zie effect hieronder).
   const [progressSeconds, setProgressSeconds] = useState(0)
   const [searchError, setSearchError] = useState('')
+  // Melding als OpenStreetMap faalde; de Wikidata-resultaten blijven dan staan.
+  const [osmWarning, setOsmWarning] = useState('')
   const [showMap, setShowMap] = useState(true)
   const [corridorMeters, setCorridorMeters] = useState(CORRIDOR_DEFAULT_METERS)
   // Samenvattingen per POI-id: { summary, summaryError }. Een id dat hier
@@ -241,6 +243,7 @@ function App() {
     setMergedCount(0)
     setSearchProgress('')
     setSearchError('')
+    setOsmWarning('')
     setSummariesById({})
     setSummaryError('')
     setExportMessage('')
@@ -393,13 +396,23 @@ function App() {
         item.categoryKey ? item : { ...item, categoryKey: categoryKeyById.get(item.id) || null }
       )
 
+      // Faalt OpenStreetMap (bijv. HTTP 429 Too Many Requests), dan gaan de
+      // al gevonden Wikidata-resultaten niet verloren: de zoekactie gaat
+      // verder zonder OSM en toont een melding (zoals het script).
       let osm = []
-      for (const category of osmCategories) {
-        done += 1
-        setSearchProgress(`OpenStreetMap: ${category.label} (${done} van ${total})`)
-        const tagFilterGroups = window.WikiPoiCategories.osmTagFiltersForKeys([category.key])
-        const found = await window.WikiPoiOsmFallback.searchOverpass(routeInfo.bbox, tagFilterGroups)
-        osm = osm.concat(found.map((item) => ({ ...item, categoryKey: category.key })))
+      try {
+        for (const category of osmCategories) {
+          done += 1
+          setSearchProgress(`OpenStreetMap: ${category.label} (${done} van ${total})`)
+          const tagFilterGroups = window.WikiPoiCategories.osmTagFiltersForKeys([category.key])
+          const found = await window.WikiPoiOsmFallback.searchOverpass(routeInfo.bbox, tagFilterGroups)
+          osm = osm.concat(found.map((item) => ({ ...item, categoryKey: category.key })))
+        }
+      } catch (err) {
+        osm = []
+        setOsmWarning(
+          'Let op: OpenStreetMap niet beschikbaar (' + (err && err.message ? err.message : String(err)) + '). Resultaten zonder OpenStreetMap.'
+        )
       }
       osm = dedupeFirstWins(osm)
       // OSM-punten die al via Wikidata gevonden zijn, of geen bruikbare
@@ -670,6 +683,7 @@ function App() {
               {useOsm && `, waarvan ${osmFoundCount} via OpenStreetMap`}.
             </p>
           )}
+          {osmWarning && <p className="error">{osmWarning}</p>}
           {searchError && <p className="error">{searchError}</p>}
         </Step>
 
