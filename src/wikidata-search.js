@@ -270,6 +270,9 @@
    * @returns {Array<{id:string,label:string,description:?string,lat:number,lng:number,wikipediaUrl:?string,articleLanguage:?string,sitelinks:number,propertyValue:?string,matchedTypes:?string[]}>}
    *   `wikipediaUrl` is het eerste gevonden artikel in voorkeursvolgorde,
    *   `articleLanguage` de taal daarvan (null zonder artikel).
+   *   `labelLanguage` / `descriptionLanguage`: de taal waarin de
+   *   labelservice naam en omschrijving leverde (uit 'xml:lang'), of null.
+   *   Nodig om de omschrijving met de juiste stem voor te lezen.
    *   `articles` bevat ALLE gevonden artikelen als { taal: url }, zodat de
    *   app later zelf een andere keuze kan maken (bijv. met DeepL-sleutel
    *   liever het artikel in de lokale taal dan het Engelse).
@@ -296,7 +299,9 @@
       const result = {
         id: id,
         label: b.itemLabel ? b.itemLabel.value : id || 'Onbekend',
+        labelLanguage: (b.itemLabel && b.itemLabel['xml:lang']) || null,
         description: b.itemDescription ? b.itemDescription.value : null,
+        descriptionLanguage: (b.itemDescription && b.itemDescription['xml:lang']) || null,
         lat: point.lat,
         lng: point.lng,
         wikipediaUrl: null,

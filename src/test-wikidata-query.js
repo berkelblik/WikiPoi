@@ -108,8 +108,8 @@ const fake = {
       {
         // geen enkel artikel → meenemen zonder wikipediaUrl
         item: ent('Q3'),
-        itemLabel: { value: 'Croix de chemin' },
-        itemDescription: { value: 'croix de chemin en Bourgogne' },
+        itemLabel: { value: 'Croix de chemin', 'xml:lang': 'fr' },
+        itemDescription: { value: 'croix de chemin en Bourgogne', 'xml:lang': 'fr' },
         location: pt(4.1, 47.15),
         sitelinks: { value: '0' },
         type: ent('Q16970'),
@@ -151,6 +151,14 @@ test('parse: item zonder artikel blijft, met naam en omschrijving', () => {
   assert.strictEqual(r[2].label, 'Croix de chemin');
   assert.strictEqual(r[2].description, 'croix de chemin en Bourgogne');
   assert.strictEqual(r[2].sitelinks, 0);
+});
+
+test('parse: taal van label en omschrijving uit xml:lang', () => {
+  const r = parseSparqlResults(fake, languages);
+  assert.strictEqual(r[2].labelLanguage, 'fr');
+  assert.strictEqual(r[2].descriptionLanguage, 'fr');
+  assert.strictEqual(r[0].labelLanguage, null);
+  assert.strictEqual(r[0].descriptionLanguage, null);
 });
 
 test('parse + dedupeById: matchedTypes samengevoegd', () => {

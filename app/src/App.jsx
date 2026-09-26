@@ -11,6 +11,7 @@ import { Share } from '@capacitor/share'
 import RouteMap from './components/RouteMap.jsx'
 import Onderweg from './onderweg/Onderweg.jsx'
 import { getCategoryStyle } from './components/poi-icons.js'
+import { telefoonTaal } from './taal.js'
 import './App.css'
 
 // WikiPoi — één doorlopende flow in zeven stappen:
@@ -349,6 +350,9 @@ function App() {
         wikidataJobs.push({
           label: qidCategories.length === 1 ? qidCategories[0].label : 'alle categorieën',
           query: {
+            // Artikel en naam bij voorkeur in de taal van de telefoon; de
+            // module vult zelf aan met terugvaltalen (en, fr, de).
+            language: telefoonTaal(),
             instanceOf: qidCategories.flatMap((c) => c.qids),
             limit: WIKIDATA_LIMIT_PER_CATEGORY * qidCategories.length,
             optimizerHint: qidCategories.length > 1,
@@ -361,7 +365,7 @@ function App() {
         .forEach((c) => {
           wikidataJobs.push({
             label: c.label,
-            query: { hasProperty: c.hasProperty },
+            query: { language: telefoonTaal(), hasProperty: c.hasProperty },
             categoryKeyFor: () => c.key,
           })
         })
@@ -735,7 +739,7 @@ function App() {
                         {Number.isFinite(poi.distanceToRoute)
                           ? `${Math.round(poi.distanceToRoute)} m`
                           : 'afstand onbekend'}
-                        )
+                        {!poi.wikipediaUrl && ', geen artikel'})
                       </span>
                     </span>
                   </li>
@@ -788,6 +792,13 @@ function App() {
                             <p className="summary-text muted">{entry.summary.attribution}</p>
                           )}
                         </>
+                      ) : !poi.wikipediaUrl ? (
+                        <p className="summary-text muted">
+                          Geen Wikipedia-artikel.{' '}
+                          {poi.description
+                            ? `De CSV gebruikt de omschrijving: „${poi.description}”.`
+                            : 'Er is ook geen omschrijving; alleen de naam gaat mee.'}
+                        </p>
                       ) : (
                         <p className="summary-text muted">
                           Geen samenvatting ({entry.summaryError || 'onbekende reden'}); de CSV
