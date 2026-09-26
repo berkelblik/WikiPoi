@@ -9,12 +9,14 @@ import { Capacitor } from '@capacitor/core'
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem'
 import { Share } from '@capacitor/share'
 import RouteMap from './components/RouteMap.jsx'
+import Onderweg from './onderweg/Onderweg.jsx'
 import { getCategoryStyle } from './components/poi-icons.js'
 import './App.css'
 
-// WikiPoi — één doorlopende flow in zes stappen:
+// WikiPoi — één doorlopende flow in zeven stappen:
 //   1. Route (GPX)  2. Categorieën (+ optioneel OSM)  3. Zoeken
 //   4. Kaart met corridor-slider  5. Wikipedia-samenvattingen  6. CSV voor EuroPoi
+//   7. Onderweg (zelfstandig gebruik: GPS volgen langs de route)
 // Een stap wordt pas bruikbaar als de vorige klaar is. Wie route, categorieën
 // of de OSM-schakelaar wijzigt, maakt eerdere zoekresultaten ongeldig; die
 // worden dan gewist (resetResults).
@@ -846,6 +848,15 @@ function App() {
           </button>
           {exportMessage && <p className="success">{exportMessage}</p>}
           {exportError && <p className="error">{exportError}</p>}
+        </Step>
+
+        <Step
+          number={7}
+          title="Onderweg"
+          disabled={corridorPois.length === 0}
+          hint="Zoek eerst POI's bij stap 3; er moet minstens één POI binnen de corridor liggen."
+        >
+          <Onderweg pois={corridorPois} summariesById={summariesById} />
         </Step>
       </main>
     </>
