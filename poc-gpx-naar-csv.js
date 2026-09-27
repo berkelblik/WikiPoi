@@ -15,6 +15,8 @@
  *     → osm-fallback.js       (draait standaard ALTIJD aanvullend mee, per straal-groep)
  *     → route-buffer.js       (werkelijke afstand tot de route berekenen)
  *     → wikipedia-summary.js  (samenvatting per kandidaat ophalen)
+ *     → gemeente-terugval.js  (geen eigen artikel: zinnen uit het artikel van
+ *                               de plaats/gemeente, met diagnose in de uitvoer)
  *     → ÓF europoi-csv.js     (CSV met BOM/CRLF genereren)
  *       ÓF preview-html.js    (bij --preview: HTML-kaart met trigger-schuifje)
  *
@@ -55,6 +57,7 @@ const poiCategories = require('./src/poi-categories.js');
 const wikidataSearch = require('./src/wikidata-search.js');
 const osmFallback = require('./src/osm-fallback.js');
 const wikipediaSummary = require('./src/wikipedia-summary.js');
+const gemeenteTerugval = require('./src/gemeente-terugval.js');
 const europoiCsv = require('./src/europoi-csv.js');
 
 const USER_AGENT = 'WikiPoi/0.1 (https://github.com/berkelblik/WikiPoi)';
@@ -132,6 +135,7 @@ async function runPipeline(options) {
     searchWikidataBox = wikidataSearch.searchWikidataBox,
     searchOverpass = osmFallback.searchOverpass,
     fetchSummariesForCandidates = wikipediaSummary.fetchSummariesForCandidates,
+    haalGemeenteTeksten = gemeenteTerugval.haalGemeenteTeksten,
     log = console.log,
   } = options;
 
@@ -358,6 +362,42 @@ async function runPipeline(options) {
     maxSentences: 3,
     userAgent: USER_AGENT,
   });
+
+  // 5b. Gemeente-terugval: Wikidata-items zonder (opgehaalde) samenvatting
+  // krijgen zo mogelijk zinnen uit het artikel van hun plaats/gemeente.
+  // Per kandidaat wordt getoond welke plaatsen, talen en kopjes geprobeerd
+  // zijn, zodat de kopjeslijst gericht aangevuld kan worden. Mislukt dit,
+  // dan blijft de Wikidata-omschrijving (zoals voorheen).
+  const zonderArtikel = enriched.filter((c) => !c.summary && /^Q[0-9]+$/.test(c.id || ''));
+  if (zonderArtikel.length > 0) {
+    const t0 = Date.now();
+    log(`Gemeente-terugval voor ${zonderArtikel.length} kandidaat/kandidaten zonder artikel:`);
+    try {
+      const gemeente = await haalGemeenteTeksten(zonderArtikel, {
+        languages: [language].concat(['en', 'fr', 'de']),
+        userAgent: USER_AGENT,
+      });
+      let gevonden = 0;
+      for (const c of zonderArtikel) {
+        const r = gemeente[c.id];
+        if (!r) continue;
+        log(`  ${c.label}: ${r.diagnose.plaatsen.join(' → ') || '(geen plaats gevonden)'}`);
+        r.diagnose.geprobeerd.forEach((g) => log('    ' + g));
+        if (r.summary) {
+          c.summary = r.summary;
+          delete c.summaryError;
+          gevonden += 1;
+          log('    → ' + r.summary.extractShort);
+        }
+      }
+      log(
+        `Gemeente-terugval: ${gevonden} van ${zonderArtikel.length} kregen tekst ` +
+          `(${((Date.now() - t0) / 1000).toFixed(1)} s).`
+      );
+    } catch (err) {
+      log(`  Let op: gemeente-terugval mislukt (${err.message}); Wikidata-omschrijvingen blijven.`);
+    }
+  }
 
   if (previewMode) {
     log(`Preview-modus: ${enriched.length} kandidaten verrijkt met samenvatting.`);
