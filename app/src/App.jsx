@@ -4,6 +4,7 @@ import '../../src/wikidata-search.js'
 import '../../src/route-buffer.js'
 import '../../src/osm-fallback.js'
 import '../../src/wikipedia-summary.js'
+import '../../src/wikidata-zin.js'
 import '../../src/poi-categories.js'
 import { Capacitor } from '@capacitor/core'
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem'
@@ -233,7 +234,10 @@ function App() {
   const corridorPois = mapPoisSorted.filter((p) => p.inCorridor)
   const summaryMissingPois = corridorPois.filter((p) => !(p.id in summariesById))
   const summaryFoundCount = corridorPois.filter(
-    (p) => summariesById[p.id] && summariesById[p.id].summary
+    (p) => summariesById[p.id] && summariesById[p.id].summary && !summariesById[p.id].summary.viaWikidata
+  ).length
+  const wikidataZinCount = corridorPois.filter(
+    (p) => summariesById[p.id] && summariesById[p.id].summary && summariesById[p.id].summary.viaWikidata
   ).length
   // De categorie (= routenaam) koppelt de POI's in EuroPoi aan de route;
   // die heet daar standaard naar het GPX-bestand. Waarschuwen bij verschil.
@@ -463,6 +467,25 @@ function App() {
       const id = item.id || candidates[index].id
       added[id] = { summary: item.summary || null, summaryError: item.summaryError || '' }
     })
+    // Terugval voor Wikidata-items zonder samenvatting: een korte Nederlandse
+    // zin uit Wikidata-eigenschappen (wikidata-zin.js, één verzoek). Mislukt
+    // dit, dan blijft de Wikidata-omschrijving, zoals voorheen.
+    const zonderTekst = candidates.filter((p) => !(added[p.id] && added[p.id].summary))
+    if (
+      zonderTekst.length > 0 &&
+      window.WikiPoiWikidataZin &&
+      typeof window.WikiPoiWikidataZin.haalWikidataZinnen === 'function'
+    ) {
+      try {
+        const zinnen = await window.WikiPoiWikidataZin.haalWikidataZinnen(zonderTekst, { retryDelayMs: 1000 })
+        zonderTekst.forEach((p) => {
+          const r = zinnen[p.id]
+          if (r && r.summary) added[p.id] = { summary: r.summary, summaryError: '' }
+        })
+      } catch (err) {
+        console.warn('Zin uit Wikidata mislukt:', err)
+      }
+    }
     setSummariesById((prev) => ({ ...prev, ...added }))
     return { ...summariesById, ...added }
   }
@@ -513,9 +536,9 @@ function App() {
           setSummaryLoading(false)
         }
       }
-      // Tekst: alleen de Wikipedia-samenvatting, zonder bronvermelding (die
-      // zou in EuroPoi worden voorgelezen; WikiPoi toont hem bij stap 5).
-      // Zonder samenvatting de Wikidata-omschrijving.
+      // Tekst: alleen de Wikipedia-samenvatting (of de zin uit Wikidata),
+      // zonder bronvermelding (die zou in EuroPoi worden voorgelezen; WikiPoi
+      // toont hem bij stap 5). Zonder beide de Wikidata-omschrijving.
       const rows = corridorPois.map((p) => {
         const entry = summaries[p.id]
         const summary = entry && entry.summary
@@ -752,7 +775,8 @@ function App() {
         <Step number={5} title="Samenvattingen" disabled={!searchDone} hint="Zoek eerst POI's bij stap 3.">
           <p>
             <strong>{summaryFoundCount}</strong> van {corridorPois.length} POI's binnen de corridor
-            hebben een Wikipedia-samenvatting.
+            hebben een Wikipedia-samenvatting
+            {wikidataZinCount > 0 ? `; ${wikidataZinCount} kregen een zin uit Wikidata.` : '.'}
           </p>
           <p className="muted">
             Optioneel: bij opslaan (stap 6) worden ontbrekende samenvattingen automatisch opgehaald.
@@ -785,7 +809,12 @@ function App() {
                         <CategoryDot categoryKey={poi.categoryKey} />
                         {poi.label}
                       </span>
-                      {entry.summary ? (
+                      {entry.summary && entry.summary.viaWikidata ? (
+                        <p className="summary-text">
+                          <span className="muted">Geen artikel. Samengesteld uit Wikidata: </span>
+                          „{entry.summary.extractShort}”
+                        </p>
+                      ) : entry.summary ? (
                         <>
                           <p className="summary-text">{entry.summary.extractShort}</p>
                           {entry.summary.attribution && (

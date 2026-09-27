@@ -41,6 +41,8 @@ function bruikbaar(code) {
 
 /**
  * Taal van de toelichting die voor een POI wordt voorgelezen/geëxporteerd:
+ * - met samenvatting die zelf een taal meegeeft (zin uit Wikidata,
+ *   gemeente-terugval): die taal;
  * - met samenvatting: de taal van het Wikipedia-artikel;
  * - anders: de taal van de Wikidata-omschrijving (xml:lang);
  * - onbekend: de taal van de telefoon.
@@ -51,7 +53,10 @@ function bruikbaar(code) {
  */
 export function toelichtingTaal(poi, entry) {
   if (entry && entry.summary) {
-    const t = bruikbaar(poi.articleLanguage) || bruikbaar(taalVanUrl(poi.wikipediaUrl))
+    const t =
+      bruikbaar(entry.summary.lang) ||
+      bruikbaar(poi.articleLanguage) ||
+      bruikbaar(taalVanUrl(poi.wikipediaUrl))
     if (t) return t
   } else {
     const t = bruikbaar(poi.descriptionLanguage)
