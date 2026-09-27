@@ -6,10 +6,14 @@
  * speechSynthesis). Teksten worden na elkaar uitgesproken, nooit door elkaar;
  * TextToSpeech.speak() wacht tot de tekst helemaal is uitgesproken.
  * Zelfde principe als de wachtrij in EuroPoi (src/audioEngine.js).
+ *
+ * Elke tekst heeft een eigen taal (lang). Lukt uitspreken in die taal niet
+ * (bijv. geen stem voor die taal op het toestel), dan volgt één nieuwe
+ * poging in APP_TAAL.
  */
 import { TextToSpeech } from '@capacitor-community/text-to-speech'
+import { APP_TAAL } from '../taal.js'
 
-const TAAL = 'nl-NL'
 const TEMPO = 1.0
 
 let wachtrij = []
@@ -18,6 +22,25 @@ let bezig = false
 // generatie ziet, stopt zonder verder iets te doen.
 let generatie = 0
 
+async function spreekUit(tekst, lang, gen) {
+  try {
+    await TextToSpeech.speak({ text: tekst, lang, rate: TEMPO })
+    return
+  } catch (err) {
+    if (gen !== generatie) return
+    if (lang === APP_TAAL) {
+      console.warn('WikiPoi voorlezen mislukt:', err)
+      return
+    }
+    console.warn('WikiPoi voorlezen in ' + lang + ' mislukt, terugval ' + APP_TAAL + ':', err)
+  }
+  try {
+    await TextToSpeech.speak({ text: tekst, lang: APP_TAAL, rate: TEMPO })
+  } catch (err) {
+    console.warn('WikiPoi voorlezen mislukt:', err)
+  }
+}
+
 async function verwerk() {
   if (bezig) return
   bezig = true
@@ -25,11 +48,7 @@ async function verwerk() {
   while (gen === generatie && wachtrij.length > 0) {
     const item = wachtrij.shift()
     if (item.onStart) item.onStart()
-    try {
-      await TextToSpeech.speak({ text: item.tekst, lang: TAAL, rate: TEMPO })
-    } catch (err) {
-      console.warn('WikiPoi voorlezen mislukt:', err)
-    }
+    await spreekUit(item.tekst, item.lang, gen)
     // Afgebroken met stopSpreken(): een eventuele nieuwe lus beheert 'bezig'.
     if (gen !== generatie) return
     if (item.onEinde) item.onEinde()
@@ -37,11 +56,14 @@ async function verwerk() {
   bezig = false
 }
 
-/** Tekst achteraan de wachtrij zetten. onStart/onEinde zijn optioneel. */
-export function spreek(tekst, { onStart, onEinde } = {}) {
+/**
+ * Tekst achteraan de wachtrij zetten.
+ * lang (standaard APP_TAAL), onStart en onEinde zijn optioneel.
+ */
+export function spreek(tekst, { lang = APP_TAAL, onStart, onEinde } = {}) {
   const schoon = String(tekst || '').trim()
   if (!schoon) return
-  wachtrij.push({ tekst: schoon, onStart, onEinde })
+  wachtrij.push({ tekst: schoon, lang: lang || APP_TAAL, onStart, onEinde })
   verwerk()
 }
 

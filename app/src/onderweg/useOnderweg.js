@@ -21,6 +21,7 @@ import { Capacitor } from '@capacitor/core'
 import { Geolocation } from '@capacitor/geolocation'
 import { afstand, peiling, klokRichting } from './geo.js'
 import { spreek, stopSpreken } from './spreek.js'
+import { APP_TAAL, basisTaal, toelichtingTaal } from '../taal.js'
 
 // Minimale verplaatsing voordat de rijrichting wordt (bij)gewerkt. Kleiner
 // maakt de richting bij stilstand onrustig door GPS-ruis.
@@ -45,14 +46,39 @@ export function triggerStraal(poi, vervoer) {
   return Math.max(basis, totRoute + ROUTE_MARGE_M)
 }
 
-// Voorleestekst: naam, eventueel klokrichting, dan de samenvatting (stap 5)
-// of anders de Wikidata-omschrijving — dezelfde keuze als de CSV-export.
-export function voorleesTekst(poi, samenvattingen, klok) {
-  const entry = samenvattingen ? samenvattingen[poi.id] : null
-  const beschrijving =
+// Voorleestekst in delen, elk met een eigen taal:
+// - aankondiging (naam, eventueel klokrichting) in APP_TAAL;
+// - toelichting: de samenvatting (stap 5) of anders de Wikidata-omschrijving
+//   (dezelfde keuze als de CSV-export), in de taal van die tekst.
+// Is de basistaal van beide gelijk, dan wordt het één deel.
+export function voorleesDelen(poi, samenvattingen, klok) {
+  const entry = samenvattingen ? samenvattingen[poi.id] || null : null
+  const beschrijving = (
     entry && entry.summary ? entry.summary.extractShort || '' : poi.description || ''
+  ).trim()
   const kop = Number.isFinite(klok) ? `${poi.label}, op ${klok} uur.` : `${poi.label}.`
-  return `${kop} ${beschrijving}`.trim()
+  if (!beschrijving) return [{ tekst: kop, lang: APP_TAAL }]
+  const taal = toelichtingTaal(poi, entry)
+  if (basisTaal(taal) === basisTaal(APP_TAAL)) {
+    return [{ tekst: `${kop} ${beschrijving}`, lang: APP_TAAL }]
+  }
+  return [
+    { tekst: kop, lang: APP_TAAL },
+    { tekst: beschrijving, lang: taal },
+  ]
+}
+
+// Alle delen van een POI in de wachtrij: onStart bij het eerste deel,
+// onEinde na het laatste.
+function spreekPoi(poi, samenvattingen, klok, { onStart, onEinde } = {}) {
+  const delen = voorleesDelen(poi, samenvattingen, klok)
+  delen.forEach((deel, i) => {
+    spreek(deel.tekst, {
+      lang: deel.lang,
+      onStart: i === 0 ? onStart : undefined,
+      onEinde: i === delen.length - 1 ? onEinde : undefined,
+    })
+  })
 }
 
 function foutTekst(err) {
@@ -158,7 +184,7 @@ export function useOnderweg(pois, { vervoer = STANDAARD_VERVOER, samenvattingen 
   // Handmatig voorlezen (tik op een POI in de lijst); telt niet als
   // "voorgelezen" voor de automatische trigger.
   const leesVoor = useCallback((poi) => {
-    spreek(voorleesTekst(poi, samenvattingenRef.current, poi.klok), {
+    spreekPoi(poi, samenvattingenRef.current, poi.klok, {
       onStart: () => setNuAanHetVoorlezen(poi.label),
       onEinde: () => setNuAanHetVoorlezen(null),
     })
@@ -197,7 +223,7 @@ export function useOnderweg(pois, { vervoer = STANDAARD_VERVOER, samenvattingen 
     voorgelezenRef.current = volgende
     setVoorgelezen(volgende)
     nieuw.forEach((p) => {
-      spreek(voorleesTekst(p, samenvattingenRef.current, p.klok), {
+      spreekPoi(p, samenvattingenRef.current, p.klok, {
         onStart: () => setNuAanHetVoorlezen(p.label),
         onEinde: () => setNuAanHetVoorlezen(null),
       })
