@@ -17,6 +17,8 @@
  *     → wikipedia-summary.js  (samenvatting per kandidaat ophalen)
  *     → gemeente-terugval.js  (geen eigen artikel: zinnen uit het artikel van
  *                               de plaats/gemeente, met diagnose in de uitvoer)
+ *     → wikidata-zin.js       (nog steeds geen tekst: korte Nederlandse zin uit
+ *                               Wikidata-eigenschappen, met diagnose)
  *     → ÓF europoi-csv.js     (CSV met BOM/CRLF genereren)
  *       ÓF preview-html.js    (bij --preview: HTML-kaart met trigger-schuifje)
  *
@@ -58,6 +60,7 @@ const wikidataSearch = require('./src/wikidata-search.js');
 const osmFallback = require('./src/osm-fallback.js');
 const wikipediaSummary = require('./src/wikipedia-summary.js');
 const gemeenteTerugval = require('./src/gemeente-terugval.js');
+const wikidataZin = require('./src/wikidata-zin.js');
 const europoiCsv = require('./src/europoi-csv.js');
 
 const USER_AGENT = 'WikiPoi/0.1 (https://github.com/berkelblik/WikiPoi)';
@@ -136,6 +139,7 @@ async function runPipeline(options) {
     searchOverpass = osmFallback.searchOverpass,
     fetchSummariesForCandidates = wikipediaSummary.fetchSummariesForCandidates,
     haalGemeenteTeksten = gemeenteTerugval.haalGemeenteTeksten,
+    haalWikidataZinnen = wikidataZin.haalWikidataZinnen,
     log = console.log,
   } = options;
 
@@ -396,6 +400,42 @@ async function runPipeline(options) {
       );
     } catch (err) {
       log(`  Let op: gemeente-terugval mislukt (${err.message}); Wikidata-omschrijvingen blijven.`);
+    }
+  }
+
+  // 5c. Zin uit Wikidata-eigenschappen: Wikidata-items die nu nog geen
+  // tekst hebben, krijgen zo mogelijk een korte Nederlandse zin (soort,
+  // toewijding, tijd, stijl, maker, status). Per kandidaat wordt getoond
+  // welke eigenschappen gebruikt of overgeslagen zijn. Geen zin of fout:
+  // de Wikidata-omschrijving blijft.
+  const nogZonderTekst = enriched.filter((c) => !c.summary && /^Q[0-9]+$/.test(c.id || ''));
+  if (nogZonderTekst.length > 0) {
+    const t0 = Date.now();
+    log(`Zin uit Wikidata voor ${nogZonderTekst.length} kandidaat/kandidaten zonder tekst:`);
+    try {
+      const zinnen = await haalWikidataZinnen(nogZonderTekst, { userAgent: USER_AGENT });
+      let gevonden = 0;
+      for (const c of nogZonderTekst) {
+        const r = zinnen[c.id];
+        if (!r) continue;
+        const d = r.diagnose;
+        log(`  ${c.label} (${c.id}): soort ${d.soort || '-'}; gebruikt: ${d.gebruikt.join(', ') || '-'}`);
+        d.overgeslagen.forEach((o) => log('    overgeslagen ' + o));
+        if (r.summary) {
+          c.summary = r.summary;
+          delete c.summaryError;
+          gevonden += 1;
+          log('    → ' + r.summary.extractShort);
+        } else {
+          log(`    → geen zin (${d.reden}); omschrijving blijft: "${c.description || ''}"`);
+        }
+      }
+      log(
+        `Zin uit Wikidata: ${gevonden} van ${nogZonderTekst.length} kregen tekst ` +
+          `(${((Date.now() - t0) / 1000).toFixed(1)} s).`
+      );
+    } catch (err) {
+      log(`  Let op: zin uit Wikidata mislukt (${err.message}); Wikidata-omschrijvingen blijven.`);
     }
   }
 
