@@ -10,17 +10,36 @@
  * Elke tekst heeft een eigen taal (lang). Lukt uitspreken in die taal niet
  * (bijv. geen stem voor die taal op het toestel), dan volgt één nieuwe
  * poging in APP_TAAL.
+ *
+ * Naast tekst kan de wachtrij een fietsbel bevatten: een kort geluid dat de
+ * gebruiker voorbereidt op het bericht dat volgt, in plaats van een
+ * gesproken naam. De volgende tekst start pas als de bel is uitgeklonken.
+ * - bel(): één belletje (lijstweergave);
+ * - dubbeleBel(): bel 1, na tussenpozeMs bel 2 (eco-scherm);
+ * - belNu(): direct, buiten de wachtrij (tikken op het eco-scherm).
+ * Geluid: "Bike bell" (freesound_community, Pixabay, nr. 40094), ingekort
+ * tot één belletje; Pixabay Content License.
  */
 import { TextToSpeech } from '@capacitor-community/text-to-speech'
 import { APP_TAAL } from '../taal.js'
+import belUrl from './fietsbel.mp3'
 
 const TEMPO = 1.0
+
+// Veiligheidsgrens: blijft 'ended' uit (bijv. geluid geblokkeerd), dan gaat
+// de wachtrij na deze tijd toch verder. De bel zelf duurt 2,4 s.
+const BEL_MAX_MS = 4000
+
+// Standaard tijd tussen bel 1 en bel 2 bij dubbeleBel().
+export const DUBBELE_BEL_TUSSENPOZE_MS = 1000
 
 let wachtrij = []
 let bezig = false
 // Wordt bij stopSpreken() opgehoogd; een lopende lus die een andere
 // generatie ziet, stopt zonder verder iets te doen.
 let generatie = 0
+// Belgeluiden die nu klinken, zodat stopSpreken() ze kan afbreken.
+const actieveBellen = new Set()
 
 async function spreekUit(tekst, lang, gen) {
   try {
@@ -41,6 +60,51 @@ async function spreekUit(tekst, lang, gen) {
   }
 }
 
+// Start één belletje en geeft een belofte terug die klaar is als de bel is
+// uitgeklonken (of mislukt, of de veiligheidsgrens verstreken is). Een fout
+// is nooit fataal: dan volgt gewoon de tekst.
+function startBel() {
+  return new Promise((klaar) => {
+    let audio = null
+    let timer = null
+    const einde = () => {
+      if (timer !== null) clearTimeout(timer)
+      timer = null
+      if (audio) actieveBellen.delete(audio)
+      klaar()
+    }
+    try {
+      audio = new Audio(belUrl)
+      actieveBellen.add(audio)
+      audio.addEventListener('ended', einde, { once: true })
+      audio.addEventListener('error', einde, { once: true })
+      timer = setTimeout(einde, BEL_MAX_MS)
+      const p = audio.play()
+      if (p && typeof p.catch === 'function') {
+        p.catch((err) => {
+          console.warn('WikiPoi fietsbel mislukt:', err)
+          einde()
+        })
+      }
+    } catch (err) {
+      console.warn('WikiPoi fietsbel mislukt:', err)
+      einde()
+    }
+  })
+}
+
+function wacht(ms) {
+  return new Promise((klaar) => setTimeout(klaar, ms))
+}
+
+async function speelDubbeleBel(tussenpozeMs, gen) {
+  const eerste = startBel()
+  await wacht(tussenpozeMs)
+  if (gen !== generatie) return
+  const tweede = startBel()
+  await Promise.all([eerste, tweede])
+}
+
 async function verwerk() {
   if (bezig) return
   bezig = true
@@ -48,7 +112,13 @@ async function verwerk() {
   while (gen === generatie && wachtrij.length > 0) {
     const item = wachtrij.shift()
     if (item.onStart) item.onStart()
-    await spreekUit(item.tekst, item.lang, gen)
+    if (item.soort === 'bel') {
+      await startBel()
+    } else if (item.soort === 'dubbeleBel') {
+      await speelDubbeleBel(item.tussenpozeMs, gen)
+    } else {
+      await spreekUit(item.tekst, item.lang, gen)
+    }
     // Afgebroken met stopSpreken(): een eventuele nieuwe lus beheert 'bezig'.
     if (gen !== generatie) return
     if (item.onEinde) item.onEinde()
@@ -63,15 +133,46 @@ async function verwerk() {
 export function spreek(tekst, { lang = APP_TAAL, onStart, onEinde } = {}) {
   const schoon = String(tekst || '').trim()
   if (!schoon) return
-  wachtrij.push({ tekst: schoon, lang: lang || APP_TAAL, onStart, onEinde })
+  wachtrij.push({ soort: 'tekst', tekst: schoon, lang: lang || APP_TAAL, onStart, onEinde })
   verwerk()
 }
 
-/** Huidige tekst afbreken en de wachtrij leegmaken. */
+/**
+ * Eén fietsbel achteraan de wachtrij zetten.
+ * onStart en onEinde zijn optioneel.
+ */
+export function bel({ onStart, onEinde } = {}) {
+  wachtrij.push({ soort: 'bel', onStart, onEinde })
+  verwerk()
+}
+
+/**
+ * Dubbele fietsbel achteraan de wachtrij zetten: bel 1 direct (onStart),
+ * bel 2 na tussenpozeMs; onEinde als bel 2 is uitgeklonken.
+ */
+export function dubbeleBel({ tussenpozeMs = DUBBELE_BEL_TUSSENPOZE_MS, onStart, onEinde } = {}) {
+  wachtrij.push({ soort: 'dubbeleBel', tussenpozeMs, onStart, onEinde })
+  verwerk()
+}
+
+/** Eén fietsbel direct, buiten de wachtrij (klinkt eventueel door spraak heen). */
+export function belNu() {
+  startBel()
+}
+
+/** Huidige tekst of bel afbreken en de wachtrij leegmaken. */
 export async function stopSpreken() {
   generatie += 1
   wachtrij = []
   bezig = false
+  actieveBellen.forEach((audio) => {
+    try {
+      audio.pause()
+    } catch {
+      // Niets aan de hand.
+    }
+  })
+  actieveBellen.clear()
   try {
     await TextToSpeech.stop()
   } catch {

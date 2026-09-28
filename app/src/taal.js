@@ -3,11 +3,14 @@
  *
  * Taalhulpjes voor WikiPoi.
  *
- * - APP_TAAL: taal van de bediening en van de aankondiging onderweg
- *   ("Naam, op 3 uur."). De app is (nog) alleen Nederlandstalig; bij een
- *   latere vertaling van de bediening verandert dit mee.
+ * - APP_TAAL: taal van de bediening. De app is (nog) alleen Nederlandstalig;
+ *   bij een latere vertaling van de bediening verandert dit mee. Ook de
+ *   terugvaltaal als voorlezen in een andere taal niet lukt.
  * - telefoonTaal(): taal van het toestel (navigator.language), gebruikt als
- *   voorkeurstaal voor Wikipedia-artikelen en Wikidata-namen.
+ *   voorkeurstaal voor Wikipedia-artikelen en Wikidata-namen en voor de
+ *   klokrichting onderweg.
+ * - klokZin(): korte zin met de klokrichting ("Auf 3 Uhr.") in de taal van
+ *   het toestel, voor de aankondiging onderweg.
  * - toelichtingTaal(): in welke taal de toelichting van een POI is, zodat
  *   die met een passende stem wordt voorgelezen.
  */
@@ -63,4 +66,28 @@ export function toelichtingTaal(poi, entry) {
     if (t) return t
   }
   return telefoonTaal()
+}
+
+// Klokrichting per taal (basistaal van het toestel). Alleen talen waarvoor
+// de zin met zekerheid klopt; voor andere talen vervalt de klokrichting.
+// Getallen als cijfers: de stem van die taal spreekt ze zelf goed uit.
+const KLOK_ZINNEN = {
+  nl: (uur) => `Op ${uur} uur.`,
+  de: (uur) => `Auf ${uur} Uhr.`,
+  en: (uur) => `At ${uur} o'clock.`,
+  fr: (uur) => (uur === 1 ? 'À 1 heure.' : `À ${uur} heures.`),
+}
+
+/**
+ * Klokrichting als korte zin in de taal van het toestel.
+ *
+ * @param {number|null} uur - 1–12, of null/onbekend
+ * @param {string} [taal] - taalcode; standaard telefoonTaal()
+ * @returns {{tekst:string, lang:string}|null} null bij onbekende richting of
+ *   een taal zonder vertaling
+ */
+export function klokZin(uur, taal = telefoonTaal()) {
+  if (!Number.isInteger(uur) || uur < 1 || uur > 12) return null
+  const maak = KLOK_ZINNEN[basisTaal(taal)]
+  return maak ? { tekst: maak(uur), lang: taal } : null
 }

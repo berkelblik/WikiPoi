@@ -14,14 +14,25 @@
  * MIN_VERPLAATSING_VOOR_RICHTING_M uit elkaar liggen. Bij stilstand blijft de
  * laatst bekende richting staan (zelfde gedrag als EuroPoi).
  *
- * Bouwstap 2 van "Onderweg": nog geen eco-screen of track.
+ * Aankondiging: geen gesproken naam (een buitenlandse plaatsnaam klinkt in
+ * de stem van een andere taal vaak onherkenbaar), maar een fietsbel en
+ * daarna de klokrichting in de taal van het toestel ("Auf 3 Uhr."). De
+ * naam staat op het scherm en meestal ook in de toelichting.
+ *
+ * Met het eco-scherm open (optie eco) is het verloop anders: bel 1 op het
+ * moment dat je de straal binnenkomt (het eco-scherm toont dan de POI), na
+ * 1 s bel 2, daarna de toelichting — zonder klokzin, want de klok staat op
+ * het scherm. De hook geeft die POI terug als ecoPoi, zolang hij wordt
+ * voorgelezen of je nog binnen de straal bent.
+ *
+ * Bouwstap 4 van "Onderweg": eco-scherm. Nog geen track.
  */
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Capacitor } from '@capacitor/core'
 import { Geolocation } from '@capacitor/geolocation'
 import { afstand, peiling, klokRichting } from './geo.js'
-import { spreek, stopSpreken } from './spreek.js'
-import { APP_TAAL, basisTaal, toelichtingTaal } from '../taal.js'
+import { spreek, bel, dubbeleBel, stopSpreken } from './spreek.js'
+import { basisTaal, klokZin, telefoonTaal, toelichtingTaal } from '../taal.js'
 
 // Minimale verplaatsing voordat de rijrichting wordt (bij)gewerkt. Kleiner
 // maakt de richting bij stilstand onrustig door GPS-ruis.
@@ -32,8 +43,9 @@ const AANTAL_DICHTSTBIJ = 3
 
 // Straal per vervoerwijze, gelijk aan EuroPoi (src/config.js, TRANSPORT).
 export const VERVOER = {
-  fietser: { label: 'Fietser', straal: 100 },
   wandelaar: { label: 'Wandelaar', straal: 30 },
+  fietser: { label: 'Fietser', straal: 100 },
+  motorrijder: { label: 'Motorrijder', straal: 160 },
 }
 export const STANDAARD_VERVOER = 'fietser'
 
@@ -47,37 +59,68 @@ export function triggerStraal(poi, vervoer) {
 }
 
 // Voorleestekst in delen, elk met een eigen taal:
-// - aankondiging (naam, eventueel klokrichting) in APP_TAAL;
+// - klokrichting ("Auf 3 Uhr.") in de taal van het toestel, als die richting
+//   bekend is en er een vertaling voor die taal is (taal.js, klokZin);
 // - toelichting: de samenvatting (stap 5) of anders de Wikidata-omschrijving
 //   (dezelfde keuze als de CSV-export), in de taal van die tekst.
 // Is de basistaal van beide gelijk, dan wordt het één deel.
+// Zonder toelichting wordt de naam wél uitgesproken (in de taal van het
+// toestel, de voorkeurstaal van de Wikidata-namen), anders zegt de bel niets.
 export function voorleesDelen(poi, samenvattingen, klok) {
   const entry = samenvattingen ? samenvattingen[poi.id] || null : null
   const beschrijving = (
     entry && entry.summary ? entry.summary.extractShort || '' : poi.description || ''
   ).trim()
-  const kop = Number.isFinite(klok) ? `${poi.label}, op ${klok} uur.` : `${poi.label}.`
-  if (!beschrijving) return [{ tekst: kop, lang: APP_TAAL }]
-  const taal = toelichtingTaal(poi, entry)
-  if (basisTaal(taal) === basisTaal(APP_TAAL)) {
-    return [{ tekst: `${kop} ${beschrijving}`, lang: APP_TAAL }]
+  const richting = klokZin(klok)
+  if (!beschrijving) {
+    const naam = `${poi.label || ''}`.trim()
+    const tekst = [naam ? `${naam}.` : '', richting ? richting.tekst : ''].join(' ').trim()
+    return tekst ? [{ tekst, lang: telefoonTaal() }] : []
   }
-  return [
-    { tekst: kop, lang: APP_TAAL },
-    { tekst: beschrijving, lang: taal },
-  ]
+  const taal = toelichtingTaal(poi, entry)
+  if (!richting) return [{ tekst: beschrijving, lang: taal }]
+  if (basisTaal(taal) === basisTaal(richting.lang)) {
+    return [{ tekst: `${richting.tekst} ${beschrijving}`, lang: taal }]
+  }
+  return [richting, { tekst: beschrijving, lang: taal }]
 }
 
-// Alle delen van een POI in de wachtrij: onStart bij het eerste deel,
-// onEinde na het laatste.
-function spreekPoi(poi, samenvattingen, klok, { onStart, onEinde } = {}) {
-  const delen = voorleesDelen(poi, samenvattingen, klok)
+// Alle delen van een POI in de wachtrij: onStart bij het eerste deel (of de
+// bel), onEinde na het laatste. Soort:
+// - 'handmatig': zonder bel (de gebruiker begint zelf);
+// - 'lijst': één bel, dan klokzin en toelichting;
+// - 'eco': dubbele bel, dan de toelichting zonder klokzin.
+function spreekPoi(poi, samenvattingen, klok, { soort = 'handmatig', onStart, onEinde } = {}) {
+  const delen = voorleesDelen(poi, samenvattingen, soort === 'eco' ? null : klok)
+  if (delen.length === 0) return
+  let startGebruikt = false
+  if (soort === 'lijst') {
+    bel({ onStart })
+    startGebruikt = true
+  } else if (soort === 'eco') {
+    dubbeleBel({ onStart })
+    startGebruikt = true
+  }
   delen.forEach((deel, i) => {
     spreek(deel.tekst, {
       lang: deel.lang,
-      onStart: i === 0 ? onStart : undefined,
+      onStart: i === 0 && !startGebruikt ? onStart : undefined,
       onEinde: i === delen.length - 1 ? onEinde : undefined,
     })
+  })
+}
+
+// Foto's van de POI's alvast laden, zodat ze in de cache van de WebView
+// staan als het eco-scherm ze later onderweg (mogelijk zonder bereik) toont.
+function laadFotosVooraf(pois, samenvattingen) {
+  if (typeof Image === 'undefined') return
+  pois.forEach((poi) => {
+    const entry = samenvattingen ? samenvattingen[poi.id] : null
+    const url = entry && entry.summary ? entry.summary.thumbnailUrl : null
+    if (url) {
+      const img = new Image()
+      img.src = url
+    }
   })
 }
 
@@ -85,22 +128,37 @@ function foutTekst(err) {
   return 'GPS-fout: ' + (err && err.message ? err.message : String(err))
 }
 
-export function useOnderweg(pois, { vervoer = STANDAARD_VERVOER, samenvattingen = {} } = {}) {
+export function useOnderweg(
+  pois,
+  { vervoer = STANDAARD_VERVOER, samenvattingen = {}, eco = false } = {}
+) {
   const [actief, setActief] = useState(false)
   const [positie, setPositie] = useState(null) // { lat, lng, nauwkeurigheid, tijd }
   const [rijrichting, setRijrichting] = useState(null) // graden, of null = onbekend
   const [fout, setFout] = useState('')
   const [voorgelezen, setVoorgelezen] = useState({}) // { [poi.id]: true } deze rit
   const [nuAanHetVoorlezen, setNuAanHetVoorlezen] = useState(null) // label of null
+  // POI voor het eco-scherm: { id, klaar } (klaar = uitgesproken), of null.
+  const [ecoTrigger, setEcoTrigger] = useState(null)
 
   const watchIdRef = useRef(null)
   const richtingPuntRef = useRef(null)
   const voorgelezenRef = useRef({})
   const samenvattingenRef = useRef(samenvattingen)
+  const poisRef = useRef(pois)
+  const ecoRef = useRef(eco)
 
   useEffect(() => {
     samenvattingenRef.current = samenvattingen
   }, [samenvattingen])
+
+  useEffect(() => {
+    poisRef.current = pois
+  }, [pois])
+
+  useEffect(() => {
+    ecoRef.current = eco
+  }, [eco])
 
   const verwerkPositie = useCallback((pos) => {
     const c = pos && pos.coords
@@ -132,6 +190,8 @@ export function useOnderweg(pois, { vervoer = STANDAARD_VERVOER, samenvattingen 
     richtingPuntRef.current = null
     voorgelezenRef.current = {}
     setVoorgelezen({})
+    setEcoTrigger(null)
+    laadFotosVooraf(poisRef.current, samenvattingenRef.current)
     try {
       // Op het web vraagt de browser zelf om toestemming bij watchPosition.
       if (Capacitor.isNativePlatform()) {
@@ -164,6 +224,7 @@ export function useOnderweg(pois, { vervoer = STANDAARD_VERVOER, samenvattingen 
   const stopVoorlezen = useCallback(() => {
     stopSpreken()
     setNuAanHetVoorlezen(null)
+    setEcoTrigger(null)
   }, [])
 
   const stop = useCallback(() => {
@@ -222,15 +283,33 @@ export function useOnderweg(pois, { vervoer = STANDAARD_VERVOER, samenvattingen 
     })
     voorgelezenRef.current = volgende
     setVoorgelezen(volgende)
+    const soort = ecoRef.current ? 'eco' : 'lijst'
     nieuw.forEach((p) => {
       spreekPoi(p, samenvattingenRef.current, p.klok, {
-        onStart: () => setNuAanHetVoorlezen(p.label),
-        onEinde: () => setNuAanHetVoorlezen(null),
+        soort,
+        onStart: () => {
+          setNuAanHetVoorlezen(p.label)
+          if (soort === 'eco') setEcoTrigger({ id: p.id, klaar: false })
+        },
+        onEinde: () => {
+          setNuAanHetVoorlezen(null)
+          setEcoTrigger((huidig) =>
+            huidig && huidig.id === p.id ? { ...huidig, klaar: true } : huidig
+          )
+        },
       })
     })
   }, [actief, poisMetAfstand])
 
   const dichtstbij = poisMetAfstand.slice(0, AANTAL_DICHTSTBIJ)
+
+  // POI voor het eco-scherm: zichtbaar zolang hij wordt voorgelezen, en
+  // daarna zolang je nog binnen de straal bent.
+  const ecoKandidaat = ecoTrigger ? poisMetAfstand.find((p) => p.id === ecoTrigger.id) : null
+  const ecoPoi =
+    ecoKandidaat && (!ecoTrigger.klaar || ecoKandidaat.afstandTriggerpunt <= ecoKandidaat.straal)
+      ? ecoKandidaat
+      : null
   const aantalVoorgelezen = Object.keys(voorgelezen).length
 
   return {
@@ -246,5 +325,6 @@ export function useOnderweg(pois, { vervoer = STANDAARD_VERVOER, samenvattingen 
     nuAanHetVoorlezen,
     leesVoor,
     stopVoorlezen,
+    ecoPoi,
   }
 }

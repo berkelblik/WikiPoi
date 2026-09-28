@@ -6,15 +6,23 @@
  * klokrichting en triggerstraal. Tik op een POI om hem direct te laten
  * voorlezen (handig om thuis te testen).
  *
- * Bouwstap 2 van "Onderweg": nog geen eco-screen of track.
+ * Eco-scherm (bouwstap 4): zwart scherm dat aan blijft en bij een trigger de
+ * POI toont; openen met de knop "Eco-scherm", sluiten met 3× tikken.
+ * ECO_BIJ_START = true opent het meteen bij "Route starten" (productie).
  */
 import { useState } from 'react'
 import { useOnderweg, VERVOER, STANDAARD_VERVOER } from './useOnderweg.js'
+import EcoScherm from './EcoScherm.jsx'
 import { formatAfstand } from './geo.js'
 import { getCategoryStyle } from '../components/poi-icons.js'
 
+// Productie: true = eco-scherm meteen bij "Route starten". Testfase: false,
+// dan blijft de lijst zichtbaar en open je het eco-scherm met de knop.
+const ECO_BIJ_START = false
+
 function Onderweg({ pois, summariesById }) {
   const [vervoer, setVervoer] = useState(STANDAARD_VERVOER)
+  const [ecoOpen, setEcoOpen] = useState(false)
   const {
     actief,
     positie,
@@ -28,7 +36,18 @@ function Onderweg({ pois, summariesById }) {
     nuAanHetVoorlezen,
     leesVoor,
     stopVoorlezen,
-  } = useOnderweg(pois, { vervoer, samenvattingen: summariesById })
+    ecoPoi,
+  } = useOnderweg(pois, { vervoer, samenvattingen: summariesById, eco: ecoOpen })
+
+  const routeStarten = () => {
+    start()
+    if (ECO_BIJ_START) setEcoOpen(true)
+  }
+
+  const routeStoppen = () => {
+    setEcoOpen(false)
+    stop()
+  }
 
   const zonderSamenvatting = pois.filter((p) => !(p.id in (summariesById || {}))).length
 
@@ -45,7 +64,7 @@ function Onderweg({ pois, summariesById }) {
           krijgen alleen de korte Wikidata-omschrijving.
         </p>
       )}
-      <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' }}>
         {Object.entries(VERVOER).map(([key, v]) => (
           <button
             key={key}
@@ -61,10 +80,20 @@ function Onderweg({ pois, summariesById }) {
       <button
         type="button"
         className={actief ? 'btn btn-pink btn-wide' : 'btn btn-green btn-wide'}
-        onClick={actief ? stop : start}
+        onClick={actief ? routeStoppen : routeStarten}
       >
         {actief ? 'Route stoppen' : `Route starten (${pois.length} POI's)`}
       </button>
+      {actief && (
+        <button
+          type="button"
+          className="btn btn-blue btn-wide"
+          style={{ marginTop: '8px' }}
+          onClick={() => setEcoOpen(true)}
+        >
+          Eco-scherm
+        </button>
+      )}
       {fout && <p className="error">{fout}</p>}
       {actief && !positie && !fout && <p className="muted">Wachten op GPS-positie…</p>}
       {actief && positie && (
@@ -105,6 +134,15 @@ function Onderweg({ pois, summariesById }) {
             </li>
           ))}
         </ul>
+      )}
+      {actief && ecoOpen && (
+        <EcoScherm
+          poi={ecoPoi}
+          positie={positie}
+          rijrichting={rijrichting}
+          samenvatting={ecoPoi && summariesById ? summariesById[ecoPoi.id] || null : null}
+          onSluiten={() => setEcoOpen(false)}
+        />
       )}
     </>
   )
