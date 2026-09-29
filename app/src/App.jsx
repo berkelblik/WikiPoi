@@ -5,6 +5,7 @@ import '../../src/route-buffer.js'
 import '../../src/osm-fallback.js'
 import '../../src/wikipedia-summary.js'
 import '../../src/wikidata-zin.js'
+import '../../src/commons-foto.js'
 import '../../src/poi-categories.js'
 import { Capacitor } from '@capacitor/core'
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem'
@@ -43,6 +44,15 @@ const WIKIDATA_MERGE_METERS = 10
 const WIKIDATA_LIMIT_PER_CATEGORY = 300
 
 const SUMMARY_MAX_SENTENCES = 3
+
+// Foto bij een samenvatting: eerst de foto met bronvermelding (entry.foto,
+// Commons), anders de thumbnail van het artikel (bijv. een lokaal
+// Wikipedia-bestand, zonder maker en licentie).
+function fotoUrlVan(entry) {
+  if (!entry) return null
+  if (entry.foto && entry.foto.url) return entry.foto.url
+  return entry.summary && entry.summary.thumbnailUrl ? entry.summary.thumbnailUrl : null
+}
 
 // Triggerstraal per POI in de EuroPoi-CSV: altijd 0, EuroPoi kiest zelf
 // (op basis van vervoerswijze en, in route-modus, de afstand tot de route).
@@ -469,8 +479,10 @@ function App() {
     })
     // Terugval voor Wikidata-items zonder samenvatting: een korte Nederlandse
     // zin uit Wikidata-eigenschappen (wikidata-zin.js, één verzoek). Mislukt
-    // dit, dan blijft de Wikidata-omschrijving, zoals voorheen.
+    // dit, dan blijft de Wikidata-omschrijving, zoals voorheen. Dezelfde
+    // query levert de Wikidata-foto (P18), ook als er geen zin is.
     const zonderTekst = candidates.filter((p) => !(added[p.id] && added[p.id].summary))
+    const fotoBestanden = {}
     if (
       zonderTekst.length > 0 &&
       window.WikiPoiWikidataZin &&
@@ -481,13 +493,48 @@ function App() {
         zonderTekst.forEach((p) => {
           const r = zinnen[p.id]
           if (r && r.summary) added[p.id] = { summary: r.summary, summaryError: '' }
+          if (r && r.fotoBestand) fotoBestanden[p.id] = r.fotoBestand
         })
       } catch (err) {
         console.warn('Zin uit Wikidata mislukt:', err)
       }
     }
+    await voegFotosToe(candidates, added, fotoBestanden)
     setSummariesById((prev) => ({ ...prev, ...added }))
     return { ...summariesById, ...added }
+  }
+
+  // Foto's bij de samenvattingen (entry.foto = { bestand, url, maker,
+  // licentie }): de thumbnail van het artikel als die op Commons staat,
+  // anders de Wikidata-foto (P18) van POI's zonder artikel. Daarna maker en
+  // licentie via de Commons-API (commons-foto.js, één verzoek per 50
+  // foto's). Mislukt dat, dan blijven de foto's zonder bronvermelding.
+  async function voegFotosToe(candidates, added, fotoBestanden) {
+    const CF = window.WikiPoiCommonsFoto
+    if (!CF || typeof CF.haalFotoInfo !== 'function') return
+    candidates.forEach((p) => {
+      const entry = added[p.id] || { summary: null, summaryError: '' }
+      const thumb = entry.summary && entry.summary.thumbnailUrl
+      const bestand = thumb ? CF.bestandUitUploadUrl(thumb) : fotoBestanden[p.id] || null
+      if (!bestand) return
+      added[p.id] = {
+        ...entry,
+        foto: { bestand, url: thumb || CF.fotoUrl(bestand), maker: null, licentie: null },
+      }
+    })
+    const bestanden = Object.values(added)
+      .map((e) => (e.foto ? e.foto.bestand : null))
+      .filter(Boolean)
+    if (bestanden.length === 0) return
+    try {
+      const info = await CF.haalFotoInfo(bestanden, { retryDelayMs: 1000 })
+      Object.keys(added).forEach((id) => {
+        const foto = added[id].foto
+        if (foto && info[foto.bestand]) added[id] = { ...added[id], foto: { ...foto, ...info[foto.bestand] } }
+      })
+    } catch (err) {
+      console.warn('Maker en licentie van foto\'s (Commons) mislukt:', err)
+    }
   }
 
   async function runSummaries() {
@@ -800,11 +847,13 @@ function App() {
                 .filter((p) => p.id in summariesById)
                 .map((poi) => {
                   const entry = summariesById[poi.id]
+                  const fotoUrl = fotoUrlVan(entry)
+                  const fotoBron = window.WikiPoiCommonsFoto
+                    ? window.WikiPoiCommonsFoto.bronTekst(entry.foto)
+                    : null
                   return (
                     <li key={poi.id}>
-                      {entry.summary && entry.summary.thumbnailUrl && (
-                        <img src={entry.summary.thumbnailUrl} alt="" />
-                      )}
+                      {fotoUrl && <img src={fotoUrl} alt="" />}
                       <span className="category-name">
                         <CategoryDot categoryKey={poi.categoryKey} />
                         {poi.label}
@@ -834,6 +883,7 @@ function App() {
                           gebruikt de Wikidata-omschrijving.
                         </p>
                       )}
+                      {fotoUrl && fotoBron && <p className="summary-text muted foto-bron">{fotoBron}</p>}
                     </li>
                   )
                 })}

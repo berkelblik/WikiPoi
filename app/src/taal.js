@@ -13,6 +13,8 @@
  *   het toestel, voor de aankondiging onderweg.
  * - toelichtingTaal(): in welke taal de toelichting van een POI is, zodat
  *   die met een passende stem wordt voorgelezen.
+ * - labelTaal(): in welke taal de naam van een POI is, voor het uitspreken
+ *   van de naam bij POI's zonder toelichting.
  */
 
 export const APP_TAAL = 'nl-NL'
@@ -66,6 +68,22 @@ export function toelichtingTaal(poi, entry) {
     if (t) return t
   }
   return telefoonTaal()
+}
+
+/**
+ * Taal van de naam (label) van een POI: de taal die de Wikidata-
+ * labelservice meegaf (labelLanguage). Bij 'mul', onbekend of dezelfde
+ * basistaal als het toestel: de taal van het toestel (met regio, bijv.
+ * 'nl-NL', voor de juiste stem).
+ *
+ * @param {object} poi
+ * @returns {string} taalcode, bijv. 'fr' of 'nl-NL'
+ */
+export function labelTaal(poi) {
+  const t = bruikbaar(poi && poi.labelLanguage)
+  const toestel = telefoonTaal()
+  if (!t || basisTaal(t) === basisTaal(toestel)) return toestel
+  return t
 }
 
 // Klokrichting per taal (basistaal van het toestel). Alleen talen waarvoor

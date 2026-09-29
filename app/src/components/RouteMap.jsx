@@ -9,9 +9,14 @@
  * Afgeslankte variant van EuroPoi src/components/LeafletMap.jsx: zelfde
  * aanpak (gewone Leaflet, geen React-Leaflet; ResizeObserver →
  * invalidateSize() zodat in-/uitklappen geen grijze vlakken geeft; OSM/SAT-
- * wissel rechtsboven), maar zonder eigen-locatie-marker, volgmodus,
- * crosshair en GPS-track. Nieuw t.o.v. EuroPoi: fitBounds() op de route
- * i.p.v. centreren op de gebruiker.
+ * wissel rechtsboven), maar zonder crosshair en GPS-track. Nieuw t.o.v.
+ * EuroPoi: fitBounds() op de route i.p.v. centreren op de gebruiker.
+ *
+ * Eigen positie (alleen als de prop positie is meegegeven, in stap 7
+ * "Onderweg"): blauwe stip met witte rand, lichtblauwe cirkel voor de
+ * GPS-nauwkeurigheid en, zodra de rijrichting bekend is, een pijltje in die
+ * richting. De kaart volgt de positie; zelf schuiven zet het volgen uit,
+ * de knop "Volg mij" (linksboven) zet het weer aan.
  *
  * Leaflet komt hier uit npm (import) i.p.v. dynamisch van unpkg zoals in
  * EuroPoi: dan zit het in de app-bundel en werkt de kaartcode ook zonder
@@ -45,6 +50,8 @@
  *   corridorMeters number                  — corridorbreedte aan weerszijden
  *                                              van de route; zonder geldige
  *                                              waarde wordt geen strook getoond
+ *   positie        {lat,lng,nauwkeurigheid}|null — optioneel: eigen positie
+ *   rijrichting    number|null             — optioneel: graden (0 = noord)
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -83,6 +90,30 @@ const MARKER_SIZE_IN = 28
 const MARKER_SIZE_OUT = 22
 const LEGEND_SWATCH_SIZE = 18
 
+// Eigen positie: kleur, grootte van het icoon (stip + pijltje) en het
+// zoomniveau waarop de kaart bij de eerste positie inzoomt.
+const COLOR_POSITIE = '#2563eb'
+const POSITIE_ICOON_PX = 44
+const POSITIE_ZOOM = 16
+
+// Icoon eigen positie: stip met witte rand; met bekende rijrichting een
+// pijltje ervoor, gedraaid naar die richting (noord boven, met de klok mee).
+function positieHtml(rijrichting) {
+  const c = POSITIE_ICOON_PX / 2
+  const pijl = Number.isFinite(rijrichting)
+    ? `<path d="M${c} 2 L${c + 8} ${c - 9} L${c - 8} ${c - 9} Z" fill="${COLOR_POSITIE}" ` +
+      `stroke="#ffffff" stroke-width="2" stroke-linejoin="round" ` +
+      `transform="rotate(${Math.round(rijrichting)} ${c} ${c})"/>`
+    : ''
+  return (
+    `<svg width="${POSITIE_ICOON_PX}" height="${POSITIE_ICOON_PX}" viewBox="0 0 ${POSITIE_ICOON_PX} ${POSITIE_ICOON_PX}" ` +
+    `style="display:block;filter:drop-shadow(0 1px 3px rgba(0,0,0,0.5))">` +
+    pijl +
+    `<circle cx="${c}" cy="${c}" r="8" fill="${COLOR_POSITIE}" stroke="#ffffff" stroke-width="3"/>` +
+    `</svg>`
+  )
+}
+
 // Omtrek van de aarde aan de evenaar (WGS84) en de tegelgrootte: de
 // grootheden waarmee Leaflet (Web Mercator, EPSG:3857) rekent.
 const EARTH_CIRCUMFERENCE_M = 40075016.686
@@ -104,13 +135,17 @@ function escapeHtml(text) {
     .replace(/"/g, '&quot;')
 }
 
-function RouteMap({ routePoints, pois, corridorMeters }) {
+function RouteMap({ routePoints, pois, corridorMeters, positie = null, rijrichting = null }) {
   const containerRef = useRef(null)
   const mapRef = useRef(null)
   const tileLayerRef = useRef(null)
   const routeLayerRef = useRef(null)
   const corridorLayerRef = useRef(null)
   const poiLayerRef = useRef(null)
+  const positieMarkerRef = useRef(null)
+  const nauwkeurigheidRef = useRef(null)
+  // Eerste positie na het starten: dan inzoomen, daarna alleen meeschuiven.
+  const eerstePositieRef = useRef(true)
   // Breedtegraad van het routemidden, voor de omrekening meters → pixels.
   const routeLatRef = useRef(null)
   // Actuele corridorbreedte in een ref, zodat de zoomend-handler (die één
@@ -124,6 +159,8 @@ function RouteMap({ routePoints, pois, corridorMeters }) {
   const [tileKey, setTileKey] = useState('osm')
   // Legenda standaard ingeklapt: op een telefoon is de kaart maar 320 px hoog.
   const [legendOpen, setLegendOpen] = useState(false)
+  // Kaart volgt de eigen positie; zelf schuiven zet dit uit.
+  const [volgen, setVolgen] = useState(true)
 
   // Legenda: alleen de categorieën die in de huidige POI-lijst voorkomen, in
   // de vaste volgorde van CATEGORY_STYLES (onbekende categorie achteraan).
@@ -178,6 +215,8 @@ function RouteMap({ routePoints, pois, corridorMeters }) {
     mapRef.current = map
     poiLayerRef.current = L.layerGroup().addTo(map)
     map.on('zoomend', updateCorridorWidth)
+    // Alleen slepen door de gebruiker vuurt dragstart (niet setView/panTo).
+    map.on('dragstart', () => setVolgen(false))
 
     const ro = new ResizeObserver(() => {
       if (!mapRef.current) return
@@ -194,6 +233,8 @@ function RouteMap({ routePoints, pois, corridorMeters }) {
       routeLayerRef.current = null
       corridorLayerRef.current = null
       poiLayerRef.current = null
+      positieMarkerRef.current = null
+      nauwkeurigheidRef.current = null
     }
   }, [])
 
@@ -314,9 +355,96 @@ function RouteMap({ routePoints, pois, corridorMeters }) {
     })
   }, [pois])
 
+  // Eigen positie: stip, nauwkeurigheidscirkel en pijltje bijwerken; bij
+  // volgen de kaart meeschuiven (eerste keer inzoomen).
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    const geldig = positie && Number.isFinite(positie.lat) && Number.isFinite(positie.lng)
+    if (!geldig) {
+      if (positieMarkerRef.current) map.removeLayer(positieMarkerRef.current)
+      if (nauwkeurigheidRef.current) map.removeLayer(nauwkeurigheidRef.current)
+      positieMarkerRef.current = null
+      nauwkeurigheidRef.current = null
+      eerstePositieRef.current = true
+      return
+    }
+    const punt = [positie.lat, positie.lng]
+    const straal = Number.isFinite(positie.nauwkeurigheid) ? positie.nauwkeurigheid : 0
+    if (!nauwkeurigheidRef.current) {
+      nauwkeurigheidRef.current = L.circle(punt, {
+        radius: straal,
+        color: COLOR_POSITIE,
+        weight: 1,
+        opacity: 0.5,
+        fillColor: COLOR_POSITIE,
+        fillOpacity: 0.12,
+        interactive: false,
+      }).addTo(map)
+    } else {
+      nauwkeurigheidRef.current.setLatLng(punt).setRadius(straal)
+    }
+    const icon = L.divIcon({
+      className: 'wikipoi-positie',
+      html: positieHtml(rijrichting),
+      iconSize: [POSITIE_ICOON_PX, POSITIE_ICOON_PX],
+      iconAnchor: [POSITIE_ICOON_PX / 2, POSITIE_ICOON_PX / 2],
+    })
+    if (!positieMarkerRef.current) {
+      positieMarkerRef.current = L.marker(punt, {
+        icon,
+        keyboard: false,
+        interactive: false,
+        zIndexOffset: 5000,
+      }).addTo(map)
+    } else {
+      positieMarkerRef.current.setLatLng(punt).setIcon(icon)
+    }
+    if (volgen) {
+      // Niet meer later alsnog naar de hele route springen.
+      needsFitRef.current = false
+      if (eerstePositieRef.current) {
+        map.setView(punt, Math.max(map.getZoom(), POSITIE_ZOOM))
+        eerstePositieRef.current = false
+      } else {
+        map.panTo(punt)
+      }
+    }
+  }, [positie, rijrichting, volgen])
+
+  const volgMij = () => {
+    eerstePositieRef.current = true
+    setVolgen(true)
+  }
+
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
       <div ref={containerRef} style={{ position: 'absolute', inset: 0 }} />
+
+      {/* Volg mij — linksboven, alleen als volgen is uitgezet */}
+      {positie && !volgen && (
+        <button
+          type="button"
+          onClick={volgMij}
+          style={{
+            position: 'absolute',
+            top: '10px',
+            left: '10px',
+            zIndex: 1000,
+            padding: '6px 12px',
+            border: 'none',
+            borderRadius: '12px',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+            background: COLOR_POSITIE,
+            color: '#ffffff',
+            fontSize: '12px',
+            fontWeight: 800,
+            cursor: 'pointer',
+          }}
+        >
+          Volg mij
+        </button>
+      )}
 
       {/* Legenda — linksonder, uitklapbaar */}
       {legendItems.length > 0 && (

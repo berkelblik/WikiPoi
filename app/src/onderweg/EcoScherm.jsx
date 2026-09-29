@@ -13,7 +13,7 @@
  *
  * Tikken: 1× = fietsbel, 3× snel = eco-scherm sluiten.
  */
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { KeepAwake } from '@capacitor-community/keep-awake'
 import { afstand, peiling, relatieveHoek, klokRichting } from './geo.js'
 import { pluscode } from './pluscode.js'
@@ -23,11 +23,14 @@ import './EcoScherm.css'
 // Tijd waarbinnen tikken als één reeks telt (zelfde als EuroPoi).
 const TIK_VENSTER_MS = 400
 
-// Bron van een foto uit de Wikipedia-samenvatting: bestanden op Commons
-// staan onder /wikipedia/commons/, lokale bestanden onder /wikipedia/<taal>/.
-// Voorlopige vermelding; maker en licentie volgen in een latere stap.
+// Bron van een foto: bestanden op Commons staan onder /wikipedia/commons/
+// (thumbnail van een artikel) of komen via commons.wikimedia.org (Wikidata-
+// foto, P18); lokale Wikipedia-bestanden onder /wikipedia/<taal>/. Maker en
+// licentie staan bij stap 5; hier blijft het een korte vermelding.
 function fotoBron(url) {
-  return /\/wikipedia\/commons\//.test(url) ? 'Foto: Wikimedia Commons' : 'Foto: Wikipedia'
+  return /\/wikipedia\/commons\/|\/\/commons\.wikimedia\.org\//.test(url)
+    ? 'Foto: Wikimedia Commons'
+    : 'Foto: Wikipedia'
 }
 
 // Afstand als getal en eenheid, zoals in EuroPoi ("12" "M", "1,4" "KM").
@@ -42,6 +45,8 @@ const STREEPJES = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330]
 function EcoScherm({ poi, positie, rijrichting, samenvatting, onSluiten }) {
   const tikken = useRef(0)
   const tikTimer = useRef(null)
+  // Foto die niet laadde (geen verbinding of weg): niet meer tonen.
+  const [kapotteFoto, setKapotteFoto] = useState(null)
 
   // Scherm aan houden zolang het eco-scherm open is.
   useEffect(() => {
@@ -80,8 +85,12 @@ function EcoScherm({ poi, positie, rijrichting, samenvatting, onSluiten }) {
     const klok = bekend ? klokRichting(rijrichting, richtingPoi) : null
     const { getal, eenheid } = afstandDelen(afstand(positie, poi))
     const code = pluscode(poi.lat, poi.lng)
-    const foto =
-      samenvatting && samenvatting.summary ? samenvatting.summary.thumbnailUrl || null : null
+    // Foto met bronvermelding (Commons, ook Wikidata P18 bij POI's zonder
+    // artikel), anders de thumbnail van het artikel.
+    const fotoUrl =
+      (samenvatting && samenvatting.foto && samenvatting.foto.url) ||
+      (samenvatting && samenvatting.summary ? samenvatting.summary.thumbnailUrl || null : null)
+    const foto = fotoUrl && fotoUrl !== kapotteFoto ? fotoUrl : null
 
     inhoud = (
       <div className="eco-inhoud">
@@ -123,7 +132,7 @@ function EcoScherm({ poi, positie, rijrichting, samenvatting, onSluiten }) {
           </div>
         </div>
 
-        <div className="eco-kaart">
+        <div className={foto ? 'eco-kaart eco-kaart-met-foto' : 'eco-kaart'}>
           <p className="eco-naam">{poi.label}</p>
           {code && <p className="eco-pluscode">{code}</p>}
           {foto && (
@@ -131,10 +140,9 @@ function EcoScherm({ poi, positie, rijrichting, samenvatting, onSluiten }) {
               <img
                 src={foto}
                 alt=""
-                onError={(e) => {
-                  // Geen verbinding of foto weg: foto en vermelding verbergen.
-                  e.currentTarget.parentElement.style.display = 'none'
-                }}
+                // Geen verbinding of foto weg: foto en vermelding verbergen,
+                // en het kaartje niet meer laten meegroeien.
+                onError={() => setKapotteFoto(foto)}
               />
               <figcaption>{fotoBron(foto)}</figcaption>
             </figure>

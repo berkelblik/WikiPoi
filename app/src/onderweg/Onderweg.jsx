@@ -13,6 +13,11 @@
  * Simulatie (testmodus, TEST_SIMULATIE): rit langs de geladen route zonder
  * GPS, om trigger en eco-scherm thuis te testen. Snelheid volgt de
  * vervoerwijze; versnelling ×1/×5/×10, pauze en "Naar volgende POI".
+ *
+ * Kaart: zolang de route loopt een compacte kaart (RouteMap) met route,
+ * POI's en de eigen positie (stip, nauwkeurigheid, pijltje rijrichting).
+ * De kaart volgt de positie; na zelf schuiven zet "Volg mij" het volgen
+ * weer aan. Bij de simulatie is dat de gesimuleerde positie.
  */
 import { useState } from 'react'
 import { useOnderweg, VERVOER, STANDAARD_VERVOER } from './useOnderweg.js'
@@ -20,6 +25,7 @@ import EcoScherm from './EcoScherm.jsx'
 import { SIM_SNELHEID_KMU, SIM_VERSNELLINGEN } from './simulatie.js'
 import { formatAfstand } from './geo.js'
 import { getCategoryStyle } from '../components/poi-icons.js'
+import RouteMap from '../components/RouteMap.jsx'
 
 // Productie: true = eco-scherm meteen bij "Route starten". Testfase: false,
 // dan blijft de lijst zichtbaar en open je het eco-scherm met de knop.
@@ -27,6 +33,10 @@ const ECO_BIJ_START = false
 
 // Testfase: true = keuze "Simulatie" zichtbaar. Productie: false.
 const TEST_SIMULATIE = true
+
+// Hoogte van de kaart in stap 7 (kleiner dan bij stap 4, zodat de lijst
+// met dichtstbijzijnde POI's eronder in beeld blijft).
+const KAART_HOOGTE = '260px'
 
 // "3,2" (km, één decimaal, komma).
 const km = (meters) => (meters / 1000).toFixed(1).replace('.', ',')
@@ -186,6 +196,17 @@ function Onderweg({ pois, summariesById, routePunten }) {
           {rijrichting === null ? 'nog onbekend (eerst ± 10 m verplaatsen)' : `${Math.round(rijrichting)}°`}{' '}
           · voorgelezen: {aantalVoorgelezen} van {pois.length}
         </p>
+      )}
+      {actief && (
+        <div className="map-frame" style={{ height: KAART_HOOGTE, marginBottom: '12px' }}>
+          <RouteMap
+            routePoints={routePunten || []}
+            pois={pois}
+            corridorMeters={null}
+            positie={positie}
+            rijrichting={rijrichting}
+          />
+        </div>
       )}
       {nuAanHetVoorlezen && (
         <p className="success">

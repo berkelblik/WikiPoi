@@ -24,6 +24,10 @@
  *    geen zin (een Engels zelfstandig naamwoord in een Nederlandse zin
  *    leest en klinkt rommelig).
  *
+ * Dezelfde query haalt ook de foto (P18) op: de bestandsnaam op Wikimedia
+ * Commons, ook als er geen zin van te maken is. URL, maker en licentie
+ * komen uit commons-foto.js.
+ *
  * Namen (personen, organisaties) mogen in elke taal; begrippen (stijl,
  * materiaal, gebeurtenis, soort) alleen met een Nederlands of mul-label,
  * of via de vaste tabellen hieronder. Nooit een zin met een QID erin.
@@ -59,11 +63,15 @@
   const DEFAULT_TIMEOUT_MS = 40000;
 
   const ENTITEIT_RE = /\/entity\/(Q[0-9]+)$/;
+  // Waarde van P18 in de query: .../wiki/Special:FilePath/<bestandsnaam>.
+  const FILEPATH_RE = /\/Special:FilePath\/([^?#]+)$/;
 
   // Eigenschappen met een item als waarde (via wdt:, dus de "beste" rang).
   const ITEM_EIGENSCHAPPEN = ['P31', 'P417', 'P547', 'P149', 'P1435', 'P84', 'P170', 'P186'];
   // Eigenschappen met een tijd als waarde (via p:/psv:, voor de precisie).
   const TIJD_EIGENSCHAPPEN = ['P571', 'P1619'];
+  // Foto (afbeelding op Wikimedia Commons).
+  const FOTO_EIGENSCHAP = 'P18';
 
   const Q_MENS = 'Q5';
   const Q_CIRCA = 'Q5727902';
@@ -154,7 +162,8 @@
 
   /**
    * SPARQL-query voor een lijst QID's: één rij per waarde. Item-waarden met
-   * label (en of het een mens is), tijdwaarden met precisie en circa.
+   * label (en of het een mens is), tijdwaarden met precisie en circa, en de
+   * foto (P18) als ?foto.
    */
   function buildZinQuery(ids) {
     const values = Array.from(new Set(ids || []))
@@ -164,7 +173,7 @@
     const itemParen = ITEM_EIGENSCHAPPEN.map((p) => '("' + p + '" wdt:' + p + ')').join(' ');
     const tijdParen = TIJD_EIGENSCHAPPEN.map((p) => '("' + p + '" p:' + p + ' psv:' + p + ')').join(' ');
     return (
-      'SELECT ?item ?eig ?waarde ?waardeLabel ?mens ?tijd ?precisie ?circa WHERE {\n' +
+      'SELECT ?item ?eig ?waarde ?waardeLabel ?mens ?tijd ?precisie ?circa ?foto WHERE {\n' +
       '  VALUES ?item { ' + values + ' }\n' +
       '  {\n' +
       '    VALUES (?eig ?p) { ' + itemParen + ' }\n' +
@@ -181,6 +190,11 @@
       '    FILTER NOT EXISTS { ?st wikibase:rank wikibase:DeprecatedRank }\n' +
       '    OPTIONAL { ?st pq:P1480 ?circa . }\n' +
       '  }\n' +
+      '  UNION\n' +
+      '  {\n' +
+      '    BIND("' + FOTO_EIGENSCHAP + '" AS ?eig)\n' +
+      '    ?item wdt:' + FOTO_EIGENSCHAP + ' ?foto .\n' +
+      '  }\n' +
       '  SERVICE wikibase:label { bd:serviceParam wikibase:language "' + LABEL_TALEN.join(',') + '". }\n' +
       '}'
     );
@@ -192,8 +206,26 @@
   }
 
   /**
+   * Bestandsnaam op Commons uit een Special:FilePath-URL, met spaties in
+   * plaats van liggende streepjes ("Église de X.jpg"); null als het geen
+   * FilePath-URL is.
+   */
+  function fotoBestandUit(url) {
+    const m = FILEPATH_RE.exec(url || '');
+    if (!m) return null;
+    let naam;
+    try {
+      naam = decodeURIComponent(m[1]);
+    } catch {
+      return null;
+    }
+    naam = naam.replace(/_/g, ' ').trim();
+    return naam || null;
+  }
+
+  /**
    * Zet de SPARQL-respons om naar { poiId: eigenschappen }, met
-   * eigenschappen = { P31: [waarde], ..., P571: [tijd], ... }.
+   * eigenschappen = { P31: [waarde], ..., P571: [tijd], ..., P18: [bestand] }.
    * Waarde: { id, label, lang, mens }; label null als Wikidata alleen de
    * QID teruggeeft. Tijd: { jaar, precisie, circa }. Dubbele rijen
    * (door OPTIONAL-combinaties) worden samengevoegd.
@@ -207,6 +239,12 @@
       if (!poiId || !eig) continue;
       const poi = perPoi[poiId] || (perPoi[poiId] = {});
       const lijst = poi[eig] || [];
+      if (eig === FOTO_EIGENSCHAP) {
+        const bestand = fotoBestandUit(b.foto && b.foto.value);
+        if (bestand && !lijst.includes(bestand)) lijst.push(bestand);
+        if (lijst.length > 0) poi[eig] = lijst;
+        continue;
+      }
       if (TIJD_EIGENSCHAPPEN.includes(eig)) {
         const jaar = jaarUit(b.tijd && b.tijd.value);
         const precisie = b.precisie ? parseInt(b.precisie.value, 10) : NaN;
@@ -568,8 +606,9 @@
   }
 
   /**
-   * Voor een lijst POI's zonder artikel: een Nederlandse zin uit Wikidata.
-   * Mislukt een query, dan gooit deze functie.
+   * Voor een lijst POI's zonder artikel: een Nederlandse zin uit Wikidata,
+   * en de bestandsnaam van de foto (P18, de eerste als er meer zijn; ook
+   * als er geen zin is). Mislukt een query, dan gooit deze functie.
    *
    * @param {Array<{id:string,label:string}>} pois
    * @param {object} [options]
@@ -577,7 +616,7 @@
    * @param {number} [options.minOnderdelen=2]
    * @param {number} [options.maxTekens=200]
    * @param {Function} [options.fetchImpl] - voor tests
-   * @returns {Promise<Object<string, {summary:?object, diagnose:object}>>}
+   * @returns {Promise<Object<string, {summary:?object, diagnose:object, fotoBestand:?string}>>}
    */
   async function haalWikidataZinnen(pois, options) {
     const opts = options || {};
@@ -592,7 +631,9 @@
     }
     for (const poi of lijst) {
       const { zin, diagnose } = maakZin(eigenschappen[poi.id], opts);
-      resultaat[poi.id] = { summary: zin ? maakSummary(poi, zin) : null, diagnose };
+      const e = eigenschappen[poi.id];
+      const fotoBestand = e && e[FOTO_EIGENSCHAP] ? e[FOTO_EIGENSCHAP][0] : null;
+      resultaat[poi.id] = { summary: zin ? maakSummary(poi, zin) : null, diagnose, fotoBestand };
     }
     return resultaat;
   }
@@ -605,7 +646,9 @@
     SOORTEN,
     STIJLEN,
     STATUS_BESCHERMD_QIDS,
+    FOTO_EIGENSCHAP,
     buildZinQuery,
+    fotoBestandUit,
     parseZinResults,
     jaarUit,
     bepaalSoort,

@@ -39,7 +39,7 @@ import { Capacitor } from '@capacitor/core'
 import { Geolocation } from '@capacitor/geolocation'
 import { afstand, peiling, klokRichting } from './geo.js'
 import { spreek, bel, dubbeleBel, stopSpreken } from './spreek.js'
-import { basisTaal, klokZin, telefoonTaal, toelichtingTaal } from '../taal.js'
+import { basisTaal, klokZin, labelTaal, toelichtingTaal } from '../taal.js'
 import { maakSimulatie, volgendeDoel, SIM_SNELHEID_KMU, SIM_VOORLOOP_M } from './simulatie.js'
 
 // Minimale verplaatsing voordat de rijrichting wordt (bij)gewerkt. Kleiner
@@ -72,8 +72,10 @@ export function triggerStraal(poi, vervoer) {
 // - toelichting: de samenvatting (stap 5) of anders de Wikidata-omschrijving
 //   (dezelfde keuze als de CSV-export), in de taal van die tekst.
 // Is de basistaal van beide gelijk, dan wordt het één deel.
-// Zonder toelichting wordt de naam wél uitgesproken (in de taal van het
-// toestel, de voorkeurstaal van de Wikidata-namen), anders zegt de bel niets.
+// Zonder toelichting wordt de naam wél uitgesproken, anders zegt de bel
+// niets: in de taal van het label (labelLanguage uit Wikidata; 'mul' of
+// onbekend: de taal van het toestel), de klokzin in de taal van het toestel.
+// Ook hier één deel als de basistaal gelijk is.
 export function voorleesDelen(poi, samenvattingen, klok) {
   const entry = samenvattingen ? samenvattingen[poi.id] || null : null
   const beschrijving = (
@@ -82,8 +84,13 @@ export function voorleesDelen(poi, samenvattingen, klok) {
   const richting = klokZin(klok)
   if (!beschrijving) {
     const naam = `${poi.label || ''}`.trim()
-    const tekst = [naam ? `${naam}.` : '', richting ? richting.tekst : ''].join(' ').trim()
-    return tekst ? [{ tekst, lang: telefoonTaal() }] : []
+    if (!naam) return richting ? [richting] : []
+    const naamDeel = { tekst: `${naam}.`, lang: labelTaal(poi) }
+    if (!richting) return [naamDeel]
+    if (basisTaal(naamDeel.lang) === basisTaal(richting.lang)) {
+      return [{ tekst: `${naamDeel.tekst} ${richting.tekst}`, lang: richting.lang }]
+    }
+    return [naamDeel, richting]
   }
   const taal = toelichtingTaal(poi, entry)
   if (!richting) return [{ tekst: beschrijving, lang: taal }]
@@ -124,7 +131,8 @@ function laadFotosVooraf(pois, samenvattingen) {
   if (typeof Image === 'undefined') return
   pois.forEach((poi) => {
     const entry = samenvattingen ? samenvattingen[poi.id] : null
-    const url = entry && entry.summary ? entry.summary.thumbnailUrl : null
+    const url =
+      (entry && entry.foto && entry.foto.url) || (entry && entry.summary ? entry.summary.thumbnailUrl : null)
     if (url) {
       const img = new Image()
       img.src = url

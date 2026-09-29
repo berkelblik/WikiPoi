@@ -3,7 +3,7 @@
  *
  * Netwerkloze test voor wikidata-zin.js: querytekst, SPARQL-rijen
  * parseren, zinsdelen (heilige, herdenking, tijd, stijl, status) en hele
- * zinnen, en de hoofdfunctie met een nagebootste fetch.
+ * zinnen, de foto (P18) en de hoofdfunctie met een nagebootste fetch.
  *
  * Uitvoeren vanuit src/:  node test-wikidata-zin.js
  */
@@ -37,6 +37,14 @@ function tijdRij(item, eig, tijd, precisie, circa) {
   if (circa) b.circa = uri('Q5727902');
   return b;
 }
+/** Rij met een foto (P18), zoals de query hem levert. */
+function fotoRij(item, bestandsUrl) {
+  return {
+    item: uri(item),
+    eig: lit('P18'),
+    foto: { type: 'uri', value: 'http://commons.wikimedia.org/wiki/Special:FilePath/' + bestandsUrl },
+  };
+}
 const json = (bindings) => ({ results: { bindings } });
 
 // Morvan-achtige kerk: nl-label heilige, eeuw, romaans, monument historique.
@@ -64,6 +72,37 @@ async function main() {
     assert.ok(q.includes('("P571" p:P571 psv:P571)'));
     assert.ok(q.includes('"nl,mul,en,fr,de"'));
     assert.ok(!q.includes('P131'));
+  });
+
+  await test('query: foto (P18) als eigen tak met ?foto', () => {
+    const q = Z.buildZinQuery(['Q1']);
+    assert.ok(q.startsWith('SELECT ?item ?eig ?waarde ?waardeLabel ?mens ?tijd ?precisie ?circa ?foto WHERE'));
+    assert.ok(q.includes('BIND("P18" AS ?eig)'));
+    assert.ok(q.includes('?item wdt:P18 ?foto .'));
+  });
+
+  await test('foto: bestandsnaam uit FilePath-URL', () => {
+    const basis = 'http://commons.wikimedia.org/wiki/Special:FilePath/';
+    assert.strictEqual(Z.fotoBestandUit(basis + '%C3%89glise%20de%20Dun.jpg'), 'Église de Dun.jpg');
+    assert.strictEqual(Z.fotoBestandUit(basis + 'Monument_aux_morts.JPG'), 'Monument aux morts.JPG');
+    assert.strictEqual(Z.fotoBestandUit(basis + '%E0%A4%A.jpg'), null);
+    assert.strictEqual(Z.fotoBestandUit('http://www.wikidata.org/entity/Q1'), null);
+    assert.strictEqual(Z.fotoBestandUit(null), null);
+  });
+
+  await test('parseren: foto\'s per POI, dubbel eruit, geen invloed op de zin', () => {
+    const p = Z.parseZinResults(
+      json([
+        ...KERK,
+        fotoRij('Q1', 'Eglise%20A.jpg'),
+        fotoRij('Q1', 'Eglise_A.jpg'),
+        fotoRij('Q1', 'Eglise%20B.jpg'),
+        { item: uri('Q3'), eig: lit('P18'), foto: { type: 'uri', value: 'http://example.org/x.jpg' } },
+      ])
+    );
+    assert.deepStrictEqual(p.Q1.P18, ['Eglise A.jpg', 'Eglise B.jpg']);
+    assert.ok(!p.Q3 || !p.Q3.P18);
+    assert.strictEqual(Z.maakZin(p.Q1).zin, Z.maakZin(Z.parseZinResults(json(KERK)).Q1).zin);
   });
 
   await test('parseren: dubbele rijen samengevoegd, genid en QID-label genegeerd', () => {
@@ -307,6 +346,31 @@ async function main() {
     assert.strictEqual(r.Q7.summary, null);
     assert.ok(r.Q7.diagnose.reden.includes('geen P31'));
     assert.strictEqual(r['node/123'], undefined);
+    assert.strictEqual(r.Q1.fotoBestand, null);
+  });
+
+  await test('hoofdfunctie: fotoBestand, ook zonder zin (eerste foto)', async () => {
+    const fetchImpl = async () => ({
+      ok: true,
+      json: async () =>
+        json([
+          ...KERK,
+          fotoRij('Q1', 'Eglise%20A.jpg'),
+          fotoRij('Q7', 'Monument_aux_morts.jpg'),
+          fotoRij('Q7', 'Monument_2.jpg'),
+        ]),
+    });
+    const r = await Z.haalWikidataZinnen(
+      [
+        { id: 'Q1', label: 'église' },
+        { id: 'Q7', label: 'monument aux morts' },
+      ],
+      { fetchImpl, retryDelayMs: 0 }
+    );
+    assert.ok(r.Q1.summary);
+    assert.strictEqual(r.Q1.fotoBestand, 'Eglise A.jpg');
+    assert.strictEqual(r.Q7.summary, null);
+    assert.strictEqual(r.Q7.fotoBestand, 'Monument aux morts.jpg');
   });
 
   await test('hoofdfunctie: HTTP 400 → fout, geen tweede poging', async () => {
