@@ -896,7 +896,7 @@ function App() {
           disabled={corridorPois.length === 0}
           hint="Zoek eerst POI's bij stap 3; er moet minstens één POI binnen de corridor liggen."
         >
-          <Onderweg pois={corridorPois} summariesById={summariesById} />
+          <Onderweg pois={corridorPois} summariesById={summariesById} routePunten={routeInfo ? routeInfo.points : null} />
         </Step>
       </main>
     </>

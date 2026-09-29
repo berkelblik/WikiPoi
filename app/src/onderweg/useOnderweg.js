@@ -25,6 +25,13 @@
  * het scherm. De hook geeft die POI terug als ecoPoi, zolang hij wordt
  * voorgelezen of je nog binnen de straal bent.
  *
+ * Simulatie (testmodus): met optie simulatie = de routepunten gebruikt
+ * "Route starten" geen GPS, maar schuift de positie elke seconde verder
+ * langs de route (simulatie.js). Die posities gaan door verwerkPositie, net
+ * als echte GPS-posities, zodat trigger, bellen en eco-scherm ongewijzigd
+ * werken. Snelheid volgt de vervoerwijze; versnelling, pauze en "Naar
+ * volgende POI" via simVersnelling, simPauze en simVolgendePoi.
+ *
  * Bouwstap 4 van "Onderweg": eco-scherm. Nog geen track.
  */
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
@@ -33,6 +40,7 @@ import { Geolocation } from '@capacitor/geolocation'
 import { afstand, peiling, klokRichting } from './geo.js'
 import { spreek, bel, dubbeleBel, stopSpreken } from './spreek.js'
 import { basisTaal, klokZin, telefoonTaal, toelichtingTaal } from '../taal.js'
+import { maakSimulatie, volgendeDoel, SIM_SNELHEID_KMU, SIM_VOORLOOP_M } from './simulatie.js'
 
 // Minimale verplaatsing voordat de rijrichting wordt (bij)gewerkt. Kleiner
 // maakt de richting bij stilstand onrustig door GPS-ruis.
@@ -130,7 +138,7 @@ function foutTekst(err) {
 
 export function useOnderweg(
   pois,
-  { vervoer = STANDAARD_VERVOER, samenvattingen = {}, eco = false } = {}
+  { vervoer = STANDAARD_VERVOER, samenvattingen = {}, eco = false, simulatie = null } = {}
 ) {
   const [actief, setActief] = useState(false)
   const [positie, setPositie] = useState(null) // { lat, lng, nauwkeurigheid, tijd }
@@ -140,6 +148,8 @@ export function useOnderweg(
   const [nuAanHetVoorlezen, setNuAanHetVoorlezen] = useState(null) // label of null
   // POI voor het eco-scherm: { id, klaar } (klaar = uitgesproken), of null.
   const [ecoTrigger, setEcoTrigger] = useState(null)
+  // Simulatie: { meters, lengte, versnelling, gepauzeerd, klaar }, of null.
+  const [simStatus, setSimStatus] = useState(null)
 
   const watchIdRef = useRef(null)
   const richtingPuntRef = useRef(null)
@@ -147,6 +157,8 @@ export function useOnderweg(
   const samenvattingenRef = useRef(samenvattingen)
   const poisRef = useRef(pois)
   const ecoRef = useRef(eco)
+  const vervoerRef = useRef(vervoer)
+  const simRef = useRef(null)
 
   useEffect(() => {
     samenvattingenRef.current = samenvattingen
@@ -159,6 +171,14 @@ export function useOnderweg(
   useEffect(() => {
     ecoRef.current = eco
   }, [eco])
+
+  // Andere vervoerwijze tijdens een simulatie: andere snelheid.
+  useEffect(() => {
+    vervoerRef.current = vervoer
+    if (simRef.current) {
+      simRef.current.zetSnelheid(SIM_SNELHEID_KMU[vervoer] || SIM_SNELHEID_KMU[STANDAARD_VERVOER])
+    }
+  }, [vervoer])
 
   const verwerkPositie = useCallback((pos) => {
     const c = pos && pos.coords
@@ -183,6 +203,14 @@ export function useOnderweg(
     }
   }, [])
 
+  const stopSim = useCallback(() => {
+    if (simRef.current) {
+      simRef.current.stop()
+      simRef.current = null
+    }
+    setSimStatus(null)
+  }, [])
+
   const start = useCallback(async () => {
     setFout('')
     setPositie(null)
@@ -192,6 +220,20 @@ export function useOnderweg(
     setVoorgelezen({})
     setEcoTrigger(null)
     laadFotosVooraf(poisRef.current, samenvattingenRef.current)
+    stopSim()
+    if (Array.isArray(simulatie) && simulatie.length >= 2) {
+      stopWatch()
+      const sim = maakSimulatie(simulatie, {
+        snelheidKmu:
+          SIM_SNELHEID_KMU[vervoerRef.current] || SIM_SNELHEID_KMU[STANDAARD_VERVOER],
+        onPositie: verwerkPositie,
+        onStatus: setSimStatus,
+      })
+      simRef.current = sim
+      sim.start()
+      setActief(true)
+      return
+    }
     try {
       // Op het web vraagt de browser zelf om toestemming bij watchPosition.
       if (Capacitor.isNativePlatform()) {
@@ -219,7 +261,7 @@ export function useOnderweg(
       setFout(foutTekst(err))
       setActief(false)
     }
-  }, [stopWatch, verwerkPositie])
+  }, [simulatie, stopWatch, stopSim, verwerkPositie])
 
   const stopVoorlezen = useCallback(() => {
     stopSpreken()
@@ -229,18 +271,43 @@ export function useOnderweg(
 
   const stop = useCallback(() => {
     stopWatch()
+    stopSim()
     stopVoorlezen()
     setActief(false)
-  }, [stopWatch, stopVoorlezen])
+  }, [stopWatch, stopSim, stopVoorlezen])
 
-  // Bij verlaten van de pagina/component GPS-volgen en voorlezen stoppen.
+  // Bij verlaten van de pagina/component GPS-volgen, simulatie en voorlezen stoppen.
   useEffect(
     () => () => {
       stopWatch()
+      if (simRef.current) simRef.current.stop()
       stopSpreken()
     },
     [stopWatch]
   )
+
+  const simPauze = useCallback(() => {
+    const sim = simRef.current
+    if (sim) sim.pauzeer(!sim.status().gepauzeerd)
+  }, [])
+
+  const simVersnelling = useCallback((v) => {
+    if (simRef.current) simRef.current.zetVersnelling(v)
+  }, [])
+
+  // Naar SIM_VOORLOOP_M vóór de eerstvolgende POI die nog niet aan de beurt
+  // was. Geeft false als er verderop geen POI meer is.
+  const simVolgendePoi = useCallback(() => {
+    const sim = simRef.current
+    if (!sim) return false
+    const posities = poisRef.current
+      .filter((p) => !voorgelezenRef.current[p.id])
+      .map((p) => sim.afstandVan(p.snapPoint || p))
+    const doel = volgendeDoel(posities, sim.status().meters, SIM_VOORLOOP_M)
+    if (doel === null) return false
+    sim.springNaar(doel)
+    return true
+  }, [])
 
   // Handmatig voorlezen (tik op een POI in de lijst); telt niet als
   // "voorgelezen" voor de automatische trigger.
@@ -326,5 +393,9 @@ export function useOnderweg(
     leesVoor,
     stopVoorlezen,
     ecoPoi,
+    simStatus,
+    simPauze,
+    simVersnelling,
+    simVolgendePoi,
   }
 }

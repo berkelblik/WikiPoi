@@ -9,10 +9,15 @@
  * Eco-scherm (bouwstap 4): zwart scherm dat aan blijft en bij een trigger de
  * POI toont; openen met de knop "Eco-scherm", sluiten met 3× tikken.
  * ECO_BIJ_START = true opent het meteen bij "Route starten" (productie).
+ *
+ * Simulatie (testmodus, TEST_SIMULATIE): rit langs de geladen route zonder
+ * GPS, om trigger en eco-scherm thuis te testen. Snelheid volgt de
+ * vervoerwijze; versnelling ×1/×5/×10, pauze en "Naar volgende POI".
  */
 import { useState } from 'react'
 import { useOnderweg, VERVOER, STANDAARD_VERVOER } from './useOnderweg.js'
 import EcoScherm from './EcoScherm.jsx'
+import { SIM_SNELHEID_KMU, SIM_VERSNELLINGEN } from './simulatie.js'
 import { formatAfstand } from './geo.js'
 import { getCategoryStyle } from '../components/poi-icons.js'
 
@@ -20,9 +25,19 @@ import { getCategoryStyle } from '../components/poi-icons.js'
 // dan blijft de lijst zichtbaar en open je het eco-scherm met de knop.
 const ECO_BIJ_START = false
 
-function Onderweg({ pois, summariesById }) {
+// Testfase: true = keuze "Simulatie" zichtbaar. Productie: false.
+const TEST_SIMULATIE = true
+
+// "3,2" (km, één decimaal, komma).
+const km = (meters) => (meters / 1000).toFixed(1).replace('.', ',')
+
+function Onderweg({ pois, summariesById, routePunten }) {
   const [vervoer, setVervoer] = useState(STANDAARD_VERVOER)
   const [ecoOpen, setEcoOpen] = useState(false)
+  const [simAan, setSimAan] = useState(false)
+  const [simMelding, setSimMelding] = useState('')
+  const simulatieMogelijk =
+    TEST_SIMULATIE && Array.isArray(routePunten) && routePunten.length >= 2
   const {
     actief,
     positie,
@@ -37,9 +52,19 @@ function Onderweg({ pois, summariesById }) {
     leesVoor,
     stopVoorlezen,
     ecoPoi,
-  } = useOnderweg(pois, { vervoer, samenvattingen: summariesById, eco: ecoOpen })
+    simStatus,
+    simPauze,
+    simVersnelling,
+    simVolgendePoi,
+  } = useOnderweg(pois, {
+    vervoer,
+    samenvattingen: summariesById,
+    eco: ecoOpen,
+    simulatie: simulatieMogelijk && simAan ? routePunten : null,
+  })
 
   const routeStarten = () => {
+    setSimMelding('')
     start()
     if (ECO_BIJ_START) setEcoOpen(true)
   }
@@ -47,6 +72,10 @@ function Onderweg({ pois, summariesById }) {
   const routeStoppen = () => {
     setEcoOpen(false)
     stop()
+  }
+
+  const naarVolgendePoi = () => {
+    setSimMelding(simVolgendePoi() ? '' : 'Geen volgende POI meer verderop langs de route.')
   }
 
   const zonderSamenvatting = pois.filter((p) => !(p.id in (summariesById || {}))).length
@@ -77,12 +106,23 @@ function Onderweg({ pois, summariesById }) {
           </button>
         ))}
       </div>
+      {simulatieMogelijk && !actief && (
+        <label
+          className="muted"
+          style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}
+        >
+          <input type="checkbox" checked={simAan} onChange={(e) => setSimAan(e.target.checked)} />
+          Simulatie: rit langs de route zonder GPS (testmodus)
+        </label>
+      )}
       <button
         type="button"
         className={actief ? 'btn btn-pink btn-wide' : 'btn btn-green btn-wide'}
         onClick={actief ? routeStoppen : routeStarten}
       >
-        {actief ? 'Route stoppen' : `Route starten (${pois.length} POI's)`}
+        {actief
+          ? 'Route stoppen'
+          : `${simulatieMogelijk && simAan ? 'Simulatie' : 'Route'} starten (${pois.length} POI's)`}
       </button>
       {actief && (
         <button
@@ -93,6 +133,48 @@ function Onderweg({ pois, summariesById }) {
         >
           Eco-scherm
         </button>
+      )}
+      {actief && simStatus && (
+        <>
+          <p className="muted" style={{ marginTop: '8px' }}>
+            Simulatie: km {km(simStatus.meters)} van {km(simStatus.lengte)} ·{' '}
+            {SIM_SNELHEID_KMU[vervoer]} km/u × {simStatus.versnelling}
+            {simStatus.gepauzeerd ? ' · gepauzeerd' : ''}
+            {simStatus.klaar ? ' · einde route' : ''}
+          </p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '8px' }}>
+            <button
+              type="button"
+              className="btn btn-indigo btn-small"
+              disabled={simStatus.klaar}
+              onClick={simPauze}
+            >
+              {simStatus.gepauzeerd ? 'Verder' : 'Pauze'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-indigo btn-small"
+              disabled={simStatus.klaar}
+              onClick={naarVolgendePoi}
+            >
+              Naar volgende POI
+            </button>
+            {SIM_VERSNELLINGEN.map((v) => (
+              <button
+                key={v}
+                type="button"
+                className={
+                  v === simStatus.versnelling ? 'btn btn-yellow btn-small' : 'btn btn-indigo btn-small'
+                }
+                aria-pressed={v === simStatus.versnelling}
+                onClick={() => simVersnelling(v)}
+              >
+                ×{v}
+              </button>
+            ))}
+          </div>
+          {simMelding && <p className="muted">{simMelding}</p>}
+        </>
       )}
       {fout && <p className="error">{fout}</p>}
       {actief && !positie && !fout && <p className="muted">Wachten op GPS-positie…</p>}
