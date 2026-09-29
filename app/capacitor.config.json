@@ -1,5 +1,8 @@
 {
   "appId": "nl.berkelblik.wikipoi",
   "appName": "WikiPoi",
-  "webDir": "dist"
+  "webDir": "dist",
+  "android": {
+    "useLegacyBridge": true
+  }
 }

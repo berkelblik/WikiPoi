@@ -19,6 +19,10 @@
  * - belNu(): direct, buiten de wachtrij (tikken op het eco-scherm).
  * Geluid: "Bike bell" (freesound_community, Pixabay, nr. 40094), ingekort
  * tot één belletje; Pixabay Content License.
+ *
+ * Diagnose (proef achtergrond-GPS): met zetDiagnose(fn) krijgt fn(soort,
+ * tekst) een melding bij begin, einde en mislukken van bel en voorlezen,
+ * voor het logboek (logboek.js).
  */
 import { TextToSpeech } from '@capacitor-community/text-to-speech'
 import { APP_TAAL } from '../taal.js'
@@ -33,6 +37,22 @@ const BEL_MAX_MS = 4000
 // Standaard tijd tussen bel 1 en bel 2 bij dubbeleBel().
 export const DUBBELE_BEL_TUSSENPOZE_MS = 1000
 
+// Diagnosefunctie (soort, tekst) of null.
+let diagnose = null
+
+export function zetDiagnose(fn) {
+  diagnose = typeof fn === 'function' ? fn : null
+}
+
+function meld(soort, tekst = '') {
+  if (!diagnose) return
+  try {
+    diagnose(soort, tekst)
+  } catch {
+    // Diagnose mag het voorlezen nooit hinderen.
+  }
+}
+
 let wachtrij = []
 let bezig = false
 // Wordt bij stopSpreken() opgehoogd; een lopende lus die een andere
@@ -41,12 +61,19 @@ let generatie = 0
 // Belgeluiden die nu klinken, zodat stopSpreken() ze kan afbreken.
 const actieveBellen = new Set()
 
+function foutBericht(err) {
+  return err && err.message ? err.message : String(err)
+}
+
 async function spreekUit(tekst, lang, gen) {
+  meld('spreek-start', `${lang}, ${tekst.length} tekens`)
   try {
     await TextToSpeech.speak({ text: tekst, lang, rate: TEMPO })
+    meld('spreek-einde', lang)
     return
   } catch (err) {
     if (gen !== generatie) return
+    meld('spreek-fout', `${lang}: ${foutBericht(err)}`)
     if (lang === APP_TAAL) {
       console.warn('WikiPoi voorlezen mislukt:', err)
       return
@@ -55,7 +82,9 @@ async function spreekUit(tekst, lang, gen) {
   }
   try {
     await TextToSpeech.speak({ text: tekst, lang: APP_TAAL, rate: TEMPO })
+    meld('spreek-einde', APP_TAAL)
   } catch (err) {
+    meld('spreek-fout', `${APP_TAAL}: ${foutBericht(err)}`)
     console.warn('WikiPoi voorlezen mislukt:', err)
   }
 }
@@ -67,28 +96,34 @@ function startBel() {
   return new Promise((klaar) => {
     let audio = null
     let timer = null
-    const einde = () => {
+    let afgerond = false
+    // hoe: 'einde', 'fout' of 'tijd' (veiligheidsgrens verstreken).
+    const einde = (hoe, tekst = '') => {
+      if (afgerond) return
+      afgerond = true
       if (timer !== null) clearTimeout(timer)
       timer = null
       if (audio) actieveBellen.delete(audio)
+      meld(hoe === 'einde' ? 'bel-einde' : hoe === 'tijd' ? 'bel-tijd' : 'bel-fout', tekst)
       klaar()
     }
     try {
+      meld('bel-start')
       audio = new Audio(belUrl)
       actieveBellen.add(audio)
-      audio.addEventListener('ended', einde, { once: true })
-      audio.addEventListener('error', einde, { once: true })
-      timer = setTimeout(einde, BEL_MAX_MS)
+      audio.addEventListener('ended', () => einde('einde'), { once: true })
+      audio.addEventListener('error', () => einde('fout', 'laadfout'), { once: true })
+      timer = setTimeout(() => einde('tijd'), BEL_MAX_MS)
       const p = audio.play()
       if (p && typeof p.catch === 'function') {
         p.catch((err) => {
           console.warn('WikiPoi fietsbel mislukt:', err)
-          einde()
+          einde('fout', foutBericht(err))
         })
       }
     } catch (err) {
       console.warn('WikiPoi fietsbel mislukt:', err)
-      einde()
+      einde('fout', foutBericht(err))
     }
   })
 }

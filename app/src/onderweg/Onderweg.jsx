@@ -20,9 +20,18 @@
  * POI's en de eigen positie (stip, nauwkeurigheid, pijltje rijrichting).
  * De kaart volgt de positie; na zelf schuiven zet "Volg mij" het volgen
  * weer aan. Bij de simulatie is dat de gesimuleerde positie.
+ *
+ * Proef achtergrond-GPS (TEST_ACHTERGROND): vinkje "Achtergrond-GPS"
+ * (alleen in de Android-app); de positie komt dan van een voorgrondservice
+ * met vaste melding, zodat de app ook met het scherm uit blijft werken. Na
+ * afloop toont stap 7 het logboek van de laatste rit (logboek.js), met
+ * knoppen om het te bekijken en te delen.
  */
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
+import { Share } from '@capacitor/share'
 import { useOnderweg, VERVOER, STANDAARD_VERVOER } from './useOnderweg.js'
+import { achtergrondMogelijk } from './positieBron.js'
+import { logboek, analyseer, alsTekst, duurTekst, tijdTekst } from './logboek.js'
 import EcoScherm from './EcoScherm.jsx'
 import { SIM_SNELHEID_KMU, SIM_VERSNELLINGEN } from './simulatie.js'
 import { formatAfstand } from './geo.js'
@@ -36,6 +45,10 @@ const ECO_BIJ_START = false
 // Testfase: true = keuze "Simulatie" zichtbaar. Productie: false.
 const TEST_SIMULATIE = true
 
+// Proef achtergrond-GPS: true = keuze "Achtergrond-GPS" zichtbaar (alleen in
+// de Android-app) en het logboek van de laatste rit onder de knoppen.
+const TEST_ACHTERGROND = true
+
 // Hoogte van de kaart in stap 7 (kleiner dan bij stap 4, zodat de lijst
 // met dichtstbijzijnde POI's eronder in beeld blijft).
 const KAART_HOOGTE = '260px'
@@ -43,13 +56,34 @@ const KAART_HOOGTE = '260px'
 // "3,2" (km, één decimaal, komma).
 const km = (meters) => (meters / 1000).toFixed(1).replace('.', ',')
 
+// Eén regel samenvatting van een logboek.
+function logboekSamenvatting(data) {
+  const a = analyseer(data)
+  if (!a) return ''
+  return (
+    `${tijdTekst(data.start, false)}, ${duurTekst(a.duurMs)}, bron ${data.bron}: ` +
+    `${a.aantalPosities} posities` +
+    (a.grootsteGatPositie ? `, grootste gat ${duurTekst(a.grootsteGatPositie.ms)}` : '') +
+    (a.grootsteGatHartslag ? `, hartslag-gat ${duurTekst(a.grootsteGatHartslag.ms)}` : '') +
+    `, ${a.triggers} triggers` +
+    (a.fouten ? `, ${a.fouten} fouten` : '') +
+    (data.eind ? '' : ' (niet afgesloten)')
+  )
+}
+
 function Onderweg({ pois, summariesById, routePunten }) {
   const [vervoer, setVervoer] = useState(STANDAARD_VERVOER)
   const [ecoOpen, setEcoOpen] = useState(false)
   const [simAan, setSimAan] = useState(false)
   const [simMelding, setSimMelding] = useState('')
+  const [achtergrondAan, setAchtergrondAan] = useState(false)
+  const [logboekTonen, setLogboekTonen] = useState(false)
+  const [logboekMelding, setLogboekMelding] = useState('')
   const simulatieMogelijk =
     TEST_SIMULATIE && Array.isArray(routePunten) && routePunten.length >= 2
+  const achtergrondKeuze = TEST_ACHTERGROND && achtergrondMogelijk()
+  const simulatieGekozen = simulatieMogelijk && simAan
+  const achtergrondGekozen = achtergrondKeuze && achtergrondAan && !simulatieGekozen
   const {
     actief,
     positie,
@@ -74,8 +108,31 @@ function Onderweg({ pois, summariesById, routePunten }) {
     vervoer,
     samenvattingen: summariesById,
     eco: ecoOpen,
-    simulatie: simulatieMogelijk && simAan ? routePunten : null,
+    simulatie: simulatieGekozen ? routePunten : null,
+    achtergrond: achtergrondGekozen,
   })
+
+  // Logboek van de laatste rit (ook van een eerdere app-sessie), opnieuw
+  // gelezen telkens als de route stopt.
+  const vorigLogboek = useMemo(() => (TEST_ACHTERGROND && !actief ? logboek.laad() : null), [actief])
+
+  const deelLogboek = async () => {
+    const tekst = alsTekst(vorigLogboek)
+    setLogboekMelding('')
+    try {
+      await Share.share({ title: 'WikiPoi-logboek', text: tekst, dialogTitle: 'Logboek delen' })
+    } catch (err) {
+      const bericht = err && err.message ? err.message : String(err)
+      if (/cancel/i.test(bericht)) return
+      try {
+        await navigator.clipboard.writeText(tekst)
+        setLogboekMelding('Delen niet beschikbaar; het logboek staat op het klembord.')
+      } catch {
+        setLogboekMelding('Delen niet beschikbaar. Kies "Logboek tonen" en kopieer de tekst.')
+        setLogboekTonen(true)
+      }
+    }
+  }
 
   const routeStarten = () => {
     setSimMelding('')
@@ -129,6 +186,19 @@ function Onderweg({ pois, summariesById, routePunten }) {
           Simulatie: rit langs de route zonder GPS (testmodus)
         </label>
       )}
+      {achtergrondKeuze && !actief && !simulatieGekozen && (
+        <label
+          className="muted"
+          style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}
+        >
+          <input
+            type="checkbox"
+            checked={achtergrondAan}
+            onChange={(e) => setAchtergrondAan(e.target.checked)}
+          />
+          Achtergrond-GPS: blijft werken met het scherm uit (proef, met vaste melding)
+        </label>
+      )}
       <button
         type="button"
         className={actief ? 'btn btn-pink btn-wide' : 'btn btn-green btn-wide'}
@@ -136,8 +206,14 @@ function Onderweg({ pois, summariesById, routePunten }) {
       >
         {actief
           ? 'Route stoppen'
-          : `${simulatieMogelijk && simAan ? 'Simulatie' : 'Route'} starten (${pois.length} POI's)`}
+          : `${simulatieGekozen ? 'Simulatie' : 'Route'} starten (${pois.length} POI's)`}
       </button>
+      {actief && achtergrondGekozen && (
+        <p className="muted" style={{ marginTop: '8px' }}>
+          Achtergrond-GPS actief: de melding "WikiPoi volgt uw route" blijft staan tot u de
+          route stopt.
+        </p>
+      )}
       {actief && (
         <button
           type="button"
@@ -241,6 +317,38 @@ function Onderweg({ pois, summariesById, routePunten }) {
             </li>
           ))}
         </ul>
+      )}
+      {vorigLogboek && (
+        <div style={{ marginTop: '16px' }}>
+          <p className="muted">Logboek laatste rit: {logboekSamenvatting(vorigLogboek)}</p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '8px' }}>
+            <button type="button" className="btn btn-indigo btn-small" onClick={deelLogboek}>
+              Logboek delen
+            </button>
+            <button
+              type="button"
+              className="btn btn-indigo btn-small"
+              aria-pressed={logboekTonen}
+              onClick={() => setLogboekTonen((v) => !v)}
+            >
+              {logboekTonen ? 'Logboek verbergen' : 'Logboek tonen'}
+            </button>
+          </div>
+          {logboekMelding && <p className="muted">{logboekMelding}</p>}
+          {logboekTonen && (
+            <pre
+              style={{
+                whiteSpace: 'pre-wrap',
+                fontSize: '12px',
+                maxHeight: '320px',
+                overflow: 'auto',
+                userSelect: 'text',
+              }}
+            >
+              {alsTekst(vorigLogboek)}
+            </pre>
+          )}
+        </div>
       )}
       {actief && ecoOpen && (
         <EcoScherm

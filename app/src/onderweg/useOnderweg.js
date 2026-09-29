@@ -32,13 +32,22 @@
  * werken. Snelheid volgt de vervoerwijze; versnelling, pauze en "Naar
  * volgende POI" via simVersnelling, simPauze en simVolgendePoi.
  *
+ * Positiebron (positieBron.js): standaard 'voorgrond' (@capacitor/
+ * geolocation); met optie achtergrond = true de voorgrondservice van
+ * @capacitor-community/background-geolocation, zodat posities ook met het
+ * scherm uit binnenkomen (proef achtergrond-GPS).
+ *
+ * Logboek (logboek.js): per rit posities, schermstand, hartslag, triggers,
+ * bel en voorlezen, voor de proef achtergrond-GPS. Bron 'simulatie' bij
+ * een gesimuleerde rit.
+ *
  * Bouwstap 4 van "Onderweg": eco-scherm. Nog geen track.
  */
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Capacitor } from '@capacitor/core'
-import { Geolocation } from '@capacitor/geolocation'
 import { afstand, peiling, klokRichting } from './geo.js'
-import { spreek, bel, dubbeleBel, stopSpreken } from './spreek.js'
+import { spreek, bel, dubbeleBel, stopSpreken, zetDiagnose } from './spreek.js'
+import { startPositieBron } from './positieBron.js'
+import { logboek, koppelBrowser } from './logboek.js'
 import { basisTaal, klokZin, labelTaal, toelichtingTaal } from '../taal.js'
 import { maakSimulatie, volgendeDoel, SIM_SNELHEID_KMU, SIM_VOORLOOP_M } from './simulatie.js'
 
@@ -144,9 +153,37 @@ function foutTekst(err) {
   return 'GPS-fout: ' + (err && err.message ? err.message : String(err))
 }
 
+// Korte toestelomschrijving voor het logboek: het deel tussen haakjes van
+// de user-agent, bijv. "Linux; Android 16; 25053PC47G Build/…; wv".
+function toestelTekst() {
+  if (typeof navigator === 'undefined' || !navigator.userAgent) return ''
+  const m = navigator.userAgent.match(/\(([^)]*)\)/)
+  return m ? m[1] : navigator.userAgent.slice(0, 120)
+}
+
+// Logboek beginnen voor een nieuwe rit en koppelen aan zichtbaarheid,
+// hartslag en de diagnosemeldingen van bel en voorlezen. Geeft een
+// functie terug die alles weer loskoppelt en het logboek afsluit.
+function beginLogboek(bron) {
+  logboek.begin(bron, toestelTekst())
+  const ontkoppel = koppelBrowser(logboek)
+  zetDiagnose((soort, tekst) => logboek.noteer(soort, tekst))
+  return () => {
+    zetDiagnose(null)
+    logboek.stop()
+    ontkoppel()
+  }
+}
+
 export function useOnderweg(
   pois,
-  { vervoer = STANDAARD_VERVOER, samenvattingen = {}, eco = false, simulatie = null } = {}
+  {
+    vervoer = STANDAARD_VERVOER,
+    samenvattingen = {},
+    eco = false,
+    simulatie = null,
+    achtergrond = false,
+  } = {}
 ) {
   const [actief, setActief] = useState(false)
   const [positie, setPositie] = useState(null) // { lat, lng, nauwkeurigheid, tijd }
@@ -162,7 +199,8 @@ export function useOnderweg(
   // eco-scherm; blijft staan tot de volgende POI aan de beurt is.
   const [laatstePoiId, setLaatstePoiId] = useState(null)
 
-  const watchIdRef = useRef(null)
+  const bronRef = useRef(null) // { bron, stop } van positieBron.js
+  const logboekStopRef = useRef(null)
   const richtingPuntRef = useRef(null)
   const voorgelezenRef = useRef({})
   const samenvattingenRef = useRef(samenvattingen)
@@ -204,13 +242,21 @@ export function useOnderweg(
       richtingPuntRef.current = punt
     }
 
+    logboek.positie({ tijd: pos.timestamp, nauwkeurigheid: c.accuracy })
     setPositie({ ...punt, nauwkeurigheid: c.accuracy, tijd: pos.timestamp })
   }, [])
 
-  const stopWatch = useCallback(() => {
-    if (watchIdRef.current !== null) {
-      Geolocation.clearWatch({ id: watchIdRef.current }).catch(() => {})
-      watchIdRef.current = null
+  const stopBron = useCallback(() => {
+    if (bronRef.current) {
+      bronRef.current.stop()
+      bronRef.current = null
+    }
+  }, [])
+
+  const stopLogboek = useCallback(() => {
+    if (logboekStopRef.current) {
+      logboekStopRef.current()
+      logboekStopRef.current = null
     }
   }, [])
 
@@ -233,8 +279,10 @@ export function useOnderweg(
     setLaatstePoiId(null)
     laadFotosVooraf(poisRef.current, samenvattingenRef.current)
     stopSim()
+    stopBron()
+    stopLogboek()
     if (Array.isArray(simulatie) && simulatie.length >= 2) {
-      stopWatch()
+      logboekStopRef.current = beginLogboek('simulatie')
       const sim = maakSimulatie(simulatie, {
         snelheidKmu:
           SIM_SNELHEID_KMU[vervoerRef.current] || SIM_SNELHEID_KMU[STANDAARD_VERVOER],
@@ -246,34 +294,31 @@ export function useOnderweg(
       setActief(true)
       return
     }
+    const soort = achtergrond ? 'achtergrond' : 'voorgrond'
+    logboekStopRef.current = beginLogboek(soort)
     try {
-      // Op het web vraagt de browser zelf om toestemming bij watchPosition.
-      if (Capacitor.isNativePlatform()) {
-        const perm = await Geolocation.requestPermissions()
-        if (perm.location !== 'granted') {
-          setFout('Geen toestemming voor nauwkeurige locatie. Sta dit toe in de Android-instellingen.')
-          return
-        }
-      }
-      stopWatch()
-      const id = await Geolocation.watchPosition(
-        { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 },
-        (pos, err) => {
-          if (err) {
-            setFout(foutTekst(err))
-            return
-          }
+      const bron = await startPositieBron(soort, {
+        onPositie: (pos) => {
           setFout('')
           verwerkPositie(pos)
-        }
-      )
-      watchIdRef.current = id
+        },
+        onFout: (tekst) => {
+          logboek.noteer('gps-fout', tekst)
+          setFout(tekst)
+        },
+        onInfo: (tekst) => logboek.noteer('info', tekst),
+      })
+      bronRef.current = bron
+      logboek.noteer('info', `bron actief: ${bron.bron}`)
       setActief(true)
     } catch (err) {
-      setFout(foutTekst(err))
+      const tekst = err && err.message && /toestemming/i.test(err.message) ? err.message : foutTekst(err)
+      logboek.noteer('gps-fout', tekst)
+      stopLogboek()
+      setFout(tekst)
       setActief(false)
     }
-  }, [simulatie, stopWatch, stopSim, verwerkPositie])
+  }, [simulatie, achtergrond, stopBron, stopSim, stopLogboek, verwerkPositie])
 
   const stopVoorlezen = useCallback(() => {
     stopSpreken()
@@ -282,20 +327,23 @@ export function useOnderweg(
   }, [])
 
   const stop = useCallback(() => {
-    stopWatch()
+    stopBron()
     stopSim()
     stopVoorlezen()
+    stopLogboek()
     setActief(false)
-  }, [stopWatch, stopSim, stopVoorlezen])
+  }, [stopBron, stopSim, stopVoorlezen, stopLogboek])
 
-  // Bij verlaten van de pagina/component GPS-volgen, simulatie en voorlezen stoppen.
+  // Bij verlaten van de pagina/component GPS-volgen, simulatie, voorlezen en
+  // logboek stoppen.
   useEffect(
     () => () => {
-      stopWatch()
+      stopBron()
       if (simRef.current) simRef.current.stop()
       stopSpreken()
+      stopLogboek()
     },
-    [stopWatch]
+    [stopBron, stopLogboek]
   )
 
   const simPauze = useCallback(() => {
@@ -386,6 +434,10 @@ export function useOnderweg(
     setVoorgelezen(volgende)
     const soort = ecoRef.current ? 'eco' : 'lijst'
     nieuw.forEach((p) => {
+      logboek.noteer(
+        'trigger',
+        `${p.label} (${Math.round(p.afstandTriggerpunt)} m, straal ${Math.round(p.straal)} m, ${soort})`
+      )
       spreekPoi(p, samenvattingenRef.current, p.klok, {
         soort,
         onStart: () => {
