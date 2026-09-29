@@ -7,7 +7,9 @@
  * voorlezen (handig om thuis te testen).
  *
  * Eco-scherm (bouwstap 4): zwart scherm dat aan blijft en bij een trigger de
- * POI toont; openen met de knop "Eco-scherm", sluiten met 3× tikken.
+ * POI toont; openen met de knop "Eco-scherm", sluiten met 3× tikken. Met
+ * "Opnieuw beluisteren" (ook na afloop, voor de laatst voorgelezen POI)
+ * wordt de toelichting nog een keer voorgelezen, bijv. na lawaai onderweg.
  * ECO_BIJ_START = true opent het meteen bij "Route starten" (productie).
  *
  * Simulatie (testmodus, TEST_SIMULATIE): rit langs de geladen route zonder
@@ -62,6 +64,8 @@ function Onderweg({ pois, summariesById, routePunten }) {
     leesVoor,
     stopVoorlezen,
     ecoPoi,
+    laatstePoi,
+    herhaal,
     simStatus,
     simPauze,
     simVersnelling,
@@ -244,6 +248,8 @@ function Onderweg({ pois, summariesById, routePunten }) {
           positie={positie}
           rijrichting={rijrichting}
           samenvatting={ecoPoi && summariesById ? summariesById[ecoPoi.id] || null : null}
+          laatstePoi={laatstePoi}
+          onHerhaal={herhaal}
           onSluiten={() => setEcoOpen(false)}
         />
       )}

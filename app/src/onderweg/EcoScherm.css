@@ -5,7 +5,8 @@
  * De inhoud is precies één schermhoogte. Met foto groeit het kaartje met
  * naam en pluscode tot de resterende ruimte, en de foto vult die helemaal
  * op, in zijn geheel (contain, niet bijgesneden). Zonder foto staat alles
- * midden op het scherm.
+ * midden op het scherm. Met foto is de klok kleiner en zijn de
+ * tussenruimtes smaller, zodat de foto meer ruimte krijgt.
  */
 
 .eco-scherm {
@@ -41,11 +42,19 @@
   flex: 0 0 auto;
 }
 
+.eco-inhoud-met-foto {
+  gap: 12px;
+}
+
 .eco-klok {
   width: min(66vw, 34vh);
   height: auto;
   flex-shrink: 0;
   filter: drop-shadow(0 0 24px rgba(59, 130, 246, 0.35));
+}
+
+.eco-inhoud-met-foto .eco-klok {
+  width: min(52vw, 24vh);
 }
 
 .eco-klok-rand {
@@ -181,6 +190,46 @@
   margin-top: 4px;
   font-size: 10px;
   color: rgba(255, 255, 255, 0.35);
+}
+
+/* Compact (± 60 % lager dan eerst), zodat de foto zo groot mogelijk blijft. */
+.eco-herhaal {
+  width: auto;
+  padding: 3px 14px;
+  box-sizing: border-box;
+  border: 1px solid rgba(96, 165, 250, 0.5);
+  border-radius: 10px;
+  background: rgba(30, 58, 138, 0.6);
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.2;
+  font-weight: 900;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.eco-herhaal:active {
+  background: rgba(37, 99, 235, 0.8);
+}
+
+/* Zwart scherm: onopvallend onderaan, voor de laatst voorgelezen POI. */
+.eco-herhaal-gedimd {
+  position: absolute;
+  left: 24px;
+  right: 24px;
+  bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+  width: auto;
+  max-width: 432px;
+  margin: 0 auto;
+  padding: 12px 16px;
+  border-color: rgba(255, 255, 255, 0.12);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.35);
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .eco-hint {

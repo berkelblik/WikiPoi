@@ -12,8 +12,19 @@
  * de samenvatting (stap 5), met bronvermelding.
  *
  * Tikken: 1× = fietsbel, 3× snel = eco-scherm sluiten.
+ *
+ * Herhaalknop: "Opnieuw beluisteren" onder de foto leest de toelichting van
+ * de getoonde POI nog een keer voor (zonder bel). Is het scherm weer zwart,
+ * dan blijft onderaan een gedimde knop "↻ <naam>" voor de laatst
+ * voorgelezen POI, tot de volgende POI aan de beurt is. Een tik op de knop
+ * telt niet mee als bel of sluiten.
+ *
+ * Het scherm wordt via een portal direct in <body> gezet, zodat de stijlen
+ * van de stappen (o.a. marges van alinea's in .step) er geen invloed op
+ * hebben. Met foto is de klok kleiner, zodat de foto meer ruimte krijgt.
  */
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { KeepAwake } from '@capacitor-community/keep-awake'
 import { afstand, peiling, relatieveHoek, klokRichting } from './geo.js'
 import { pluscode } from './pluscode.js'
@@ -42,7 +53,7 @@ function afstandDelen(meters) {
 
 const STREEPJES = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330]
 
-function EcoScherm({ poi, positie, rijrichting, samenvatting, onSluiten }) {
+function EcoScherm({ poi, positie, rijrichting, samenvatting, laatstePoi, onHerhaal, onSluiten }) {
   const tikken = useRef(0)
   const tikTimer = useRef(null)
   // Foto die niet laadde (geen verbinding of weg): niet meer tonen.
@@ -77,6 +88,12 @@ function EcoScherm({ poi, positie, rijrichting, samenvatting, onSluiten }) {
     }, TIK_VENSTER_MS)
   }
 
+  // Knop op het eco-scherm: niet laten doortellen als tik op het scherm.
+  const herhaalKlik = (doel) => (e) => {
+    e.stopPropagation()
+    if (onHerhaal) onHerhaal(doel)
+  }
+
   let inhoud = null
   if (poi && positie) {
     const richtingPoi = peiling(positie, poi)
@@ -93,7 +110,7 @@ function EcoScherm({ poi, positie, rijrichting, samenvatting, onSluiten }) {
     const foto = fotoUrl && fotoUrl !== kapotteFoto ? fotoUrl : null
 
     inhoud = (
-      <div className="eco-inhoud">
+      <div className={foto ? 'eco-inhoud eco-inhoud-met-foto' : 'eco-inhoud'}>
         <svg className="eco-klok" viewBox="0 0 200 200" aria-hidden="true">
           <circle cx="100" cy="100" r="92" className="eco-klok-rand" />
           {STREEPJES.map((graden) => (
@@ -149,15 +166,28 @@ function EcoScherm({ poi, positie, rijrichting, samenvatting, onSluiten }) {
           )}
         </div>
 
+        {onHerhaal && (
+          <button type="button" className="eco-herhaal" onClick={herhaalKlik(poi)}>
+            ↻ Opnieuw beluisteren
+          </button>
+        )}
+
         <p className="eco-hint">1× tikken = bel · 3× snel tikken = sluiten</p>
       </div>
     )
+  } else if (laatstePoi && onHerhaal) {
+    inhoud = (
+      <button type="button" className="eco-herhaal eco-herhaal-gedimd" onClick={herhaalKlik(laatstePoi)}>
+        ↻ {laatstePoi.label}
+      </button>
+    )
   }
 
-  return (
+  return createPortal(
     <div className="eco-scherm" onClick={tik} role="presentation">
       {inhoud}
-    </div>
+    </div>,
+    document.body
   )
 }
 

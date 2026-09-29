@@ -158,6 +158,9 @@ export function useOnderweg(
   const [ecoTrigger, setEcoTrigger] = useState(null)
   // Simulatie: { meters, lengte, versnelling, gepauzeerd, klaar }, of null.
   const [simStatus, setSimStatus] = useState(null)
+  // Laatst automatisch voorgelezen POI (id), voor de herhaalknop op het
+  // eco-scherm; blijft staan tot de volgende POI aan de beurt is.
+  const [laatstePoiId, setLaatstePoiId] = useState(null)
 
   const watchIdRef = useRef(null)
   const richtingPuntRef = useRef(null)
@@ -227,6 +230,7 @@ export function useOnderweg(
     voorgelezenRef.current = {}
     setVoorgelezen({})
     setEcoTrigger(null)
+    setLaatstePoiId(null)
     laadFotosVooraf(poisRef.current, samenvattingenRef.current)
     stopSim()
     if (Array.isArray(simulatie) && simulatie.length >= 2) {
@@ -326,6 +330,28 @@ export function useOnderweg(
     })
   }, [])
 
+  // Herhaalknop op het eco-scherm: het lopende voorlezen (en wat nog in de
+  // wachtrij stond) stoppen en de toelichting van deze POI direct opnieuw
+  // voorlezen, zonder bel en zonder klokzin. De POI staat dan weer op het
+  // eco-scherm tot hij is uitgesproken (en daarna zolang je binnen de straal
+  // bent).
+  const herhaal = useCallback(async (poi) => {
+    if (!poi) return
+    await stopSpreken()
+    setNuAanHetVoorlezen(null)
+    spreekPoi(poi, samenvattingenRef.current, null, {
+      soort: 'handmatig',
+      onStart: () => {
+        setNuAanHetVoorlezen(poi.label)
+        setEcoTrigger({ id: poi.id, klaar: false })
+      },
+      onEinde: () => {
+        setNuAanHetVoorlezen(null)
+        setEcoTrigger((huidig) => (huidig && huidig.id === poi.id ? { ...huidig, klaar: true } : huidig))
+      },
+    })
+  }, [])
+
   // Per POI: afstand tot triggerpunt (snapPoint; anders de POI zelf),
   // triggerstraal en klokrichting. Gesorteerd op afstand tot triggerpunt.
   const poisMetAfstand = useMemo(() => {
@@ -364,6 +390,7 @@ export function useOnderweg(
         soort,
         onStart: () => {
           setNuAanHetVoorlezen(p.label)
+          setLaatstePoiId(p.id)
           if (soort === 'eco') setEcoTrigger({ id: p.id, klaar: false })
         },
         onEinde: () => {
@@ -386,6 +413,7 @@ export function useOnderweg(
       ? ecoKandidaat
       : null
   const aantalVoorgelezen = Object.keys(voorgelezen).length
+  const laatstePoi = laatstePoiId ? pois.find((p) => p.id === laatstePoiId) || null : null
 
   return {
     actief,
@@ -401,6 +429,8 @@ export function useOnderweg(
     leesVoor,
     stopVoorlezen,
     ecoPoi,
+    laatstePoi,
+    herhaal,
     simStatus,
     simPauze,
     simVersnelling,
