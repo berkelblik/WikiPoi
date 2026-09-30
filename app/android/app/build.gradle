@@ -1,4 +1,23 @@
+import groovy.json.JsonSlurper
+
 apply plugin: 'com.android.application'
+
+// Versie op één plek: "version" in app/package.json (bijv. 0.9.0).
+// versionCode = major * 10000 + minor * 100 + patch (0.9.0 -> 900, 1.0.0 -> 10000).
+def appVersie = new JsonSlurper().parse(file('../../package.json')).version
+def versieDelen = appVersie.tokenize('-')[0].tokenize('.')
+if (versieDelen.size() != 3) {
+    throw new GradleException("Versie in package.json moet de vorm x.y.z hebben, gevonden: " + appVersie)
+}
+def appVersieCode = versieDelen[0].toInteger() * 10000 + versieDelen[1].toInteger() * 100 + versieDelen[2].toInteger()
+
+// Release-sleutel: gegevens in app/android/keystore.properties (nooit committen).
+// Zonder dat bestand werkt debug gewoon; een release-build blijft dan onondertekend.
+def keystorePropertiesFile = rootProject.file('keystore.properties')
+def keystoreProperties = new Properties()
+if (keystorePropertiesFile.exists()) {
+    keystorePropertiesFile.withInputStream { keystoreProperties.load(it) }
+}
 
 android {
     namespace = "nl.berkelblik.wikipoi"
@@ -7,8 +26,8 @@ android {
         applicationId "nl.berkelblik.wikipoi"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode appVersieCode
+        versionName appVersie
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,10 +35,29 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        release {
+            if (keystorePropertiesFile.exists()) {
+                storeFile file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+            }
+        }
+    }
     buildTypes {
         release {
+            if (keystorePropertiesFile.exists()) {
+                signingConfig signingConfigs.release
+            }
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+    // APK-naam: WikiPoi-<versie>-<debug|release>.apk
+    applicationVariants.all { variant ->
+        variant.outputs.all {
+            outputFileName = "WikiPoi-${variant.versionName}-${variant.buildType.name}.apk"
         }
     }
 }

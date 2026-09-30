@@ -5,3 +5,8 @@
 node_modules/
 *.log
 .DS_Store
+
+# Release-sleutel en wachtwoorden (nooit committen)
+*.jks
+*.keystore
+keystore.properties
