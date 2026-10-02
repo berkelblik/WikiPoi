@@ -36,6 +36,10 @@ const CORRIDOR_DEFAULT_METERS = 250
 // Wikidata-items met verschillende QID's binnen deze afstand van elkaar
 // worden als één POI behandeld (één gebouw, meerdere items).
 const WIKIDATA_MERGE_METERS = 10
+// Time-out per Overpass-poging, per server (ms). De query vraagt de server
+// zelf om maximaal 25 s rekentijd; 30 s laat ruimte voor netwerkvertraging.
+// Slechtste geval per categorie: 2 rondes x 2 servers x 30 s + 3 s pauze.
+const OSM_TIMEOUT_MS = 30000
 
 // Alle categorieën met QID's gaan samen in één Wikidata-verzoek (gemeten:
 // ± 3× sneller dan één verzoek per categorie, en minder kans op een fout
@@ -416,23 +420,52 @@ function App() {
         item.categoryKey ? item : { ...item, categoryKey: categoryKeyById.get(item.id) || null }
       )
 
-      // Faalt OpenStreetMap (bijv. HTTP 429 Too Many Requests), dan gaan de
-      // al gevonden Wikidata-resultaten niet verloren: de zoekactie gaat
-      // verder zonder OSM en toont een melding (zoals het script).
+      // OpenStreetMap per categorie: gelukte categorieën blijven bewaard, ook
+      // als een latere categorie mislukt; de Wikidata-resultaten gaan nooit
+      // verloren. Mislukt een categorie op alle servers (na alle rondes), dan
+      // zijn de servers vrijwel zeker overbelast: de overige OSM-categorieën
+      // worden dan overgeslagen om minutenlang wachten te voorkomen.
       let osm = []
-      try {
-        for (const category of osmCategories) {
-          done += 1
-          setSearchProgress(`OpenStreetMap: ${category.label} (${done} van ${total})`)
-          const tagFilterGroups = window.WikiPoiCategories.osmTagFiltersForKeys([category.key])
-          const found = await window.WikiPoiOsmFallback.searchOverpass(routeInfo.bbox, tagFilterGroups)
-          osm = osm.concat(found.map((item) => ({ ...item, categoryKey: category.key })))
+      let osmFailure = null // { label, message } van de mislukte categorie
+      const osmSkipped = []
+      let osmSucceeded = 0
+      for (const category of osmCategories) {
+        done += 1
+        if (osmFailure) {
+          osmSkipped.push(category.label)
+          continue
         }
-      } catch (err) {
-        osm = []
-        setOsmWarning(
-          'Let op: OpenStreetMap niet beschikbaar (' + (err && err.message ? err.message : String(err)) + '). Resultaten zonder OpenStreetMap.'
-        )
+        setSearchProgress(`OpenStreetMap: ${category.label} (${done} van ${total})`)
+        try {
+          const tagFilterGroups = window.WikiPoiCategories.osmTagFiltersForKeys([category.key])
+          const found = await window.WikiPoiOsmFallback.searchOverpass(routeInfo.bbox, tagFilterGroups, {
+            timeoutMs: OSM_TIMEOUT_MS,
+          })
+          osm = osm.concat(found.map((item) => ({ ...item, categoryKey: category.key })))
+          osmSucceeded += 1
+        } catch (err) {
+          osmFailure = {
+            label: category.label,
+            message: err && err.message ? err.message : String(err),
+          }
+        }
+      }
+      if (osmFailure) {
+        if (osmSucceeded === 0) {
+          setOsmWarning(
+            'Let op: OpenStreetMap niet beschikbaar (' + osmFailure.message + '). Resultaten zonder OpenStreetMap.'
+          )
+        } else {
+          setOsmWarning(
+            'Let op: OpenStreetMap gedeeltelijk: ' +
+              osmFailure.label +
+              ' niet gelukt (' +
+              osmFailure.message +
+              ').' +
+              (osmSkipped.length > 0 ? ' ' + osmSkipped.join(', ') + ' overgeslagen.' : '') +
+              ' Resultaten van de overige OpenStreetMap-categorieën zijn wel meegenomen.'
+          )
+        }
       }
       osm = dedupeFirstWins(osm)
       // OSM-punten die al via Wikidata gevonden zijn, of geen bruikbare
