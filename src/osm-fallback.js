@@ -8,9 +8,10 @@
  * Wikipedia, maar de meegeleverde informatie is minimaler: meestal alleen
  * een naam, geen samenvattende tekst zoals een Wikipedia-artikel.
  *
- * Gebruikt de publieke Overpass API (overpass-api.de/api/interpreter).
- * Overpass ondersteunt CORS, dus deze module werkt zowel in de browser
- * als in Node (Node 18+, native fetch), net als de andere WikiPoi-modules.
+ * Gebruikt openbare Overpass API-servers (zie OVERPASS_ENDPOINTS): eerst
+ * Private.coffee, daarna de hoofdserver overpass-api.de. Overpass
+ * ondersteunt CORS, dus deze module werkt zowel in de browser als in Node
+ * (Node 18+, native fetch), net als de andere WikiPoi-modules.
  *
  * De categorie → OSM-tagfilter-koppeling staat in poi-categories.js
  * (osmTagFiltersForKeys()) — dezelfde categorieën als voor Wikidata,
@@ -35,11 +36,26 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  const OVERPASS_ENDPOINT = 'https://overpass-api.de/api/interpreter';
+  // Openbare Overpass-servers, in volgorde van voorkeur (0.9.3, okt. 2026).
+  // De hoofdserver overpass-api.de is volgens zijn eigen beheerder
+  // overbelast en vraagt om waar mogelijk alternatieven te gebruiken; bij
+  // een HTTP 429 vraagt hij 30 s te wachten. Daarom eerst Private.coffee
+  // (voorheen kumi.systems, geen snelheidslimiet), daarna de hoofdserver.
+  // VK Maps (maps.mail.ru) is bewust weggelaten: de zoekopdracht verraadt
+  // het routegebied, en die server staat in Rusland.
+  const OVERPASS_ENDPOINTS = [
+    { name: 'Private.coffee', url: 'https://overpass.private.coffee/api/interpreter' },
+    { name: 'overpass-api.de', url: 'https://overpass-api.de/api/interpreter' },
+  ];
   const DEFAULT_TIMEOUT_MS = 40000;
-  const DEFAULT_MAX_RETRIES = 2; // 2 automatische herhalingen = max. 3 pogingen totaal
-  const RETRY_BACKOFF_MS = 3000; // korte pauze tussen pogingen, oplopend per poging
+  const DEFAULT_MAX_RETRIES = 1; // 1 extra ronde langs alle servers = max. 2 rondes
+  const RETRY_BACKOFF_MS = 3000; // korte pauze tussen twee rondes, oplopend per ronde
   const OVERPASS_QUERY_TIMEOUT_S = 38; // moet iets onder DEFAULT_TIMEOUT_MS blijven
+
+  // De server die het laatst slaagde: volgende verzoeken (bijv. de volgende
+  // categorie in dezelfde zoekopdracht) beginnen daar, zodat ze niet telkens
+  // eerst opnieuw op een haperende server falen.
+  let preferredEndpointIndex = 0;
 
   /**
    * Bouwt de Overpass QL-query voor een bounding box en een lijst
@@ -283,12 +299,10 @@
 
   /**
    * Bepaalt of een HTTP-statuscode een TIJDELIJK serverprobleem
-   * aanduidt, waarbij opnieuw proberen zinvol is (de server was even
-   * overbelast of niet bereikbaar, niet per se blijvend "nee").
-   * 502 (Bad Gateway), 503 (Service Unavailable) en 504 (Gateway
-   * Timeout) vallen hieronder. Een 4xx-fout (zoals de eerder
-   * geconstateerde 403 Access blocked) is típisch een permanente
-   * afwijzing en wordt hier bewust NIET als herhaalbaar beschouwd.
+   * aanduidt (502 Bad Gateway, 503 Service Unavailable, 504 Gateway
+   * Timeout). Blijft geëxporteerd voor bestaande aanroepers; voor de
+   * keuze om naar een andere server over te stappen zie
+   * shouldTryOtherServer().
    *
    * @param {number} status
    * @returns {boolean}
@@ -298,13 +312,39 @@
   }
 
   /**
+   * Bepaalt of het zin heeft de query bij een ANDERE server (of in een
+   * volgende ronde) opnieuw te proberen. Dat geldt voor vrijwel elke fout:
+   * time-out, geen verbinding, 429 (te veel verzoeken), 403 (door die
+   * server geblokkeerd) en 5xx zijn allemaal per server verschillend.
+   * Alleen HTTP 400 (ongeldige query) wordt meteen doorgegeven: die query
+   * faalt op elke server op dezelfde manier.
+   *
+   * @param {Error} err
+   * @returns {boolean}
+   */
+  function shouldTryOtherServer(err) {
+    return !(err && err.status === 400);
+  }
+
+  /**
+   * Korte omschrijving van een fout voor de samenvattende melding,
+   * bijv. "HTTP 504", "time-out" of "geen verbinding".
+   */
+  function describeError(err) {
+    if (err && typeof err.status === 'number') return 'HTTP ' + err.status;
+    if (err && err.name === 'AbortError') return 'time-out';
+    if (err && err.name === 'TypeError') return 'geen verbinding';
+    return (err && err.message) || String(err);
+  }
+
+  /**
    * Eén enkele poging om de Overpass-query uit te voeren, zonder
    * herhaling — analoog aan wikidata-search.js#performSingleRequest().
    * Bij een HTTP-foutstatus wordt de statuscode op de gegooide Error
-   * gezet (err.status), zodat searchOverpass() kan bepalen of de fout
-   * herhaalbaar is (zie isRetryableHttpStatus() hierboven).
+   * gezet (err.status), zodat searchOverpass() kan bepalen of een andere
+   * server het opnieuw moet proberen (zie shouldTryOtherServer()).
    */
-  async function performSingleRequest(query, headers, timeoutMs) {
+  async function performSingleRequest(endpointUrl, query, headers, timeoutMs) {
     const hasAbortController = typeof AbortController !== 'undefined';
     const controller = hasAbortController ? new AbortController() : null;
     let timeoutId = null;
@@ -316,7 +356,7 @@
     try {
       // Overpass verwacht de query als POST-body (niet als querystring —
       // die kan bij complexere queries te lang worden voor een GET-URL).
-      response = await fetch(OVERPASS_ENDPOINT, {
+      response = await fetch(endpointUrl, {
         method: 'POST',
         headers: headers,
         body: 'data=' + encodeURIComponent(query),
@@ -340,24 +380,24 @@
   /**
    * Voert de Overpass-zoekopdracht uit en geeft de resultaten terug in
    * hetzelfde kandidaat-formaat als wikidata-search.js#searchWikidataBox().
-   * Bij een timeout ÓF een tijdelijke serverfout (HTTP 502/503/504, zie
-   * isRetryableHttpStatus()) wordt de aanvraag automatisch herhaald —
-   * de aanroeper hoeft dus niet zelf handmatig opnieuw te proberen. Een
-   * niet-herhaalbare fout (bijv. HTTP 403, of geen pogingen meer over)
-   * wordt gewoon meteen doorgegeven.
    *
-   * ACHTERGROND (17 sept. 2026): tot deze wijziging werd alleen een
-   * timeout (AbortError) als herhaalbaar herkend; een HTTP 504 die
-   * tijdens live testen optrad, werd daardoor als harde fout doorgegeven
-   * en liet de hele pijplijn-run crashen, ook al was de oorzaak (een
-   * tijdelijk overbelaste publieke Overpass-server) net zo transiënt als
-   * een timeout.
+   * Servers (0.9.3): de query gaat eerst naar de server die het laatst
+   * slaagde (bij de eerste keer Private.coffee). Faalt die (time-out, geen
+   * verbinding, HTTP 429/403/5xx), dan gaat de query meteen naar de
+   * volgende server uit OVERPASS_ENDPOINTS, zonder eerst op dezelfde
+   * server opnieuw te proberen. Falen alle servers, dan volgt na een
+   * korte pauze nog maxRetries keer een ronde langs alle servers. Pas als
+   * ook die mislukken, volgt één fout met per server de oorzaak, bijv.
+   * "Overpass-query mislukt op alle servers (Private.coffee: time-out;
+   * overpass-api.de: HTTP 429)". Een HTTP 400 (ongeldige query) wordt
+   * meteen doorgegeven.
    *
    * @param {{minLat:number,maxLat:number,minLng:number,maxLng:number}} bbox
    * @param {Array<Array<{key:string,value:string}>>} tagFilterGroups
    * @param {object} [options]
-   * @param {number} [options.timeoutMs=25000]
-   * @param {number} [options.maxRetries=1] - aantal automatische herhalingen bij een timeout/5xx
+   * @param {number} [options.timeoutMs=40000] - per poging, per server
+   * @param {number} [options.maxRetries=1] - aantal extra rondes langs alle servers
+   * @param {Array<{name:string,url:string}>} [options.endpoints] - andere serverlijst (tests)
    * @param {string} [options.userAgent] - alleen relevant bij server-side gebruik
    * @returns {Promise<Array>}
    */
@@ -371,34 +411,40 @@
     const timeoutMs = options.timeoutMs || DEFAULT_TIMEOUT_MS;
     const maxRetries =
       options.maxRetries !== undefined ? options.maxRetries : DEFAULT_MAX_RETRIES;
+    const usesDefaultEndpoints = !Array.isArray(options.endpoints) || options.endpoints.length === 0;
+    const endpoints = usesDefaultEndpoints ? OVERPASS_ENDPOINTS : options.endpoints;
+    const startIndex = usesDefaultEndpoints ? preferredEndpointIndex % endpoints.length : 0;
 
     const headers = { 'Content-Type': 'text/plain' };
     if (options.userAgent) {
       headers['User-Agent'] = options.userAgent;
     }
 
-    let data;
-    let lastError;
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      try {
-        data = await performSingleRequest(query, headers, timeoutMs);
-        lastError = null;
-        break;
-      } catch (err) {
-        lastError = err;
-        const isTimeout = err.name === 'AbortError';
-        const isRetryableServerError = typeof err.status === 'number' && isRetryableHttpStatus(err.status);
-        const isRetryable = isTimeout || isRetryableServerError;
-        const hasRetriesLeft = attempt < maxRetries;
-        if (!isRetryable || !hasRetriesLeft) {
-          throw err;
-        }
-        // Korte, oplopende pauze vóór de volgende poging, zelfde reden
+    let data = null;
+    let failures = [];
+    for (let round = 0; round <= maxRetries && data === null; round++) {
+      if (round > 0) {
+        // Korte, oplopende pauze vóór de volgende ronde, zelfde reden
         // als in wikidata-search.js.
-        await new Promise((resolve) => setTimeout(resolve, RETRY_BACKOFF_MS * (attempt + 1)));
+        await new Promise((resolve) => setTimeout(resolve, RETRY_BACKOFF_MS * round));
+      }
+      failures = [];
+      for (let i = 0; i < endpoints.length; i++) {
+        const index = (startIndex + i) % endpoints.length;
+        const endpoint = endpoints[index];
+        try {
+          data = await performSingleRequest(endpoint.url, query, headers, timeoutMs);
+          if (usesDefaultEndpoints) preferredEndpointIndex = index;
+          break;
+        } catch (err) {
+          if (!shouldTryOtherServer(err)) throw err;
+          failures.push(endpoint.name + ': ' + describeError(err));
+        }
       }
     }
-    if (lastError) throw lastError;
+    if (data === null) {
+      throw new Error('Overpass-query mislukt op alle servers (' + failures.join('; ') + ')');
+    }
 
     const elements = data.elements || [];
 
@@ -417,6 +463,8 @@
     haversineDistanceMeters,
     normalizeWikipediaTitle,
     isRetryableHttpStatus,
+    shouldTryOtherServer,
     searchOverpass,
+    OVERPASS_ENDPOINTS,
   };
 });
