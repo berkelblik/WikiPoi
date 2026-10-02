@@ -51,6 +51,11 @@ const OSM_TIMEOUT_MS = 30000
 const EIGEN_CATEGORY_KEY = 'eigen'
 const EIGEN_CATEGORY_LABEL = 'Eigen POI'
 const EIGEN_DUBBEL_METERS = 100
+// Eigen POI's doen mee tot deze afstand van de route, ook buiten de corridor.
+// Verder weg vallen ze af: zo kan één groot bestand voor meerdere routes
+// dienen, en kondigt Onderweg geen POI van honderden km ver aan (triggerstraal
+// = afstand POI–route + 50 m).
+const EIGEN_MAX_METERS = 2000
 // Zoveel overgeslagen regels worden met regelnummer en reden getoond.
 const EIGEN_MAX_REDENEN = 5
 
@@ -232,19 +237,20 @@ function App() {
     )
     return { allPois: [...eigen, ...over], eigenVervangen: gevonden.length - over.length }
   }, [wikidataResults, osmResults, eigenImport, searchDone])
-  const eigenCount = allPois.filter((p) => p.eigen).length
 
   // Per POI de afstand tot de route en het dichtstbijzijnde routepunt (= waar
   // EuroPoi straks aankondigt). Alleen herberekend bij een nieuwe route of
   // nieuwe zoekresultaten — niet bij het verschuiven van de slider.
-  const routeMeasuredPois = useMemo(() => {
+  // Eigen POI's verder dan EIGEN_MAX_METERS van de route vallen hier af
+  // (geteld in eigenTeVer, gemeld bij stap 3).
+  const { routeMeasuredPois, eigenTeVer } = useMemo(() => {
     const routePoints = routeInfo ? routeInfo.points : null
     const canMeasure =
       !!routePoints &&
       routePoints.length > 0 &&
       !!window.WikiPoiRouteBuffer &&
       typeof window.WikiPoiRouteBuffer.closestPointOnRoute === 'function'
-    return allPois.map((c) => {
+    const gemeten = allPois.map((c) => {
       const categoryLabel = categoryLabelByKey[c.categoryKey] || 'Onbekende categorie'
       if (!canMeasure) {
         return { ...c, categoryLabel, distanceToRoute: null, snapPoint: null }
@@ -252,7 +258,12 @@ function App() {
       const r = window.WikiPoiRouteBuffer.closestPointOnRoute(c, routePoints)
       return { ...c, categoryLabel, distanceToRoute: r.distance, snapPoint: r.point }
     })
+    const binnen = gemeten.filter(
+      (p) => !(p.eigen && Number.isFinite(p.distanceToRoute) && p.distanceToRoute > EIGEN_MAX_METERS)
+    )
+    return { routeMeasuredPois: binnen, eigenTeVer: gemeten.length - binnen.length }
   }, [allPois, routeInfo, categoryLabelByKey])
+  const eigenCount = routeMeasuredPois.filter((p) => p.eigen).length
 
   // Goedkope stap die wél bij elke sliderbeweging draait: binnen/buiten de
   // corridor markeren.
@@ -931,11 +942,17 @@ function App() {
           )}
           {searchDone && (
             <p>
-              <strong>{allPois.length}</strong> POI's gevonden
+              <strong>{routeMeasuredPois.length}</strong> POI's gevonden
               {eigenCount > 0 && `, inclusief ${eigenCount} eigen`}
               {eigenVervangen > 0 && `, ${eigenVervangen} vervangen door een eigen POI`}
               {mergedCount > 0 && `, ${mergedCount} dubbele samengevoegd`}
               {useOsm && `, waarvan ${osmFoundCount} via OpenStreetMap`}.
+            </p>
+          )}
+          {searchDone && eigenTeVer > 0 && (
+            <p className="muted">
+              {eigenTeVer === 1 ? "1 eigen POI ligt" : `${eigenTeVer} eigen POI's liggen`} verder dan{' '}
+              {EIGEN_MAX_METERS / 1000} km van de route en {eigenTeVer === 1 ? 'doet' : 'doen'} niet mee.
             </p>
           )}
           {osmWarning && <p className="error">{osmWarning}</p>}
