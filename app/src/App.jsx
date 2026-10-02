@@ -52,9 +52,9 @@ const EIGEN_CATEGORY_KEY = 'eigen'
 const EIGEN_CATEGORY_LABEL = 'Eigen POI'
 const EIGEN_DUBBEL_METERS = 100
 // Eigen POI's doen mee tot deze afstand van de route, ook buiten de corridor.
-// Verder weg vallen ze af: zo kan één groot bestand voor meerdere routes
-// dienen, en kondigt Onderweg geen POI van honderden km ver aan (triggerstraal
-// = afstand POI–route + 50 m).
+// Verder weg blijven ze zichtbaar op de kaart en in de lijst (vervaagd, net als
+// gevonden POI's buiten de corridor), maar doen ze niet mee: geen export, geen
+// aankondiging in Onderweg (triggerstraal zou anders afstand + 50 m worden).
 const EIGEN_MAX_METERS = 2000
 // Zoveel overgeslagen regels worden met regelnummer en reden getoond.
 const EIGEN_MAX_REDENEN = 5
@@ -241,16 +241,14 @@ function App() {
   // Per POI de afstand tot de route en het dichtstbijzijnde routepunt (= waar
   // EuroPoi straks aankondigt). Alleen herberekend bij een nieuwe route of
   // nieuwe zoekresultaten — niet bij het verschuiven van de slider.
-  // Eigen POI's verder dan EIGEN_MAX_METERS van de route vallen hier af
-  // (geteld in eigenTeVer, gemeld bij stap 3).
-  const { routeMeasuredPois, eigenTeVer } = useMemo(() => {
+  const routeMeasuredPois = useMemo(() => {
     const routePoints = routeInfo ? routeInfo.points : null
     const canMeasure =
       !!routePoints &&
       routePoints.length > 0 &&
       !!window.WikiPoiRouteBuffer &&
       typeof window.WikiPoiRouteBuffer.closestPointOnRoute === 'function'
-    const gemeten = allPois.map((c) => {
+    return allPois.map((c) => {
       const categoryLabel = categoryLabelByKey[c.categoryKey] || 'Onbekende categorie'
       if (!canMeasure) {
         return { ...c, categoryLabel, distanceToRoute: null, snapPoint: null }
@@ -258,12 +256,12 @@ function App() {
       const r = window.WikiPoiRouteBuffer.closestPointOnRoute(c, routePoints)
       return { ...c, categoryLabel, distanceToRoute: r.distance, snapPoint: r.point }
     })
-    const binnen = gemeten.filter(
-      (p) => !(p.eigen && Number.isFinite(p.distanceToRoute) && p.distanceToRoute > EIGEN_MAX_METERS)
-    )
-    return { routeMeasuredPois: binnen, eigenTeVer: gemeten.length - binnen.length }
   }, [allPois, routeInfo, categoryLabelByKey])
   const eigenCount = routeMeasuredPois.filter((p) => p.eigen).length
+  // Eigen POI's verder dan EIGEN_MAX_METERS: wel zichtbaar, doen niet mee.
+  const eigenTeVer = routeMeasuredPois.filter(
+    (p) => p.eigen && Number.isFinite(p.distanceToRoute) && p.distanceToRoute > EIGEN_MAX_METERS
+  ).length
 
   // Goedkope stap die wél bij elke sliderbeweging draait: binnen/buiten de
   // corridor markeren.
@@ -271,8 +269,11 @@ function App() {
     () =>
       routeMeasuredPois.map((p) => ({
         ...p,
-        // Eigen POI's doen altijd mee, ook buiten de corridor.
-        inCorridor: p.eigen || p.distanceToRoute === null ? true : p.distanceToRoute <= corridorMeters,
+        // Eigen POI's doen mee tot EIGEN_MAX_METERS, ook buiten de corridor.
+        inCorridor:
+          p.distanceToRoute === null
+            ? true
+            : p.distanceToRoute <= (p.eigen ? EIGEN_MAX_METERS : corridorMeters),
       })),
     [routeMeasuredPois, corridorMeters]
   )
@@ -952,7 +953,7 @@ function App() {
           {searchDone && eigenTeVer > 0 && (
             <p className="muted">
               {eigenTeVer === 1 ? "1 eigen POI ligt" : `${eigenTeVer} eigen POI's liggen`} verder dan{' '}
-              {EIGEN_MAX_METERS / 1000} km van de route en {eigenTeVer === 1 ? 'doet' : 'doen'} niet mee.
+              {EIGEN_MAX_METERS / 1000} km van de route: zichtbaar op de kaart, maar {eigenTeVer === 1 ? 'doet' : 'doen'} niet mee.
             </p>
           )}
           {osmWarning && <p className="error">{osmWarning}</p>}
@@ -1006,9 +1007,11 @@ function App() {
                           ? `${Math.round(poi.distanceToRoute)} m`
                           : 'afstand onbekend'}
                         {poi.eigen
-                          ? Number.isFinite(poi.distanceToRoute) && poi.distanceToRoute > corridorMeters
-                            ? ', buiten de corridor maar telt mee'
-                            : ''
+                          ? !poi.inCorridor
+                            ? `, verder dan ${EIGEN_MAX_METERS / 1000} km: doet niet mee`
+                            : Number.isFinite(poi.distanceToRoute) && poi.distanceToRoute > corridorMeters
+                              ? ', buiten de corridor maar telt mee'
+                              : ''
                           : !poi.wikipediaUrl && ', geen artikel'}
                         )
                       </span>
