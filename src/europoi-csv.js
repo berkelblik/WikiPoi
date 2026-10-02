@@ -7,6 +7,7 @@
  * produceert dat de EuroPoi-app verwacht.
  *
  * Uitvoerformaat: lat;lng;pluscode;name;desc;category;radius;mp3
+ * Inlezen ("Eigen POI's" in WikiPoi): fromEuroPoiCsv(), zelfde formaat.
  * Bestandseisen (bevestigd tegen EuroPoi's referentie-export):
  *   - UTF-8 BOM vooraan het bestand
  *   - CRLF-regeleindes
@@ -182,6 +183,168 @@ function toEuroPoiCsvBlob(pois) {
   return new Blob([toEuroPoiCsvWithBom(pois)], { type: 'text/csv;charset=utf-8;' });
 }
 
+/**
+ * Splitst CSV-tekst met puntkomma als scheidingsteken in records (arrays
+ * van velden). Ondersteunt velden tussen aanhalingstekens, met daarin
+ * puntkomma's, regeleindes en verdubbelde aanhalingstekens (""), en zowel
+ * CRLF als LF. Geeft per record ook het regelnummer waarop het begint
+ * (1-based), voor duidelijke meldingen.
+ *
+ * @param {string} text
+ * @returns {Array<{line:number, fields:string[]}>}
+ */
+function splitCsvRecords(text) {
+  const records = [];
+  let fields = [];
+  let field = '';
+  let inQuotes = false;
+  let line = 1;
+  let recordLine = 1;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          field += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        if (ch === '\n') line++;
+        field += ch;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ';') {
+      fields.push(field);
+      field = '';
+    } else if (ch === '\r') {
+      // CR van CRLF negeren; de LF sluit het record af.
+    } else if (ch === '\n') {
+      fields.push(field);
+      records.push({ line: recordLine, fields });
+      fields = [];
+      field = '';
+      line++;
+      recordLine = line;
+    } else {
+      field += ch;
+    }
+  }
+  if (field !== '' || fields.length > 0) {
+    fields.push(field);
+    records.push({ line: recordLine, fields });
+  }
+  return records;
+}
+
+// Coördinaat met decimale PUNT (zoals EuroPoi vereist), optioneel met minteken.
+const COORD_PATTERN = /^-?\d+(\.\d+)?$/;
+
+/**
+ * Leest een EuroPoi-CSV (lat;lng;pluscode;name;desc;category;radius;mp3) in,
+ * bijv. voor "Eigen POI's" in WikiPoi. Met of zonder UTF-8 BOM, CRLF of LF,
+ * velden met of zonder aanhalingstekens.
+ *
+ * - Kopregel: herkend als de eerste regel een kolom "lat" én "lng" (of
+ *   "lon") bevat; de kolommen worden dan op naam gezocht, dus een andere
+ *   volgorde mag. Zonder kopregel geldt de vaste EuroPoi-volgorde.
+ * - Verplicht per regel: lat, lng (decimale punt, binnen bereik) en name.
+ *   Ongeldige regels worden overgeslagen en geteld, met reden en
+ *   regelnummer. Een decimale komma telt als ongeldig: EuroPoi accepteert
+ *   alleen een punt, en het bestand moet in beide apps bruikbaar blijven.
+ * - pluscode, category en radius worden genegeerd.
+ * - mp3: wordt ongewijzigd doorgegeven (alleen spaties eromheen weg): een
+ *   internetlink of een verwijzing naar een audiobestand op de telefoon zelf.
+ *   Het afspelen (en het onderscheid tussen beide) regelt de app.
+ * - Lege regels tellen niet mee.
+ *
+ * @param {string} text - inhoud van het bestand
+ * @returns {{
+ *   pois: Array<{lat:number, lng:number, name:string, desc:string, mp3:string, line:number}>,
+ *   skipped: Array<{line:number, reason:string}>,
+ *   error: string
+ * }} error is gevuld als het bestand als geheel onbruikbaar is.
+ */
+function fromEuroPoiCsv(text) {
+  const result = { pois: [], skipped: [], error: '' };
+  let body = String(text || '');
+  if (body.charCodeAt(0) === 0xfeff) body = body.slice(1);
+
+  const records = splitCsvRecords(body).filter((r) => r.fields.some((f) => f.trim() !== ''));
+  if (records.length === 0) {
+    result.error = 'Het bestand is leeg.';
+    return result;
+  }
+
+  // Standaardvolgorde van EuroPoi.
+  let col = { lat: 0, lng: 1, name: 3, desc: 4, mp3: 7 };
+  let start = 0;
+  const first = records[0].fields.map((f) => f.trim().toLowerCase());
+  if (first.includes('lat') && (first.includes('lng') || first.includes('lon'))) {
+    const idx = (n) => first.indexOf(n);
+    col = {
+      lat: idx('lat'),
+      lng: idx('lng') >= 0 ? idx('lng') : idx('lon'),
+      name: idx('name'),
+      desc: idx('desc'),
+      mp3: idx('mp3'),
+    };
+    start = 1;
+    if (col.name < 0) {
+      result.error = 'De kopregel mist de verplichte kolom "name".';
+      return result;
+    }
+  } else if (records[0].fields.length === 1 && records[0].fields[0].includes(',')) {
+    // Eén kolom met komma's: vrijwel zeker opgeslagen met komma als
+    // scheidingsteken in plaats van puntkomma.
+    result.error = 'Geen puntkomma als scheidingsteken gevonden. Sla het bestand op als CSV met puntkomma (;).';
+    return result;
+  }
+
+  const get = (fields, i) => (i >= 0 && i < fields.length ? fields[i].trim() : '');
+
+  for (let r = start; r < records.length; r++) {
+    const { line, fields } = records[r];
+    const latText = get(fields, col.lat);
+    const lngText = get(fields, col.lng);
+    const name = cleanText(get(fields, col.name));
+
+    if (fields.length === 1) {
+      result.skipped.push({ line, reason: 'geen puntkomma als scheidingsteken' });
+      continue;
+    }
+    if (latText === '' || lngText === '') {
+      result.skipped.push({ line, reason: 'lat of lng ontbreekt' });
+      continue;
+    }
+    if (/^-?\d+,\d+$/.test(latText) || /^-?\d+,\d+$/.test(lngText)) {
+      result.skipped.push({ line, reason: 'decimale komma in coördinaat (gebruik een punt)' });
+      continue;
+    }
+    if (!COORD_PATTERN.test(latText) || !COORD_PATTERN.test(lngText)) {
+      result.skipped.push({ line, reason: 'lat of lng is geen geldig getal' });
+      continue;
+    }
+    const lat = Number(latText);
+    const lng = Number(lngText);
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+      result.skipped.push({ line, reason: 'coördinaat buiten bereik' });
+      continue;
+    }
+    if (!name) {
+      result.skipped.push({ line, reason: 'naam ontbreekt' });
+      continue;
+    }
+    const mp3 = get(fields, col.mp3);
+    result.pois.push({ lat, lng, name, desc: cleanText(get(fields, col.desc)), mp3, line });
+  }
+  return result;
+}
+
 // Werkt zowel als CommonJS-module (Node/tests) als los <script> of ESM-bundel-
 // side-effect-import in de browser (Vite/Capacitor).
 //
@@ -195,8 +358,8 @@ function toEuroPoiCsvBlob(pois) {
 // blijft window.EuroPoiCsv undefined in de gebouwde app — precies de bug
 // die deze volgorde voorkomt.
 if (typeof window !== 'undefined') {
-  window.EuroPoiCsv = { OLC, toEuroPoiCsv, toEuroPoiCsvWithBom, toEuroPoiCsvBlob, cleanText };
+  window.EuroPoiCsv = { OLC, toEuroPoiCsv, toEuroPoiCsvWithBom, toEuroPoiCsvBlob, cleanText, fromEuroPoiCsv };
 }
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { OLC, toEuroPoiCsv, toEuroPoiCsvWithBom, toEuroPoiCsvBlob, cleanText };
+  module.exports = { OLC, toEuroPoiCsv, toEuroPoiCsvWithBom, toEuroPoiCsvBlob, cleanText, fromEuroPoiCsv, splitCsvRecords };
 }

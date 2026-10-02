@@ -35,7 +35,7 @@ import { logboek, analyseer, alsTekst, duurTekst, tijdTekst } from './logboek.js
 import EcoScherm from './EcoScherm.jsx'
 import { SIM_SNELHEID_KMU, SIM_VERSNELLINGEN } from './simulatie.js'
 import { formatAfstand } from './geo.js'
-import { getCategoryStyle } from '../components/poi-icons.js'
+import CategoryDot from '../components/CategoryDot.jsx'
 import RouteMap from '../components/RouteMap.jsx'
 
 // Productie: true = eco-scherm meteen bij "Route starten". Testfase: false,
@@ -149,7 +149,8 @@ function Onderweg({ pois, summariesById, routePunten }) {
     setSimMelding(simVolgendePoi() ? '' : 'Geen volgende POI meer verderop langs de route.')
   }
 
-  const zonderSamenvatting = pois.filter((p) => !(p.id in (summariesById || {}))).length
+  // Eigen POI's (CSV) hebben geen samenvatting nodig.
+  const zonderSamenvatting = pois.filter((p) => !p.eigen && !(p.id in (summariesById || {}))).length
 
   return (
     <>
@@ -300,11 +301,7 @@ function Onderweg({ pois, summariesById, routePunten }) {
         <ul className="poi-list">
           {dichtstbij.map((poi) => (
             <li key={poi.id} onClick={() => leesVoor(poi)} style={{ cursor: 'pointer' }}>
-              <span
-                aria-hidden="true"
-                className="category-dot"
-                style={{ background: getCategoryStyle(poi.categoryKey).color }}
-              />
+              <CategoryDot categoryKey={poi.categoryKey} />
               <span>
                 {voorgelezen[poi.id] ? '✓ ' : ''}
                 {poi.label}{' '}

@@ -410,3 +410,45 @@ body::before {
   margin: 4px 0 0;
   font-size: 13px;
 }
+
+/* Eigen POI's (CSV) in stap 2 */
+
+.eigen-pois {
+  margin-top: 14px;
+}
+
+.eigen-pois .btn + .btn {
+  margin-left: 10px;
+}
+
+.eigen-pois .category-dot {
+  vertical-align: middle;
+}
+
+/* Verkleind icoon als tegel (Eigen POI) in plaats van een rondje. */
+.category-dot.category-tegel {
+  width: 1.15em;
+  height: 1.15em;
+  border-radius: 28%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.category-dot.category-tegel svg {
+  width: 82%;
+  height: 82%;
+}
+
+.eigen-redenen {
+  margin: 4px 0 0;
+  padding-left: 20px;
+}
+
+/* Versienummer onderaan stap 1 */
+
+.step p.app-versie {
+  margin-bottom: 0;
+  font-size: 12px;
+  text-align: right;
+}

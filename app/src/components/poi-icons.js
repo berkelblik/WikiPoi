@@ -27,6 +27,10 @@ export const CATEGORY_STYLES = {
   prehistorie_archeologie: { color: '#4d7c0f', icon: 'dolmen' },
   waterstaat_infrastructuur: { color: '#0284c7', icon: 'lighthouse' },
   kunst_gedenktekens: { color: '#4f46e5', icon: 'statue' },
+  // Eigen POI's uit een CSV (0.10.0): verkleind WikiPoi-icoon — wit "WP" op
+  // de blauw-groene verloopkleur van het app-icoon, als afgeronde tegel.
+  // color = middenkleur van het verloop (voor de lijntjes naar de route).
+  eigen: { color: '#136a69', background: 'linear-gradient(135deg, #1e3a5f, #0f7a6c)', icon: 'wp', shape: 'tegel' },
 }
 
 // Voor POI's zonder (bekende) categorie, bijv. uit een oudere zoekopdracht.
@@ -66,6 +70,8 @@ const ICON_SHAPES = {
   statue:
     '<circle cx="12" cy="4" r="2.2"/>' +
     '<path d="M9 7h6l1 7h-2v4h-4v-4H8zM6 18.5h12v1.5H6zM5 20.5h14V23H5z"/>',
+  // "WP" zoals in het app-icoon: W en P met ronde lijnuiteinden.
+  wp: `<path ${STROKE} stroke-width="2.6" d="M2.5 7l2.6 10 2.7-6.6 2.7 6.6 2.6-10M15.2 17V7.5h2.3a3 3 0 0 1 0 6h-2.3"/>`,
   pin:
     '<path d="M12 2a7 7 0 0 1 7 7c0 5-7 13-7 13S5 14 5 9a7 7 0 0 1 7-7zM12 6.5a2.5 2.5 0 1 0 0 5a2.5 2.5 0 1 0 0-5z"/>',
 }
@@ -87,7 +93,7 @@ export function iconSvg(iconName, sizePx) {
 
 /**
  * HTML voor een rond categorie-icoon: gekleurd rondje met witte rand en wit
- * icoon. Met faded: true kleiner zichtbaar gemaakt door de aanroeper (grootte)
+ * icoon (bij shape 'tegel' een afgeronde tegel met style.background). Met faded: true kleiner zichtbaar gemaakt door de aanroeper (grootte)
  * en hier halfdoorzichtig met lichtere rand en zachtere schaduw — gebruikt
  * voor POI's buiten de corridor.
  *
@@ -97,10 +103,10 @@ export function iconSvg(iconName, sizePx) {
  */
 export function markerHtml(categoryKey, { sizePx, faded = false }) {
   const style = getCategoryStyle(categoryKey)
-  const iconSize = Math.round(sizePx * 0.62)
+  const iconSize = Math.round(sizePx * (style.shape === 'tegel' ? 0.72 : 0.62))
   return (
     `<div style="width:${sizePx}px;height:${sizePx}px;box-sizing:border-box;` +
-    `border-radius:50%;background:${style.color};` +
+    `border-radius:${style.shape === 'tegel' ? '28%' : '50%'};background:${style.background || style.color};` +
     `border:2px solid ${faded ? '#e2e8f0' : '#ffffff'};` +
     `box-shadow:0 1px 4px rgba(0,0,0,${faded ? 0.2 : 0.45});` +
     `display:flex;align-items:center;justify-content:center;` +

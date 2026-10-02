@@ -12,9 +12,10 @@ import { Filesystem, Directory, Encoding } from '@capacitor/filesystem'
 import { Share } from '@capacitor/share'
 import RouteMap from './components/RouteMap.jsx'
 import Onderweg from './onderweg/Onderweg.jsx'
-import { getCategoryStyle } from './components/poi-icons.js'
+import CategoryDot from './components/CategoryDot.jsx'
 import { telefoonTaal } from './taal.js'
 import './App.css'
+import { version as APP_VERSION } from '../package.json'
 
 // WikiPoi — één doorlopende flow in zeven stappen:
 //   1. Route (GPX)  2. Categorieën (+ optioneel OSM)  3. Zoeken
@@ -23,6 +24,8 @@ import './App.css'
 // Een stap wordt pas bruikbaar als de vorige klaar is. Wie route, categorieën
 // of de OSM-schakelaar wijzigt, maakt eerdere zoekresultaten ongeldig; die
 // worden dan gewist (resetResults).
+// Eigen POI's (CSV, stap 2) staan los van de zoekresultaten: importeren of
+// verwijderen na het zoeken vraagt geen nieuwe zoekactie.
 
 // Corridor langs de route: de slider bepaalt hoe breed de strook aan
 // weerszijden van de route is waarbinnen POI's meegaan. De bounding box van
@@ -40,6 +43,20 @@ const WIKIDATA_MERGE_METERS = 10
 // zelf om maximaal 25 s rekentijd; 30 s laat ruimte voor netwerkvertraging.
 // Slechtste geval per categorie: 2 rondes x 2 servers x 30 s + 3 s pauze.
 const OSM_TIMEOUT_MS = 30000
+
+// Eigen POI's uit een CSV (EuroPoi-formaat): eigen categorie en kleur, altijd
+// binnen de corridor, geen Wikipedia. Een gevonden POI met dezelfde naam
+// (hoofdletters/spaties genegeerd) binnen deze afstand van een eigen POI
+// vervalt: de eigen POI wint.
+const EIGEN_CATEGORY_KEY = 'eigen'
+const EIGEN_CATEGORY_LABEL = 'Eigen POI'
+const EIGEN_DUBBEL_METERS = 100
+// Zoveel overgeslagen regels worden met regelnummer en reden getoond.
+const EIGEN_MAX_REDENEN = 5
+
+function vergelijkNaam(naam) {
+  return String(naam || '').trim().toLowerCase().replace(/\s+/g, ' ')
+}
 
 // Alle categorieën met QID's gaan samen in één Wikidata-verzoek (gemeten:
 // ± 3× sneller dan één verzoek per categorie, en minder kans op een fout
@@ -104,20 +121,6 @@ function csvFileName(routeName) {
   return (safe || 'wikipoi') + '.csv'
 }
 
-// Klein gekleurd rondje in de categoriekleur, voor de lijsten.
-function CategoryDot({ categoryKey, faded }) {
-  return (
-    <span
-      aria-hidden="true"
-      className="category-dot"
-      style={{
-        background: getCategoryStyle(categoryKey).color,
-        opacity: faded ? 0.45 : 1,
-      }}
-    />
-  )
-}
-
 // Eén genummerde stap. Zolang de stap nog niet bruikbaar is, staat er
 // alleen een aanwijzing wat eerst moet gebeuren.
 function Step({ number, title, disabled, hint, children }) {
@@ -157,6 +160,9 @@ function App() {
   const [routeName, setRouteName] = useState('')
   const [exportMessage, setExportMessage] = useState('')
   const [exportError, setExportError] = useState('')
+  // Eigen POI's: { fileName, pois, melding, overgeslagen } of null.
+  const [eigenImport, setEigenImport] = useState(null)
+  const [eigenFout, setEigenFout] = useState('')
 
   const isNative = Capacitor.isNativePlatform()
 
@@ -200,16 +206,33 @@ function App() {
     categoryList.forEach((c) => {
       labels[c.key] = c.label
     })
+    labels[EIGEN_CATEGORY_KEY] = EIGEN_CATEGORY_LABEL
     return labels
   }, [categoryList])
 
   const searchDone = wikidataResults !== null
 
-  // Alle gevonden POI's (Wikidata + eventueel OSM, al gefilterd bij het zoeken).
-  const allPois = useMemo(
-    () => [...(wikidataResults || []), ...(osmResults || [])],
-    [wikidataResults, osmResults]
-  )
+  // Alle POI's: na het zoeken de eigen POI's (CSV) plus de gevonden POI's
+  // (Wikidata + eventueel OSM, al gefilterd bij het zoeken). Een gevonden POI
+  // met dezelfde naam binnen EIGEN_DUBBEL_METERS van een eigen POI vervalt.
+  const { allPois, eigenVervangen } = useMemo(() => {
+    const gevonden = [...(wikidataResults || []), ...(osmResults || [])]
+    const eigen = searchDone && eigenImport ? eigenImport.pois : []
+    const rb = window.WikiPoiRouteBuffer
+    if (eigen.length === 0 || !rb || typeof rb.haversineDistance !== 'function') {
+      return { allPois: [...eigen, ...gevonden], eigenVervangen: 0 }
+    }
+    const over = gevonden.filter(
+      (p) =>
+        !eigen.some(
+          (e) =>
+            vergelijkNaam(e.label) === vergelijkNaam(p.label) &&
+            rb.haversineDistance(e, p) <= EIGEN_DUBBEL_METERS
+        )
+    )
+    return { allPois: [...eigen, ...over], eigenVervangen: gevonden.length - over.length }
+  }, [wikidataResults, osmResults, eigenImport, searchDone])
+  const eigenCount = allPois.filter((p) => p.eigen).length
 
   // Per POI de afstand tot de route en het dichtstbijzijnde routepunt (= waar
   // EuroPoi straks aankondigt). Alleen herberekend bij een nieuwe route of
@@ -237,7 +260,8 @@ function App() {
     () =>
       routeMeasuredPois.map((p) => ({
         ...p,
-        inCorridor: p.distanceToRoute === null ? true : p.distanceToRoute <= corridorMeters,
+        // Eigen POI's doen altijd mee, ook buiten de corridor.
+        inCorridor: p.eigen || p.distanceToRoute === null ? true : p.distanceToRoute <= corridorMeters,
       })),
     [routeMeasuredPois, corridorMeters]
   )
@@ -246,7 +270,9 @@ function App() {
     [mapPois]
   )
   const corridorPois = mapPoisSorted.filter((p) => p.inCorridor)
-  const summaryMissingPois = corridorPois.filter((p) => !(p.id in summariesById))
+  // Eigen POI's hebben hun eigen beschrijving en gaan niet naar Wikipedia.
+  const summaryMissingPois = corridorPois.filter((p) => !p.eigen && !(p.id in summariesById))
+  const eigenInCorridorCount = corridorPois.filter((p) => p.eigen).length
   const summaryFoundCount = corridorPois.filter(
     (p) => summariesById[p.id] && summariesById[p.id].summary && !summariesById[p.id].summary.viaWikidata
   ).length
@@ -331,6 +357,69 @@ function App() {
       setRouteError('Fout: kon het bestand niet lezen.')
     }
     reader.readAsText(file)
+  }
+
+  // Eigen POI's uit een CSV in EuroPoi-formaat (europoi-csv.js). Mislukt het
+  // inlezen, dan blijft een eerdere import staan.
+  function handleEigenCsvChange(event) {
+    const file = event.target.files && event.target.files[0]
+    event.target.value = ''
+    if (!file) return
+    setEigenFout('')
+    if (!window.EuroPoiCsv || typeof window.EuroPoiCsv.fromEuroPoiCsv !== 'function') {
+      setEigenFout('Fout: europoi-csv.js is niet correct geladen.')
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = () => {
+      try {
+        const r = window.EuroPoiCsv.fromEuroPoiCsv(String(reader.result))
+        if (r.error) {
+          setEigenFout(`${file.name}: ${r.error}`)
+          return
+        }
+        if (r.pois.length === 0) {
+          const reden = r.skipped.length > 0 ? ` (bijv. regel ${r.skipped[0].line}: ${r.skipped[0].reason})` : ''
+          setEigenFout(`${file.name}: geen bruikbare POI's gevonden${reden}.`)
+          return
+        }
+        // mp3: internetlink (http/https) of een audiobestand op de telefoon.
+        const metMp3 = r.pois.filter((p) => p.mp3).length
+        const lokaalMp3 = r.pois.filter((p) => p.mp3 && !/^https?:\/\//i.test(p.mp3)).length
+        setEigenImport({
+          fileName: file.name,
+          pois: r.pois.map((p) => ({
+            id: `eigen-${p.line}`,
+            label: p.name,
+            lat: p.lat,
+            lng: p.lng,
+            description: p.desc,
+            mp3: p.mp3,
+            categoryKey: EIGEN_CATEGORY_KEY,
+            eigen: true,
+          })),
+          melding:
+            `${file.name}: ${r.pois.length} POI's ingelezen` +
+            (metMp3 > 0 ? `, waarvan ${metMp3} met mp3` : '') +
+            (lokaalMp3 > 0 ? ` (${lokaalMp3} als bestand op de telefoon)` : '') +
+            '.',
+          overgeslagen: r.skipped,
+        })
+        setExportMessage('')
+      } catch (err) {
+        setEigenFout(errorText(err))
+      }
+    }
+    reader.onerror = () => {
+      setEigenFout('Fout: kon het bestand niet lezen.')
+    }
+    reader.readAsText(file)
+  }
+
+  function verwijderEigenPois() {
+    setEigenImport(null)
+    setEigenFout('')
+    setExportMessage('')
   }
 
   async function runSearch() {
@@ -622,7 +711,8 @@ function App() {
       const rows = corridorPois.map((p) => {
         const entry = summaries[p.id]
         const summary = entry && entry.summary
-        const desc = summary ? summary.extractShort || '' : p.description || ''
+        // Eigen POI's: altijd de eigen beschrijving (leeg → EuroPoi leest de naam).
+        const desc = p.eigen ? p.description || '' : summary ? summary.extractShort || '' : p.description || ''
         return {
           lat: p.lat,
           lng: p.lng,
@@ -630,7 +720,7 @@ function App() {
           desc,
           category,
           radius: DEFAULT_TRIGGER_RADIUS_METERS,
-          mp3: '',
+          mp3: p.eigen ? p.mp3 || '' : '',
         }
       })
       // Met BOM, zodat ook spreadsheetprogramma's (Excel) de tekens goed
@@ -746,6 +836,7 @@ function App() {
             <p className="muted">Kies het GPX-bestand van je fiets- of wandelroute.</p>
           )}
           {routeError && <p className="error">{routeError}</p>}
+          <p className="muted app-versie">WikiPoi {APP_VERSION}</p>
         </Step>
 
         <Step number={2} title="Categorieën">
@@ -767,6 +858,59 @@ function App() {
               </label>
             </>
           )}
+          <div className="eigen-pois">
+            <label className={searchLoading ? 'btn btn-indigo btn-small is-disabled' : 'btn btn-indigo btn-small'}>
+              <input
+                type="file"
+                accept=".csv,text/csv,text/comma-separated-values"
+                onChange={handleEigenCsvChange}
+                disabled={searchLoading}
+                hidden
+              />
+              {eigenImport ? "Andere eigen POI's (CSV)" : "Eigen POI's toevoegen (CSV)"}
+            </label>
+            {eigenImport && (
+              <button
+                type="button"
+                className="btn btn-indigo btn-small"
+                onClick={verwijderEigenPois}
+                disabled={searchLoading}
+              >
+                Verwijderen
+              </button>
+            )}
+            {!eigenImport && !eigenFout && (
+              <p className="muted">
+                Optioneel: een CSV in EuroPoi-formaat (lat;lng;pluscode;name;desc;category;radius;mp3). Eigen
+                POI's verschijnen na het zoeken en doen altijd mee.
+              </p>
+            )}
+            {eigenImport && (
+              <>
+                <p className="success">
+                  <CategoryDot categoryKey={EIGEN_CATEGORY_KEY} /> {eigenImport.melding}
+                </p>
+                {eigenImport.overgeslagen.length > 0 && (
+                  <div className="muted">
+                    {eigenImport.overgeslagen.length === 1
+                      ? '1 regel overgeslagen:'
+                      : `${eigenImport.overgeslagen.length} regels overgeslagen:`}
+                    <ul className="eigen-redenen">
+                      {eigenImport.overgeslagen.slice(0, EIGEN_MAX_REDENEN).map((s) => (
+                        <li key={s.line}>
+                          regel {s.line}: {s.reason}
+                        </li>
+                      ))}
+                      {eigenImport.overgeslagen.length > EIGEN_MAX_REDENEN && (
+                        <li>en nog {eigenImport.overgeslagen.length - EIGEN_MAX_REDENEN} andere</li>
+                      )}
+                    </ul>
+                  </div>
+                )}
+              </>
+            )}
+            {eigenFout && <p className="error">{eigenFout}</p>}
+          </div>
         </Step>
 
         <Step number={3} title="Zoeken" disabled={!routeInfo} hint="Kies eerst een route bij stap 1.">
@@ -788,6 +932,8 @@ function App() {
           {searchDone && (
             <p>
               <strong>{allPois.length}</strong> POI's gevonden
+              {eigenCount > 0 && `, inclusief ${eigenCount} eigen`}
+              {eigenVervangen > 0 && `, ${eigenVervangen} vervangen door een eigen POI`}
               {mergedCount > 0 && `, ${mergedCount} dubbele samengevoegd`}
               {useOsm && `, waarvan ${osmFoundCount} via OpenStreetMap`}.
             </p>
@@ -842,7 +988,12 @@ function App() {
                         {Number.isFinite(poi.distanceToRoute)
                           ? `${Math.round(poi.distanceToRoute)} m`
                           : 'afstand onbekend'}
-                        {!poi.wikipediaUrl && ', geen artikel'})
+                        {poi.eigen
+                          ? Number.isFinite(poi.distanceToRoute) && poi.distanceToRoute > corridorMeters
+                            ? ', buiten de corridor maar telt mee'
+                            : ''
+                          : !poi.wikipediaUrl && ', geen artikel'}
+                        )
                       </span>
                     </span>
                   </li>
@@ -858,6 +1009,12 @@ function App() {
             hebben een Wikipedia-samenvatting
             {wikidataZinCount > 0 ? `; ${wikidataZinCount} kregen een zin uit Wikidata.` : '.'}
           </p>
+          {eigenInCorridorCount > 0 && (
+            <p className="muted">
+              {eigenInCorridorCount} eigen POI's gebruiken hun eigen beschrijving (zonder beschrijving: alleen
+              de naam).
+            </p>
+          )}
           <p className="muted">
             Optioneel: bij opslaan (stap 6) worden ontbrekende samenvattingen automatisch opgehaald.
           </p>
