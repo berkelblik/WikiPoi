@@ -7,6 +7,10 @@
  * op, in zijn geheel (contain, niet bijgesneden). Zonder foto staat alles
  * midden op het scherm. Met foto is de klok kleiner en zijn de
  * tussenruimtes smaller, zodat de foto meer ruimte krijgt.
+ *
+ * Volledig scherm (0.9.2): het eco-scherm bedekt ook de zone van de
+ * statusbalk en de camera-uitsparing; de inhoud houdt daar afstand van
+ * via env(safe-area-inset-top), zodat de klok niet achter de camera valt.
  */
 
 .eco-scherm {
@@ -28,7 +32,7 @@
 .eco-inhoud {
   width: 100%;
   max-width: 480px;
-  padding: 24px 24px calc(24px + env(safe-area-inset-bottom, 0px));
+  padding: calc(24px + env(safe-area-inset-top, 0px)) 24px calc(24px + env(safe-area-inset-bottom, 0px));
   box-sizing: border-box;
   height: 100%;
   display: flex;

@@ -22,9 +22,17 @@
  * Het scherm wordt via een portal direct in <body> gezet, zodat de stijlen
  * van de stappen (o.a. marges van alinea's in .step) er geen invloed op
  * hebben. Met foto is de klok kleiner, zodat de foto meer ruimte krijgt.
+ *
+ * Volledig scherm (0.9.1): zolang het eco-scherm open is, zijn de Android-
+ * statusbalk en -navigatiebalk verborgen (SystemBars uit @capacitor/core),
+ * zodat het scherm egaal zwart is. Bij sluiten komen ze terug. Haalt de
+ * gebruiker de balken met een veegbeweging vanaf de rand terug, dan blijven
+ * ze staan tot het eco-scherm opnieuw opent (keuze A1 + B1). Alleen op het
+ * toestel; in de browser verandert er niets.
  */
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { Capacitor, SystemBars } from '@capacitor/core'
 import { KeepAwake } from '@capacitor-community/keep-awake'
 import { afstand, peiling, relatieveHoek, klokRichting } from './geo.js'
 import { pluscode } from './pluscode.js'
@@ -64,6 +72,15 @@ function EcoScherm({ poi, positie, rijrichting, samenvatting, laatstePoi, onHerh
     KeepAwake.keepAwake().catch((err) => console.warn('WikiPoi keep-awake mislukt:', err))
     return () => {
       KeepAwake.allowSleep().catch(() => {})
+    }
+  }, [])
+
+  // Status- en navigatiebalk verbergen zolang het eco-scherm open is.
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return undefined
+    SystemBars.hide().catch((err) => console.warn('WikiPoi balken verbergen mislukt:', err))
+    return () => {
+      SystemBars.show().catch(() => {})
     }
   }, [])
 
