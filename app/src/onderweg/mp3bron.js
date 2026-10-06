@@ -12,8 +12,11 @@
  *   van EuroPoi, src/hooks/useGpx.js). Vergelijken gebeurt genormaliseerd:
  *   hoofdletters, alleen letters en cijfers (normPlus in EuroPoi).
  *
- * Afspeelvolgorde (zoals EuroPoi, zonder ElevenLabs): link (alleen online)
- * → lokaal bestand → voorlezen. Het afspelen zelf staat in spreek.js.
+ * Offline audio (0.14.0): gekoppelde lokale bestanden worden in de app
+ * bewaard en internetlinks worden direct na de CSV-import gedownload
+ * (audioOpslag.js). Afspeelvolgorde: lokaal bestand (eigen keuze van de
+ * gebruiker) → gedownloade kopie van de link → link (alleen online) →
+ * voorlezen. Het afspelen zelf staat in spreek.js.
  *
  * Alleen pure functies: netwerkloos te testen (test-mp3bron.js).
  */
@@ -85,26 +88,92 @@ export function koppelSleutels(csvPluscode, berekend) {
 }
 
 /**
- * Afspeelbronnen van een POI, in volgorde: link (alleen als online), dan
- * het gekoppelde lokale bestand.
+ * Afspeelbronnen van een POI, in volgorde: gekoppeld lokaal bestand,
+ * gedownloade kopie van de link, dan de link zelf (alleen als online).
  *
- * @param {{mp3?: string, audioLokaal?: {url: string, naam: string}|null}} poi
+ * @param {{mp3?: string, audioLokaal?: {url: string, naam: string}|null,
+ *   audioKopie?: {url: string}|null}} poi
  * @param {boolean} online - navigator.onLine
- * @returns {{bronnen: Array<{src: string, soort: 'link'|'lokaal', naam: string}>, overgeslagen: string}}
+ * @returns {{bronnen: Array<{src: string, soort: 'lokaal'|'kopie'|'link', naam: string}>, overgeslagen: string}}
  *   overgeslagen: reden waarom een link niet geprobeerd wordt ('' als n.v.t.)
  */
 export function audioBronnen(poi, online) {
   const bronnen = []
   let overgeslagen = ''
-  if (poi && isLink(poi.mp3)) {
+  if (!poi) return { bronnen, overgeslagen }
+  if (poi.audioLokaal && poi.audioLokaal.url) {
+    bronnen.push({ src: poi.audioLokaal.url, soort: 'lokaal', naam: poi.audioLokaal.naam || '' })
+  }
+  if (isLink(poi.mp3)) {
+    const link = poi.mp3.trim()
+    if (poi.audioKopie && poi.audioKopie.url) {
+      bronnen.push({ src: poi.audioKopie.url, soort: 'kopie', naam: link })
+    }
     if (online) {
-      bronnen.push({ src: directeLink(poi.mp3), soort: 'link', naam: poi.mp3.trim() })
+      bronnen.push({ src: directeLink(link), soort: 'link', naam: link })
     } else {
       overgeslagen = 'link overgeslagen: geen internet'
     }
   }
-  if (poi && poi.audioLokaal && poi.audioLokaal.url) {
-    bronnen.push({ src: poi.audioLokaal.url, soort: 'lokaal', naam: poi.audioLokaal.naam || '' })
-  }
   return { bronnen, overgeslagen }
+}
+
+/**
+ * Bestandsnaam voor de gedownloade kopie van een link: een vaste hash van de
+ * link (FNV-1a, 32 bits, hex) plus de extensie uit de link (mp3, wav, m4a,
+ * ogg of aac; anders mp3). Dezelfde link geeft altijd dezelfde naam.
+ *
+ * @param {string} link
+ * @returns {string} bijv. "1a2b3c4d.mp3"
+ */
+export function kopieNaam(link) {
+  const tekst = String(link || '').trim()
+  let h = 0x811c9dc5
+  for (let i = 0; i < tekst.length; i += 1) {
+    h ^= tekst.charCodeAt(i)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  let ext = 'mp3'
+  try {
+    const m = /\.([a-z0-9]{2,4})$/i.exec(new URL(tekst).pathname)
+    if (m && ['mp3', 'wav', 'm4a', 'ogg', 'aac'].includes(m[1].toLowerCase())) ext = m[1].toLowerCase()
+  } catch {
+    // Geen geldige URL: standaard mp3.
+  }
+  return `${h.toString(16).padStart(8, '0')}.${ext}`
+}
+
+/**
+ * Lijkt een download op audio? Een webpagina (bijv. een Dropbox-
+ * voorbeeldpagina of een foutmelding) telt niet. Kijkt naar het
+ * content-type en naar de eerste bytes (base64): ID3-kop of mp3-frame,
+ * RIFF (wav), ftyp (m4a) of OggS.
+ *
+ * @param {string} contentType - Content-Type uit het antwoord (mag leeg zijn)
+ * @param {string} base64 - inhoud als base64
+ * @returns {boolean}
+ */
+export function lijktAudio(contentType, base64) {
+  const type = String(contentType || '').toLowerCase()
+  if (/text\/|html|json|xml/.test(type)) return false
+  const b = String(base64 || '')
+  if (b.length < 8) return false
+  let kop
+  try {
+    kop = atob(b.slice(0, 16))
+  } catch {
+    return false
+  }
+  const c = (i) => kop.charCodeAt(i)
+  if (kop.startsWith('ID3') || kop.startsWith('RIFF') || kop.startsWith('OggS')) return true
+  if (kop.slice(4, 8) === 'ftyp') return true
+  if (c(0) === 0xff && (c(1) & 0xe0) === 0xe0) return true // mp3/aac-frame
+  return type.startsWith('audio/')
+}
+
+/** Bytes als tekst voor de gebruiker: "850 kB" of "12,3 MB". */
+export function grootteTekst(bytes) {
+  const n = Number(bytes) || 0
+  if (n < 1000 * 1000) return `${Math.max(0, Math.round(n / 1000))} kB`
+  return `${(n / (1000 * 1000)).toFixed(1).replace('.', ',')} MB`
 }

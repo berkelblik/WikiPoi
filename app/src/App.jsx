@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import '../../src/europoi-csv.js'
 import '../../src/wikidata-search.js'
 import '../../src/route-buffer.js'
@@ -15,7 +15,15 @@ import Onderweg from './onderweg/Onderweg.jsx'
 import CategoryDot from './components/CategoryDot.jsx'
 import { telefoonTaal } from './taal.js'
 import { pluscode } from './onderweg/pluscode.js'
-import { isLink, isAudioBestand, koppelSleutels, normPluscode, zonderExtensie } from './onderweg/mp3bron.js'
+import {
+  isLink,
+  isAudioBestand,
+  koppelSleutels,
+  normPluscode,
+  zonderExtensie,
+  grootteTekst,
+} from './onderweg/mp3bron.js'
+import * as AudioOpslag from './onderweg/audioOpslag.js'
 import './App.css'
 import { version as APP_VERSION } from '../package.json'
 import { tekstMetNaam, toelichtingVan } from './onderweg/voorleestekst.js'
@@ -131,6 +139,16 @@ function categoryKeyForMatchedTypes(item, categories) {
   return match ? match.key : null
 }
 
+// Laatste deel van een link als korte naam ("…/B-8-Staringkoepel-DEF-NL.mp3").
+function linkNaam(link) {
+  try {
+    const delen = new URL(link).pathname.split('/').filter(Boolean)
+    return decodeURIComponent(delen[delen.length - 1] || link)
+  } catch {
+    return String(link)
+  }
+}
+
 function errorText(err) {
   return 'Fout: ' + (err && err.message ? err.message : String(err))
 }
@@ -190,8 +208,20 @@ function App() {
   const [eigenFout, setEigenFout] = useState('')
   // Lokale audiobestanden bij eigen POI's (0.11.0): bestandsnaam = pluscode,
   // zoals EuroPoi. { bestanden: [{ sleutel, url, naam }], geenAudio } of
-  // null. url is een blob-URL; alleen voor deze sessie.
+  // null. Op het toestel bewaard in de app (0.14.0, audioOpslag.js; url =
+  // afspeel-URL van het bewaarde bestand); in de browser een blob-URL,
+  // alleen voor deze sessie.
   const [eigenAudio, setEigenAudio] = useState(null)
+  const [audioOpslaan, setAudioOpslaan] = useState(false)
+  // Gedownloade kopieën van mp3-links (0.14.0, alleen op het toestel):
+  // perLink { <link>: { url, bytes } }; bezig { klaar, totaal } tijdens het
+  // downloaden; resultaat { gelukt, totaal, fouten, melding } daarna.
+  const [audioKopie, setAudioKopie] = useState({ perLink: {}, bezig: null, resultaat: null })
+  // Alle bewaarde audio: { aantal, bytes }.
+  const [audioTotaal, setAudioTotaal] = useState({ aantal: 0, bytes: 0 })
+  // Volgnummer van de downloadronde: een nieuwe import of "Verwijderen"
+  // breekt een lopende ronde af.
+  const downloadRonde = useRef(0)
   // POI's zonder tekst (alleen naam of korte Wikidata-omschrijving) toch
   // melden en exporteren (0.12.0)? Standaard niet.
   const [ookZonderTekst, setOokZonderTekst] = useState(false)
@@ -268,7 +298,11 @@ function App() {
     const gevonden = [...(wikidataResults || []), ...(osmResults || [])]
     const eigen =
       searchDone && eigenImport
-        ? eigenImport.pois.map((p) => ({ ...p, audioLokaal: audioKoppeling.perPoi[p.id] || null }))
+        ? eigenImport.pois.map((p) => ({
+            ...p,
+            audioLokaal: audioKoppeling.perPoi[p.id] || null,
+            audioKopie: isLink(p.mp3) ? audioKopie.perLink[p.mp3.trim()] || null : null,
+          }))
         : []
     const rb = window.WikiPoiRouteBuffer
     if (eigen.length === 0 || !rb || typeof rb.haversineDistance !== 'function') {
@@ -283,15 +317,46 @@ function App() {
         )
     )
     return { allPois: [...eigen, ...over], eigenVervangen: gevonden.length - over.length }
-  }, [wikidataResults, osmResults, eigenImport, searchDone, audioKoppeling])
+  }, [wikidataResults, osmResults, eigenImport, searchDone, audioKoppeling, audioKopie])
 
-  // Blob-URL's van audiobestanden vrijgeven bij vervangen of afsluiten.
+  // Blob-URL's van audiobestanden (browser) vrijgeven bij vervangen of afsluiten.
   useEffect(() => {
     if (!eigenAudio) return undefined
     return () => {
-      eigenAudio.bestanden.forEach((b) => URL.revokeObjectURL(b.url))
+      eigenAudio.bestanden.forEach((b) => {
+        if (b.url.startsWith('blob:')) URL.revokeObjectURL(b.url)
+      })
     }
   }, [eigenAudio])
+
+  // Offline audio (0.14.0): bij het starten op het toestel de bewaarde eigen
+  // POI's, gekoppelde bestanden en kopieën terugzetten, en links zonder
+  // kopie (bijv. een download die werd onderbroken) alsnog downloaden.
+  useEffect(() => {
+    if (!isNative) return undefined
+    let actief = true
+    ;(async () => {
+      try {
+        const eigen = await AudioOpslag.laadEigen()
+        if (!actief || !eigen) return
+        const index = await AudioOpslag.leesIndex()
+        const bestanden = await AudioOpslag.laadLokaal(index)
+        const perLink = await AudioOpslag.laadKopieen(index)
+        if (!actief) return
+        setEigenImport((huidig) => huidig || eigen)
+        if (bestanden.length > 0) setEigenAudio((huidig) => huidig || { bestanden, geenAudio: 0 })
+        setAudioKopie({ perLink, bezig: null, resultaat: null })
+        setAudioTotaal(AudioOpslag.totaal(index))
+        downloadLinks(eigen, { stil: true })
+      } catch (err) {
+        console.warn('Bewaarde eigen POI\'s laden mislukt:', err)
+      }
+    })()
+    return () => {
+      actief = false
+    }
+    // Alleen bij het starten (isNative verandert niet).
+  }, [isNative])
 
   // Per POI de afstand tot de route en het dichtstbijzijnde routepunt (= waar
   // EuroPoi straks aankondigt). Alleen herberekend bij een nieuwe route of
@@ -468,7 +533,7 @@ function App() {
         // geëxporteerd; lokale audio gaat via "Audiobestanden koppelen".
         const metLink = r.pois.filter((p) => isLink(p.mp3)).length
         const geenLink = r.pois.filter((p) => p.mp3 && !isLink(p.mp3)).length
-        setEigenImport({
+        const nieuw = {
           fileName: file.name,
           pois: r.pois.map((p) => ({
             id: `eigen-${p.line}`,
@@ -491,8 +556,14 @@ function App() {
                 " internetlink en wordt niet afgespeeld (lokale bestanden: via 'Audiobestanden koppelen')."
               : ''),
           overgeslagen: r.skipped,
-        })
+        }
+        setEigenImport(nieuw)
         setExportMessage('')
+        // Een nieuwe import vervangt alle bewaarde audio (keuze 4A, 0.14.0).
+        setEigenAudio(null)
+        if (isNative) {
+          vervangBewaard(nieuw)
+        }
       } catch (err) {
         setEigenFout(errorText(err))
       }
@@ -508,12 +579,99 @@ function App() {
     setEigenFout('')
     setEigenAudio(null)
     setExportMessage('')
+    downloadRonde.current += 1
+    setAudioKopie({ perLink: {}, bezig: null, resultaat: null })
+    if (isNative) {
+      AudioOpslag.wisAlles()
+        .then(verversTotaal)
+        .catch((err) => console.warn('Wissen bewaarde audio mislukt:', err))
+    }
+  }
+
+  // ---- Offline audio (0.14.0, alleen op het toestel) ----
+
+  async function verversTotaal() {
+    try {
+      setAudioTotaal(AudioOpslag.totaal(await AudioOpslag.leesIndex()))
+    } catch {
+      setAudioTotaal({ aantal: 0, bytes: 0 })
+    }
+  }
+
+  // Nieuwe import: oude eigen POI's en audio wissen, de nieuwe bewaren en
+  // de mp3-links downloaden.
+  async function vervangBewaard(nieuw) {
+    downloadRonde.current += 1
+    setAudioKopie({ perLink: {}, bezig: null, resultaat: null })
+    try {
+      await AudioOpslag.wisAlles()
+      await AudioOpslag.bewaarEigen(nieuw)
+    } catch (err) {
+      console.warn('Eigen POI\'s bewaren mislukt:', err)
+    }
+    await verversTotaal()
+    downloadLinks(nieuw)
+  }
+
+  // Alle mp3-links van de eigen POI's downloaden die nog geen kopie hebben.
+  // stil: geen melding als er niets te doen is of geen internet is (bij het
+  // starten van de app).
+  async function downloadLinks(eigen, { stil = false } = {}) {
+    const links = eigen.pois.filter((p) => isLink(p.mp3)).map((p) => p.mp3.trim())
+    if (links.length === 0) return
+    const ronde = downloadRonde.current + 1
+    downloadRonde.current = ronde
+    const afgebroken = () => downloadRonde.current !== ronde
+    const index = await AudioOpslag.leesIndex()
+    const totaalLinks = new Set(links).size
+    const ontbrekend = [...new Set(links)].filter((l) => !index.kopie[l])
+    if (ontbrekend.length === 0) {
+      if (!stil) {
+        setAudioKopie((k) => ({
+          ...k,
+          resultaat: { gelukt: totaalLinks, totaal: totaalLinks, fouten: [], melding: '' },
+        }))
+      }
+      return
+    }
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      if (!stil) {
+        setAudioKopie((k) => ({
+          ...k,
+          resultaat: {
+            gelukt: totaalLinks - ontbrekend.length,
+            totaal: totaalLinks,
+            fouten: [],
+            melding: 'Geen internet: de mp3-links worden gedownload zodra WikiPoi met internet opnieuw start.',
+          },
+        }))
+      }
+      return
+    }
+    setAudioKopie((k) => ({ ...k, bezig: { klaar: 0, totaal: ontbrekend.length }, resultaat: null }))
+    const { fouten } = await AudioOpslag.downloadKopieen(ontbrekend, {
+      afgebroken,
+      voortgang: (stand) => {
+        if (!afgebroken()) setAudioKopie((k) => ({ ...k, bezig: stand }))
+      },
+    })
+    if (afgebroken()) return
+    const nu = await AudioOpslag.leesIndex()
+    const perLink = await AudioOpslag.laadKopieen(nu)
+    if (afgebroken()) return
+    setAudioKopie({
+      perLink,
+      bezig: null,
+      resultaat: { gelukt: totaalLinks - fouten.length, totaal: totaalLinks, fouten, melding: '' },
+    })
+    setAudioTotaal(AudioOpslag.totaal(nu))
   }
 
   // Lokale audiobestanden (mp3/wav) bij de eigen POI's: bestandsnaam =
   // pluscode (zoals de bulk-import van EuroPoi). Een nieuwe keuze vervangt
-  // de vorige; alleen voor deze sessie.
-  function handleAudioChange(event) {
+  // de vorige. Op het toestel bewaard in de app (0.14.0); in de browser
+  // alleen voor deze sessie.
+  async function handleAudioChange(event) {
     const files = Array.from(event.target.files || [])
     event.target.value = ''
     if (files.length === 0) return
@@ -526,13 +684,34 @@ function App() {
       }
       const sleutel = normPluscode(zonderExtensie(f.name))
       if (!sleutel || bestanden.some((b) => b.sleutel === sleutel)) return
-      bestanden.push({ sleutel, url: URL.createObjectURL(f), naam: f.name })
+      bestanden.push({ sleutel, bestand: f, naam: f.name })
     })
-    setEigenAudio({ bestanden, geenAudio })
+    if (!isNative) {
+      setEigenAudio({
+        bestanden: bestanden.map((b) => ({ sleutel: b.sleutel, url: URL.createObjectURL(b.bestand), naam: b.naam })),
+        geenAudio,
+      })
+      return
+    }
+    setAudioOpslaan(true)
+    try {
+      const bewaard = await AudioOpslag.bewaarLokaal(bestanden)
+      setEigenAudio({ bestanden: bewaard, geenAudio, nietBewaard: bestanden.length - bewaard.length })
+    } catch (err) {
+      setEigenFout(`Audiobestanden bewaren mislukt: ${errorText(err)}`)
+    } finally {
+      setAudioOpslaan(false)
+      verversTotaal()
+    }
   }
 
   function verwijderAudio() {
     setEigenAudio(null)
+    if (isNative) {
+      AudioOpslag.wisLokaal()
+        .then(verversTotaal)
+        .catch((err) => console.warn('Ontkoppelen mislukt:', err))
+    }
   }
 
   async function runSearch() {
@@ -1032,19 +1211,28 @@ function App() {
             )}
             {eigenImport && (
               <div className="eigen-audio">
-                <label className={searchLoading ? 'btn btn-indigo btn-small is-disabled' : 'btn btn-indigo btn-small'}>
+                <label
+                  className={
+                    searchLoading || audioOpslaan ? 'btn btn-indigo btn-small is-disabled' : 'btn btn-indigo btn-small'
+                  }
+                >
                   <input
                     type="file"
                     multiple
                     accept=".mp3,.wav,audio/mpeg,audio/wav,audio/x-wav"
                     onChange={handleAudioChange}
-                    disabled={searchLoading}
+                    disabled={searchLoading || audioOpslaan}
                     hidden
                   />
                   {eigenAudio ? 'Andere audiobestanden' : 'Audiobestanden koppelen'}
                 </label>
                 {eigenAudio && (
-                  <button type="button" className="btn btn-indigo btn-small" onClick={verwijderAudio} disabled={searchLoading}>
+                  <button
+                    type="button"
+                    className="btn btn-indigo btn-small"
+                    onClick={verwijderAudio}
+                    disabled={searchLoading || audioOpslaan}
+                  >
                     Ontkoppelen
                   </button>
                 )}
@@ -1052,8 +1240,10 @@ function App() {
                   <p className="muted">
                     Optioneel: mp3- of wav-bestanden op de telefoon, met de pluscode als bestandsnaam (bijv.
                     9F37M7RQ+2X.mp3), zoals in EuroPoi. Meerdere tegelijk kiezen mag.
+                    {isNative ? ' Ze worden in WikiPoi bewaard, zodat ze ook zonder internet werken.' : ''}
                   </p>
                 )}
+                {audioOpslaan && <p className="muted">Audiobestanden bewaren…</p>}
                 {eigenAudio && (
                   <>
                     <p className={audioKoppeling.gekoppeld > 0 ? 'success' : 'error'}>
@@ -1083,7 +1273,53 @@ function App() {
                           : `${eigenAudio.geenAudio} bestanden zijn geen mp3 of wav en zijn overgeslagen.`}
                       </p>
                     )}
+                    {eigenAudio.nietBewaard > 0 && (
+                      <p className="error">
+                        {eigenAudio.nietBewaard === 1
+                          ? '1 audiobestand kon niet worden bewaard.'
+                          : `${eigenAudio.nietBewaard} audiobestanden konden niet worden bewaard.`}
+                      </p>
+                    )}
                   </>
+                )}
+                {audioKopie.bezig && (
+                  <p className="muted">
+                    Mp3-links offline opslaan: {audioKopie.bezig.klaar} van {audioKopie.bezig.totaal}…
+                  </p>
+                )}
+                {audioKopie.resultaat && (
+                  <>
+                    <p
+                      className={
+                        audioKopie.resultaat.gelukt === audioKopie.resultaat.totaal ? 'success' : 'error'
+                      }
+                    >
+                      Audio offline: {audioKopie.resultaat.gelukt} van {audioKopie.resultaat.totaal}{' '}
+                      {audioKopie.resultaat.totaal === 1 ? 'mp3-link' : 'mp3-links'} opgeslagen.
+                      {audioKopie.resultaat.melding ? ` ${audioKopie.resultaat.melding}` : ''}
+                    </p>
+                    {audioKopie.resultaat.fouten.length > 0 && (
+                      <div className="muted">
+                        Niet gelukt (wordt onderweg met internet nog via de link geprobeerd):
+                        <ul className="eigen-redenen">
+                          {audioKopie.resultaat.fouten.slice(0, AUDIO_MAX_NAMEN).map((f) => (
+                            <li key={f.link}>
+                              {linkNaam(f.link)}: {f.reden}
+                            </li>
+                          ))}
+                          {audioKopie.resultaat.fouten.length > AUDIO_MAX_NAMEN && (
+                            <li>en nog {audioKopie.resultaat.fouten.length - AUDIO_MAX_NAMEN} andere</li>
+                          )}
+                        </ul>
+                      </div>
+                    )}
+                  </>
+                )}
+                {isNative && audioTotaal.aantal > 0 && (
+                  <p className="muted">
+                    Opgeslagen audio: {audioTotaal.aantal} {audioTotaal.aantal === 1 ? 'bestand' : 'bestanden'},{' '}
+                    {grootteTekst(audioTotaal.bytes)}.
+                  </p>
                 )}
               </div>
             )}
