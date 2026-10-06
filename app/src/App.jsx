@@ -63,6 +63,21 @@ const EIGEN_MAX_REDENEN = 5
 // Zoveel niet-gekoppelde audiobestanden worden bij naam genoemd.
 const AUDIO_MAX_NAMEN = 5
 
+// Heeft deze POI een toelichting die het melden waard is (0.12.0)? Eigen
+// POI's altijd (bewust toegevoegd). Anders: een Wikipedia-samenvatting of
+// een zin uit Wikidata. Een korte Wikidata-omschrijving of alleen de naam
+// telt niet. Nog niet opgehaald: wel als er een artikel is (wordt bij stap
+// 5 of 6 opgehaald), niet zonder artikel. Ophalen mislukt terwijl er wel
+// een artikel is (bijv. geen verbinding): telt mee, om niet op een
+// tijdelijke fout af te vallen.
+function heeftTekst(p, summaries) {
+  if (p.eigen) return true
+  const entry = summaries[p.id]
+  if (!entry) return Boolean(p.wikipediaUrl)
+  if (entry.summary) return true
+  return Boolean(p.wikipediaUrl) && Boolean(entry.summaryError)
+}
+
 function vergelijkNaam(naam) {
   return String(naam || '').trim().toLowerCase().replace(/\s+/g, ' ')
 }
@@ -176,6 +191,9 @@ function App() {
   // zoals EuroPoi. { bestanden: [{ sleutel, url, naam }], geenAudio } of
   // null. url is een blob-URL; alleen voor deze sessie.
   const [eigenAudio, setEigenAudio] = useState(null)
+  // POI's zonder tekst (alleen naam of korte Wikidata-omschrijving) toch
+  // melden en exporteren (0.12.0)? Standaard niet.
+  const [ookZonderTekst, setOokZonderTekst] = useState(false)
 
   const isNative = Capacitor.isNativePlatform()
 
@@ -318,6 +336,19 @@ function App() {
     [mapPois]
   )
   const corridorPois = mapPoisSorted.filter((p) => p.inCorridor)
+  // POI's binnen de corridor die ook gemeld worden (Onderweg) en meegaan in
+  // de export: zonder tekst alleen als dat bij stap 5 is aangezet.
+  const meldtMee = (p) => ookZonderTekst || heeftTekst(p, summariesById)
+  const meldPois = corridorPois.filter(meldtMee)
+  const zonderTekstCount = corridorPois.length - meldPois.length
+  // Kaart: POI's zonder tekst vervaagd, net als buiten de corridor.
+  const kaartPois = useMemo(
+    () =>
+      mapPois.map((p) =>
+        p.inCorridor && !(ookZonderTekst || heeftTekst(p, summariesById)) ? { ...p, inCorridor: false } : p
+      ),
+    [mapPois, ookZonderTekst, summariesById]
+  )
   // Eigen POI's hebben hun eigen beschrijving en gaan niet naar Wikipedia.
   const summaryMissingPois = corridorPois.filter((p) => !p.eigen && !(p.id in summariesById))
   const eigenInCorridorCount = corridorPois.filter((p) => p.eigen).length
@@ -786,10 +817,18 @@ function App() {
           setSummaryLoading(false)
         }
       }
+      // Zonder tekst alleen als dat bij stap 5 is aangezet (0.12.0).
+      const exportPois = corridorPois.filter((p) => ookZonderTekst || heeftTekst(p, summaries))
+      if (exportPois.length === 0) {
+        setExportError(
+          "Geen van de POI's binnen de corridor heeft een tekst. Zet bij stap 5 'Ook POI's zonder tekst melden' aan, of verbreed de corridor."
+        )
+        return
+      }
       // Tekst: alleen de Wikipedia-samenvatting (of de zin uit Wikidata),
       // zonder bronvermelding (die zou in EuroPoi worden voorgelezen; WikiPoi
       // toont hem bij stap 5). Zonder beide de Wikidata-omschrijving.
-      const rows = corridorPois.map((p) => {
+      const rows = exportPois.map((p) => {
         const entry = summaries[p.id]
         const summary = entry && entry.summary
         // Eigen POI's: altijd de eigen beschrijving (leeg → EuroPoi leest de naam).
@@ -1095,7 +1134,7 @@ function App() {
           <div className="map-frame" style={{ height: showMap ? MAP_HEIGHT : '0px' }}>
             <RouteMap
               routePoints={routeInfo ? routeInfo.points : null}
-              pois={mapPois}
+              pois={kaartPois}
               corridorMeters={corridorMeters}
             />
           </div>
@@ -1119,31 +1158,39 @@ function App() {
           {searchDone && mapPois.length > 0 && (
             <>
               <p>
-                <strong>{corridorPois.length}</strong> van {mapPois.length} POI's binnen de corridor.
+                <strong>{corridorPois.length}</strong> van {mapPois.length} POI's binnen de corridor
+                {zonderTekstCount > 0
+                  ? `, waarvan ${zonderTekstCount} zonder tekst (${zonderTekstCount === 1 ? 'doet' : 'doen'} niet mee, zie stap 5).`
+                  : '.'}
               </p>
               <ul className="poi-list">
-                {mapPoisSorted.map((poi) => (
-                  <li key={poi.id} className={poi.inCorridor ? '' : 'is-out'}>
-                    <CategoryDot categoryKey={poi.categoryKey} faded={!poi.inCorridor} />
-                    <span>
-                      {poi.label}{' '}
-                      <span className="muted">
-                        ({poi.categoryLabel},{' '}
-                        {Number.isFinite(poi.distanceToRoute)
-                          ? `${Math.round(poi.distanceToRoute)} m`
-                          : 'afstand onbekend'}
-                        {poi.eigen
-                          ? !poi.inCorridor
-                            ? `, verder dan ${EIGEN_MAX_METERS / 1000} km: doet niet mee`
-                            : Number.isFinite(poi.distanceToRoute) && poi.distanceToRoute > corridorMeters
-                              ? ', buiten de corridor maar telt mee'
-                              : ''
-                          : !poi.wikipediaUrl && ', geen artikel'}
-                        )
+                {mapPoisSorted.map((poi) => {
+                  const geenTekst = poi.inCorridor && !meldtMee(poi)
+                  return (
+                    <li key={poi.id} className={poi.inCorridor && !geenTekst ? '' : 'is-out'}>
+                      <CategoryDot categoryKey={poi.categoryKey} faded={!poi.inCorridor || geenTekst} />
+                      <span>
+                        {poi.label}{' '}
+                        <span className="muted">
+                          ({poi.categoryLabel},{' '}
+                          {Number.isFinite(poi.distanceToRoute)
+                            ? `${Math.round(poi.distanceToRoute)} m`
+                            : 'afstand onbekend'}
+                          {poi.eigen
+                            ? !poi.inCorridor
+                              ? `, verder dan ${EIGEN_MAX_METERS / 1000} km: doet niet mee`
+                              : Number.isFinite(poi.distanceToRoute) && poi.distanceToRoute > corridorMeters
+                                ? ', buiten de corridor maar telt mee'
+                                : ''
+                            : geenTekst
+                              ? ', geen tekst: doet niet mee'
+                              : !poi.wikipediaUrl && ', geen artikel'}
+                          )
+                        </span>
                       </span>
-                    </span>
-                  </li>
-                ))}
+                    </li>
+                  )
+                })}
               </ul>
             </>
           )}
@@ -1164,6 +1211,24 @@ function App() {
           <p className="muted">
             Optioneel: bij opslaan (stap 6) worden ontbrekende samenvattingen automatisch opgehaald.
           </p>
+          <label className="toggle-row">
+            <input type="checkbox" checked={ookZonderTekst} onChange={() => setOokZonderTekst((v) => !v)} />
+            <span>
+              Ook POI's zonder tekst melden
+              <br />
+              <span className="muted">
+                Zonder Wikipedia-samenvatting of zin uit Wikidata wordt alleen de naam (of een korte omschrijving)
+                voorgelezen.
+              </span>
+            </span>
+          </label>
+          {zonderTekstCount > 0 && !ookZonderTekst && (
+            <p className="muted">
+              {zonderTekstCount === 1 ? "1 POI zonder tekst doet" : `${zonderTekstCount} POI's zonder tekst doen`} niet
+              mee in Onderweg en de export
+              {summaryMissingPois.length > 0 ? '; na het ophalen kan dat nog veranderen.' : '.'}
+            </p>
+          )}
           <button
             type="button"
             className="btn btn-green btn-wide"
@@ -1209,14 +1274,16 @@ function App() {
                       ) : !poi.wikipediaUrl ? (
                         <p className="summary-text muted">
                           Geen Wikipedia-artikel.{' '}
-                          {poi.description
+                          {!meldtMee(poi)
+                            ? 'Geen tekst: doet niet mee.'
+                            : poi.description
                             ? `De CSV gebruikt de omschrijving: „${poi.description}”.`
                             : 'Er is ook geen omschrijving; alleen de naam gaat mee.'}
                         </p>
                       ) : (
                         <p className="summary-text muted">
-                          Geen samenvatting ({entry.summaryError || 'onbekende reden'}); de CSV
-                          gebruikt de Wikidata-omschrijving.
+                          Geen samenvatting ({entry.summaryError || 'onbekende reden'})
+                          {meldtMee(poi) ? '; de CSV gebruikt de Wikidata-omschrijving.' : '; geen tekst: doet niet mee.'}
                         </p>
                       )}
                       {fotoUrl && fotoBron && <p className="summary-text muted foto-bron">{fotoBron}</p>}
@@ -1282,7 +1349,7 @@ function App() {
           disabled={corridorPois.length === 0}
           hint="Zoek eerst POI's bij stap 3; er moet minstens één POI binnen de corridor liggen."
         >
-          <Onderweg pois={corridorPois} summariesById={summariesById} routePunten={routeInfo ? routeInfo.points : null} />
+          <Onderweg pois={meldPois} summariesById={summariesById} routePunten={routeInfo ? routeInfo.points : null} />
         </Step>
       </main>
     </>
