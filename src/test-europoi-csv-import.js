@@ -4,9 +4,8 @@
  * Geïsoleerde, netwerkloze test voor europoi-csv.js#fromEuroPoiCsv()
  * (0.10.0, "Eigen POI's"): BOM, CRLF/LF, aanhalingstekens, kopregel in
  * andere volgorde, bestand zonder kopregel, ongeldige regels (decimale
- * komma, ontbrekende naam, buiten bereik), mp3 (link of lokaal bestand) en
- * een rondgang
- * export → import.
+ * komma, ontbrekende naam, buiten bereik), mp3, pluscode (0.11.0) en een
+ * rondgang export → import.
  *
  * Uitvoeren vanuit de map `src/` met:
  *   node test-europoi-csv-import.js
@@ -109,6 +108,19 @@ const MP3 = 'https://www.spannendegeschiedenis.nl/wp-content/uploads/2021/05/B-8
   check('7c desc', r.pois[0] && r.pois[0].desc === 'Regel één; regel twee');
   check('7d mp3', r.pois[0] && r.pois[0].mp3 === MP3);
   check('7e negatieve coördinaat', r.pois[1] && r.pois[1].lat === -33.9);
+}
+
+// 8. Pluscode wordt doorgegeven (0.11.0: koppelen lokale audio).
+{
+  const r = fromEuroPoiCsv(
+    HEADER + '\n' + '52.15;6.29;" 9F37M7RQ+2X ";Kerk;;r;0;\n' + '52.16;6.30;;Molen;;r;0;\n'
+  );
+  check('8a pluscode met kopregel', r.pois[0] && r.pois[0].pluscode === '9F37M7RQ+2X', JSON.stringify(r.pois[0]));
+  check('8b lege pluscode', r.pois[1] && r.pois[1].pluscode === '');
+  const z = fromEuroPoiCsv('52.15;6.29;9F37M7RQ+2X;Kerk;;r;0;\n');
+  check('8c pluscode zonder kopregel', z.pois[0] && z.pois[0].pluscode === '9F37M7RQ+2X', JSON.stringify(z));
+  const o = fromEuroPoiCsv('name;lng;lat\nKerk;6.29;52.15\n');
+  check('8d geen pluscodekolom', o.pois[0] && o.pois[0].pluscode === '', JSON.stringify(o));
 }
 
 if (failures > 0) {

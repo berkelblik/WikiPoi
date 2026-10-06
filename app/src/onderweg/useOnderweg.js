@@ -41,11 +41,17 @@
  * bel en voorlezen, voor de proef achtergrond-GPS. Bron 'simulatie' bij
  * een gesimuleerde rit.
  *
+ * Eigen POI's met audio (0.11.0, mp3bron.js): na bel (en klokzin) klinkt
+ * de mp3 — internetlink (online) of gekoppeld lokaal bestand — in plaats
+ * van de voorgelezen toelichting. Lukt geen enkele bron, dan wordt de
+ * toelichting alsnog voorgelezen (zonder klokzin, die klonk al).
+ *
  * Bouwstap 4 van "Onderweg": eco-scherm. Nog geen track.
  */
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { afstand, peiling, klokRichting } from './geo.js'
-import { spreek, bel, dubbeleBel, stopSpreken, zetDiagnose } from './spreek.js'
+import { spreek, bel, dubbeleBel, speelAudio, stopSpreken, zetDiagnose } from './spreek.js'
+import { audioBronnen } from './mp3bron.js'
 import { startPositieBron } from './positieBron.js'
 import { logboek, koppelBrowser } from './logboek.js'
 import { basisTaal, klokZin, labelTaal, toelichtingTaal } from '../taal.js'
@@ -114,7 +120,15 @@ export function voorleesDelen(poi, samenvattingen, klok) {
 // - 'handmatig': zonder bel (de gebruiker begint zelf);
 // - 'lijst': één bel, dan klokzin en toelichting;
 // - 'eco': dubbele bel, dan de toelichting zonder klokzin.
+// Heeft de POI audio (eigen POI met mp3-link of gekoppeld bestand), dan
+// klinkt die in plaats van de toelichting, met de toelichting als terugval.
 function spreekPoi(poi, samenvattingen, klok, { soort = 'handmatig', onStart, onEinde } = {}) {
+  const online = typeof navigator === 'undefined' || navigator.onLine !== false
+  const audio = audioBronnen(poi, online)
+  if (audio.bronnen.length > 0) {
+    speelPoiAudio(poi, samenvattingen, klok, audio, { soort, onStart, onEinde })
+    return
+  }
   const delen = voorleesDelen(poi, samenvattingen, soort === 'eco' ? null : klok)
   if (delen.length === 0) return
   let startGebruikt = false
@@ -131,6 +145,31 @@ function spreekPoi(poi, samenvattingen, klok, { soort = 'handmatig', onStart, on
       onStart: i === 0 && !startGebruikt ? onStart : undefined,
       onEinde: i === delen.length - 1 ? onEinde : undefined,
     })
+  })
+}
+
+// Variant van spreekPoi voor een POI met audio: bel (lijst/eco), klokzin
+// (niet bij eco), dan de audio met de toelichting zonder klokzin als terugval.
+function speelPoiAudio(poi, samenvattingen, klok, audio, { soort, onStart, onEinde }) {
+  let startGebruikt = false
+  if (soort === 'lijst') {
+    bel({ onStart })
+    startGebruikt = true
+  } else if (soort === 'eco') {
+    dubbeleBel({ onStart })
+    startGebruikt = true
+  }
+  const richting = soort === 'eco' ? null : klokZin(klok)
+  if (richting) {
+    spreek(richting.tekst, { lang: richting.lang, onStart: startGebruikt ? undefined : onStart })
+    startGebruikt = true
+  }
+  speelAudio({
+    bronnen: audio.bronnen,
+    overgeslagen: audio.overgeslagen,
+    terugval: voorleesDelen(poi, samenvattingen, null),
+    onStart: startGebruikt ? undefined : onStart,
+    onEinde,
   })
 }
 

@@ -421,6 +421,10 @@ body::before {
   margin-left: 10px;
 }
 
+.eigen-audio {
+  margin-top: 10px;
+}
+
 .eigen-pois .category-dot {
   vertical-align: middle;
 }

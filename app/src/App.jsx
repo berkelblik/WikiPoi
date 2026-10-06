@@ -14,6 +14,8 @@ import RouteMap from './components/RouteMap.jsx'
 import Onderweg from './onderweg/Onderweg.jsx'
 import CategoryDot from './components/CategoryDot.jsx'
 import { telefoonTaal } from './taal.js'
+import { pluscode } from './onderweg/pluscode.js'
+import { isLink, isAudioBestand, koppelSleutels, normPluscode, zonderExtensie } from './onderweg/mp3bron.js'
 import './App.css'
 import { version as APP_VERSION } from '../package.json'
 
@@ -58,6 +60,8 @@ const EIGEN_DUBBEL_METERS = 100
 const EIGEN_MAX_METERS = 2000
 // Zoveel overgeslagen regels worden met regelnummer en reden getoond.
 const EIGEN_MAX_REDENEN = 5
+// Zoveel niet-gekoppelde audiobestanden worden bij naam genoemd.
+const AUDIO_MAX_NAMEN = 5
 
 function vergelijkNaam(naam) {
   return String(naam || '').trim().toLowerCase().replace(/\s+/g, ' ')
@@ -168,6 +172,10 @@ function App() {
   // Eigen POI's: { fileName, pois, melding, overgeslagen } of null.
   const [eigenImport, setEigenImport] = useState(null)
   const [eigenFout, setEigenFout] = useState('')
+  // Lokale audiobestanden bij eigen POI's (0.11.0): bestandsnaam = pluscode,
+  // zoals EuroPoi. { bestanden: [{ sleutel, url, naam }], geenAudio } of
+  // null. url is een blob-URL; alleen voor deze sessie.
+  const [eigenAudio, setEigenAudio] = useState(null)
 
   const isNative = Capacitor.isNativePlatform()
 
@@ -220,9 +228,29 @@ function App() {
   // Alle POI's: na het zoeken de eigen POI's (CSV) plus de gevonden POI's
   // (Wikidata + eventueel OSM, al gefilterd bij het zoeken). Een gevonden POI
   // met dezelfde naam binnen EIGEN_DUBBEL_METERS van een eigen POI vervalt.
+  // Koppeling lokale audiobestanden → eigen POI's (op pluscode).
+  const audioKoppeling = useMemo(() => {
+    const perPoi = {}
+    if (!eigenAudio) return { perPoi, gekoppeld: 0, nietGekoppeld: [] }
+    const pois = eigenImport ? eigenImport.pois : []
+    const gebruikt = new Set()
+    pois.forEach((p) => {
+      const bestand = eigenAudio.bestanden.find((b) => p.koppelSleutels.includes(b.sleutel))
+      if (bestand) {
+        perPoi[p.id] = { url: bestand.url, naam: bestand.naam }
+        gebruikt.add(bestand.sleutel)
+      }
+    })
+    const nietGekoppeld = eigenAudio.bestanden.filter((b) => !gebruikt.has(b.sleutel)).map((b) => b.naam)
+    return { perPoi, gekoppeld: Object.keys(perPoi).length, nietGekoppeld }
+  }, [eigenAudio, eigenImport])
+
   const { allPois, eigenVervangen } = useMemo(() => {
     const gevonden = [...(wikidataResults || []), ...(osmResults || [])]
-    const eigen = searchDone && eigenImport ? eigenImport.pois : []
+    const eigen =
+      searchDone && eigenImport
+        ? eigenImport.pois.map((p) => ({ ...p, audioLokaal: audioKoppeling.perPoi[p.id] || null }))
+        : []
     const rb = window.WikiPoiRouteBuffer
     if (eigen.length === 0 || !rb || typeof rb.haversineDistance !== 'function') {
       return { allPois: [...eigen, ...gevonden], eigenVervangen: 0 }
@@ -236,7 +264,15 @@ function App() {
         )
     )
     return { allPois: [...eigen, ...over], eigenVervangen: gevonden.length - over.length }
-  }, [wikidataResults, osmResults, eigenImport, searchDone])
+  }, [wikidataResults, osmResults, eigenImport, searchDone, audioKoppeling])
+
+  // Blob-URL's van audiobestanden vrijgeven bij vervangen of afsluiten.
+  useEffect(() => {
+    if (!eigenAudio) return undefined
+    return () => {
+      eigenAudio.bestanden.forEach((b) => URL.revokeObjectURL(b.url))
+    }
+  }, [eigenAudio])
 
   // Per POI de afstand tot de route en het dichtstbijzijnde routepunt (= waar
   // EuroPoi straks aankondigt). Alleen herberekend bij een nieuwe route of
@@ -395,9 +431,11 @@ function App() {
           setEigenFout(`${file.name}: geen bruikbare POI's gevonden${reden}.`)
           return
         }
-        // mp3: internetlink (http/https) of een audiobestand op de telefoon.
-        const metMp3 = r.pois.filter((p) => p.mp3).length
-        const lokaalMp3 = r.pois.filter((p) => p.mp3 && !/^https?:\/\//i.test(p.mp3)).length
+        // mp3-kolom: internetlink, zoals in EuroPoi. Iets anders (bijv. een
+        // bestandsnaam) wordt niet afgespeeld, maar wel ongewijzigd
+        // geëxporteerd; lokale audio gaat via "Audiobestanden koppelen".
+        const metLink = r.pois.filter((p) => isLink(p.mp3)).length
+        const geenLink = r.pois.filter((p) => p.mp3 && !isLink(p.mp3)).length
         setEigenImport({
           fileName: file.name,
           pois: r.pois.map((p) => ({
@@ -407,14 +445,19 @@ function App() {
             lng: p.lng,
             description: p.desc,
             mp3: p.mp3,
+            // Lokale audio: bestandsnaam = pluscode uit de CSV of berekend.
+            koppelSleutels: koppelSleutels(p.pluscode, pluscode(p.lat, p.lng)),
             categoryKey: EIGEN_CATEGORY_KEY,
             eigen: true,
           })),
           melding:
             `${file.name}: ${r.pois.length} POI's ingelezen` +
-            (metMp3 > 0 ? `, waarvan ${metMp3} met mp3` : '') +
-            (lokaalMp3 > 0 ? ` (${lokaalMp3} als bestand op de telefoon)` : '') +
-            '.',
+            (metLink > 0 ? `, waarvan ${metLink} met mp3-link` : '') +
+            '.' +
+            (geenLink > 0
+              ? ` ${geenLink === 1 ? '1 mp3-verwijzing is' : `${geenLink} mp3-verwijzingen zijn`} geen` +
+                " internetlink en wordt niet afgespeeld (lokale bestanden: via 'Audiobestanden koppelen')."
+              : ''),
           overgeslagen: r.skipped,
         })
         setExportMessage('')
@@ -431,7 +474,33 @@ function App() {
   function verwijderEigenPois() {
     setEigenImport(null)
     setEigenFout('')
+    setEigenAudio(null)
     setExportMessage('')
+  }
+
+  // Lokale audiobestanden (mp3/wav) bij de eigen POI's: bestandsnaam =
+  // pluscode (zoals de bulk-import van EuroPoi). Een nieuwe keuze vervangt
+  // de vorige; alleen voor deze sessie.
+  function handleAudioChange(event) {
+    const files = Array.from(event.target.files || [])
+    event.target.value = ''
+    if (files.length === 0) return
+    const bestanden = []
+    let geenAudio = 0
+    files.forEach((f) => {
+      if (!isAudioBestand(f.name)) {
+        geenAudio += 1
+        return
+      }
+      const sleutel = normPluscode(zonderExtensie(f.name))
+      if (!sleutel || bestanden.some((b) => b.sleutel === sleutel)) return
+      bestanden.push({ sleutel, url: URL.createObjectURL(f), naam: f.name })
+    })
+    setEigenAudio({ bestanden, geenAudio })
+  }
+
+  function verwijderAudio() {
+    setEigenAudio(null)
   }
 
   async function runSearch() {
@@ -894,7 +963,7 @@ function App() {
             {!eigenImport && !eigenFout && (
               <p className="muted">
                 Optioneel: een CSV in EuroPoi-formaat (lat;lng;pluscode;name;desc;category;radius;mp3). Eigen
-                POI's verschijnen na het zoeken en doen altijd mee.
+                POI's verschijnen na het zoeken en doen mee tot {EIGEN_MAX_METERS / 1000} km van de route.
               </p>
             )}
             {eigenImport && (
@@ -920,6 +989,63 @@ function App() {
                   </div>
                 )}
               </>
+            )}
+            {eigenImport && (
+              <div className="eigen-audio">
+                <label className={searchLoading ? 'btn btn-indigo btn-small is-disabled' : 'btn btn-indigo btn-small'}>
+                  <input
+                    type="file"
+                    multiple
+                    accept=".mp3,.wav,audio/mpeg,audio/wav,audio/x-wav"
+                    onChange={handleAudioChange}
+                    disabled={searchLoading}
+                    hidden
+                  />
+                  {eigenAudio ? 'Andere audiobestanden' : 'Audiobestanden koppelen'}
+                </label>
+                {eigenAudio && (
+                  <button type="button" className="btn btn-indigo btn-small" onClick={verwijderAudio} disabled={searchLoading}>
+                    Ontkoppelen
+                  </button>
+                )}
+                {!eigenAudio && (
+                  <p className="muted">
+                    Optioneel: mp3- of wav-bestanden op de telefoon, met de pluscode als bestandsnaam (bijv.
+                    9F37M7RQ+2X.mp3), zoals in EuroPoi. Meerdere tegelijk kiezen mag.
+                  </p>
+                )}
+                {eigenAudio && (
+                  <>
+                    <p className={audioKoppeling.gekoppeld > 0 ? 'success' : 'error'}>
+                      {audioKoppeling.gekoppeld === 1
+                        ? '1 audiobestand gekoppeld aan een eigen POI.'
+                        : `${audioKoppeling.gekoppeld} audiobestanden gekoppeld aan eigen POI's.`}
+                    </p>
+                    {audioKoppeling.nietGekoppeld.length > 0 && (
+                      <div className="muted">
+                        {audioKoppeling.nietGekoppeld.length === 1
+                          ? '1 bestand past bij geen enkele eigen POI:'
+                          : `${audioKoppeling.nietGekoppeld.length} bestanden passen bij geen enkele eigen POI:`}
+                        <ul className="eigen-redenen">
+                          {audioKoppeling.nietGekoppeld.slice(0, AUDIO_MAX_NAMEN).map((naam) => (
+                            <li key={naam}>{naam}</li>
+                          ))}
+                          {audioKoppeling.nietGekoppeld.length > AUDIO_MAX_NAMEN && (
+                            <li>en nog {audioKoppeling.nietGekoppeld.length - AUDIO_MAX_NAMEN} andere</li>
+                          )}
+                        </ul>
+                      </div>
+                    )}
+                    {eigenAudio.geenAudio > 0 && (
+                      <p className="muted">
+                        {eigenAudio.geenAudio === 1
+                          ? '1 bestand is geen mp3 of wav en is overgeslagen.'
+                          : `${eigenAudio.geenAudio} bestanden zijn geen mp3 of wav en zijn overgeslagen.`}
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
             )}
             {eigenFout && <p className="error">{eigenFout}</p>}
           </div>
