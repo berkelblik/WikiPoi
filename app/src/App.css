@@ -47,7 +47,11 @@ body::before {
   pointer-events: none;
 }
 
+/* display: block overschrijft het flex-kolomrooster uit index.css
+ * (Vite-sjabloon). Met flex nam de hoofdkolom de breedte van zijn breedste
+ * inhoud aan in plaats van de schermbreedte (0.12.1). */
 #root {
+  display: block;
   width: auto;
   margin: 0;
   padding: 0;
@@ -105,7 +109,12 @@ body::before {
   gap: 16px;
 }
 
+/* min-width 0 en overflow-wrap: lange reeksen zonder afbreekpunt
+ * (kolomnamen, bestandsnamen, links, artikeltitels) breken binnen de kaart
+ * af in plaats van de kaart breder dan het scherm te duwen (0.12.1). */
 .step {
+  min-width: 0;
+  overflow-wrap: anywhere;
   background: var(--wp-navy);
   border-radius: 24px;
   padding: 18px 18px 20px;
@@ -172,6 +181,8 @@ body::before {
   align-items: center;
   justify-content: center;
   box-sizing: border-box;
+  max-width: 100%;
+  text-align: center;
   min-height: 54px;
   padding: 0 22px;
   border: none;
