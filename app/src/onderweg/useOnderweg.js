@@ -14,10 +14,10 @@
  * MIN_VERPLAATSING_VOOR_RICHTING_M uit elkaar liggen. Bij stilstand blijft de
  * laatst bekende richting staan (zelfde gedrag als EuroPoi).
  *
- * Aankondiging: geen gesproken naam (een buitenlandse plaatsnaam klinkt in
- * de stem van een andere taal vaak onherkenbaar), maar een fietsbel en
- * daarna de klokrichting in de taal van het toestel ("Auf 3 Uhr."). De
- * naam staat op het scherm en meestal ook in de toelichting.
+ * Aankondiging: een fietsbel en daarna de klokrichting in de taal van het
+ * toestel ("Auf 3 Uhr."). De naam wordt uitgesproken (in de taal van het
+ * label) als die niet al in de toelichting staat (0.13.0,
+ * voorleestekst.js): "Op 3 uur. Neergestorte vlieger. Oorlogsmonument, …".
  *
  * Met het eco-scherm open (optie eco) is het verloop anders: bel 1 op het
  * moment dat je de straal binnenkomt (het eco-scherm toont dan de POI), na
@@ -54,7 +54,8 @@ import { spreek, bel, dubbeleBel, speelAudio, stopSpreken, zetDiagnose } from '.
 import { audioBronnen } from './mp3bron.js'
 import { startPositieBron } from './positieBron.js'
 import { logboek, koppelBrowser } from './logboek.js'
-import { basisTaal, klokZin, labelTaal, toelichtingTaal } from '../taal.js'
+import { klokZin } from '../taal.js'
+import { voorleesDelen } from './voorleestekst.js'
 import { maakSimulatie, volgendeDoel, SIM_SNELHEID_KMU, SIM_VOORLOOP_M } from './simulatie.js'
 
 // Minimale verplaatsing voordat de rijrichting wordt (bij)gewerkt. Kleiner
@@ -81,45 +82,14 @@ export function triggerStraal(poi, vervoer) {
   return Math.max(basis, totRoute + ROUTE_MARGE_M)
 }
 
-// Voorleestekst in delen, elk met een eigen taal:
-// - klokrichting ("Auf 3 Uhr.") in de taal van het toestel, als die richting
-//   bekend is en er een vertaling voor die taal is (taal.js, klokZin);
-// - toelichting: de samenvatting (stap 5) of anders de Wikidata-omschrijving
-//   (dezelfde keuze als de CSV-export), in de taal van die tekst.
-// Is de basistaal van beide gelijk, dan wordt het één deel.
-// Zonder toelichting wordt de naam wél uitgesproken, anders zegt de bel
-// niets: in de taal van het label (labelLanguage uit Wikidata; 'mul' of
-// onbekend: de taal van het toestel), de klokzin in de taal van het toestel.
-// Ook hier één deel als de basistaal gelijk is.
-export function voorleesDelen(poi, samenvattingen, klok) {
-  const entry = samenvattingen ? samenvattingen[poi.id] || null : null
-  const beschrijving = (
-    entry && entry.summary ? entry.summary.extractShort || '' : poi.description || ''
-  ).trim()
-  const richting = klokZin(klok)
-  if (!beschrijving) {
-    const naam = `${poi.label || ''}`.trim()
-    if (!naam) return richting ? [richting] : []
-    const naamDeel = { tekst: `${naam}.`, lang: labelTaal(poi) }
-    if (!richting) return [naamDeel]
-    if (basisTaal(naamDeel.lang) === basisTaal(richting.lang)) {
-      return [{ tekst: `${naamDeel.tekst} ${richting.tekst}`, lang: richting.lang }]
-    }
-    return [naamDeel, richting]
-  }
-  const taal = toelichtingTaal(poi, entry)
-  if (!richting) return [{ tekst: beschrijving, lang: taal }]
-  if (basisTaal(taal) === basisTaal(richting.lang)) {
-    return [{ tekst: `${richting.tekst} ${beschrijving}`, lang: taal }]
-  }
-  return [richting, { tekst: beschrijving, lang: taal }]
-}
+// voorleesDelen (klokzin → naam → toelichting) staat in voorleestekst.js
+// (0.13.0), samen met de regel voor de CSV-export.
 
 // Alle delen van een POI in de wachtrij: onStart bij het eerste deel (of de
 // bel), onEinde na het laatste. Soort:
 // - 'handmatig': zonder bel (de gebruiker begint zelf);
-// - 'lijst': één bel, dan klokzin en toelichting;
-// - 'eco': dubbele bel, dan de toelichting zonder klokzin.
+// - 'lijst': één bel, dan klokzin, naam (indien nodig) en toelichting;
+// - 'eco': dubbele bel, dan naam (indien nodig) en toelichting, zonder klokzin.
 // Heeft de POI audio (eigen POI met mp3-link of gekoppeld bestand), dan
 // klinkt die in plaats van de toelichting, met de toelichting als terugval.
 function spreekPoi(poi, samenvattingen, klok, { soort = 'handmatig', onStart, onEinde } = {}) {

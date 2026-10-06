@@ -18,6 +18,7 @@ import { pluscode } from './onderweg/pluscode.js'
 import { isLink, isAudioBestand, koppelSleutels, normPluscode, zonderExtensie } from './onderweg/mp3bron.js'
 import './App.css'
 import { version as APP_VERSION } from '../package.json'
+import { tekstMetNaam, toelichtingVan } from './onderweg/voorleestekst.js'
 
 // WikiPoi — één doorlopende flow in zeven stappen:
 //   1. Route (GPX)  2. Categorieën (+ optioneel OSM)  3. Zoeken
@@ -827,12 +828,12 @@ function App() {
       }
       // Tekst: alleen de Wikipedia-samenvatting (of de zin uit Wikidata),
       // zonder bronvermelding (die zou in EuroPoi worden voorgelezen; WikiPoi
-      // toont hem bij stap 5). Zonder beide de Wikidata-omschrijving.
+      // toont hem bij stap 5). Zonder beide de Wikidata-omschrijving; eigen
+      // POI's hun eigen beschrijving. Staat de naam er niet in, dan komt hij
+      // ervóór ("Naam. Toelichting", 0.13.0), zodat ook EuroPoi hem noemt.
+      // Leeg blijft leeg: EuroPoi leest dan zelf de naam.
       const rows = exportPois.map((p) => {
-        const entry = summaries[p.id]
-        const summary = entry && entry.summary
-        // Eigen POI's: altijd de eigen beschrijving (leeg → EuroPoi leest de naam).
-        const desc = p.eigen ? p.description || '' : summary ? summary.extractShort || '' : p.description || ''
+        const desc = tekstMetNaam(p.label, toelichtingVan(p, summaries))
         return {
           lat: p.lat,
           lng: p.lng,
