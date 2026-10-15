@@ -5,13 +5,13 @@
  * zodat ze zonder React en zonder netwerk te testen zijn
  * (test-zoekbron.js).
  *
- * - Zoekbron (stap 3): waar WikiPoi zoekt.
+ * - Zoekbron (stap 2, bovenaan): waar WikiPoi zoekt.
  *     'wiki'  — Wikidata/Wikipedia (+ eventueel OpenStreetMap)
  *     'eigen' — alleen de eigen POI's uit de CSV (geen internet nodig)
  *     'beide' — allebei (standaard; zo werkte WikiPoi tot 0.14.0)
  *   Zonder ingelezen CSV is de bron altijd 'wiki'.
  *
- * - Eigen POI's melden (stap 2): wanneer een eigen POI meedoet.
+ * - Eigen POI's melden (stap 2, bij de CSV): wanneer een eigen POI meedoet.
  *     'altijd'   — tot EIGEN_MAX_METERS van de route, ook buiten de corridor;
  *                  gemeld op het dichtstbijzijnde punt van de route
  *                  (standaard; zo werkte WikiPoi tot 0.14.0)
@@ -56,7 +56,7 @@ export function gebruiktEigen(bron) {
  * Tot welke afstand van de route een POI meedoet.
  * @param {boolean} eigen - eigen POI?
  * @param {string} eigenMelden - 'altijd' of 'corridor'
- * @param {number} corridorMeters - breedte corridor (slider stap 4)
+ * @param {number} corridorMeters - breedte corridor (slider stap 5)
  */
 export function grensMeters(eigen, eigenMelden, corridorMeters) {
   if (eigen && eigenMelden !== 'corridor') return EIGEN_MAX_METERS

@@ -1,7 +1,7 @@
 /**
  * Onderweg.jsx
  *
- * Inhoud van stap 7 "Onderweg": keuze vervoerwijze, route starten/stoppen,
+ * Inhoud van stap 8 "Onderweg": keuze vervoerwijze, route starten/stoppen,
  * GPS-status, voorleesstatus en de dichtstbijzijnde POI's met afstand,
  * klokrichting en triggerstraal. Tik op een POI om hem direct te laten
  * voorlezen (handig om thuis te testen).
@@ -24,7 +24,7 @@
  * Proef achtergrond-GPS (TEST_ACHTERGROND): vinkje "Achtergrond-GPS"
  * (alleen in de Android-app); de positie komt dan van een voorgrondservice
  * met vaste melding, zodat de app ook met het scherm uit blijft werken. Na
- * afloop toont stap 7 het logboek van de laatste rit (logboek.js), met
+ * afloop toont stap 8 het logboek van de laatste rit (logboek.js), met
  * knoppen om het te bekijken en te delen.
  */
 import { useState, useMemo } from 'react'
@@ -49,7 +49,7 @@ const TEST_SIMULATIE = true
 // de Android-app) en het logboek van de laatste rit onder de knoppen.
 const TEST_ACHTERGROND = true
 
-// Hoogte van de kaart in stap 7 (kleiner dan bij stap 4, zodat de lijst
+// Hoogte van de kaart in stap 8 (kleiner dan bij stap 5, zodat de lijst
 // met dichtstbijzijnde POI's eronder in beeld blijft).
 const KAART_HOOGTE = '260px'
 
@@ -161,7 +161,7 @@ function Onderweg({ pois, summariesById, routePunten }) {
       </p>
       {zonderSamenvatting > 0 && (
         <p className="muted">
-          Tip: voor {zonderSamenvatting} POI's is nog geen samenvatting opgehaald (stap 5); die
+          Tip: voor {zonderSamenvatting} POI's is nog geen samenvatting opgehaald (stap 6); die
           krijgen alleen de korte Wikidata-omschrijving.
         </p>
       )}

@@ -39,13 +39,15 @@ import {
   bewaarEigenMelden,
 } from './zoekbron.js'
 
-// WikiPoi — één doorlopende flow in zeven stappen:
-//   1. Route (GPX)  2. Categorieën (+ optioneel OSM)  3. Zoeken
-//   4. Kaart met corridor-slider  5. Wikipedia-samenvattingen  6. CSV voor EuroPoi
-//   7. Onderweg (zelfstandig gebruik: GPS volgen langs de route)
-// Een stap wordt pas bruikbaar als de vorige klaar is. Wie route, categorieën
-// of de OSM-schakelaar wijzigt, maakt eerdere zoekresultaten ongeldig; die
-// worden dan gewist (resetResults).
+// WikiPoi — één doorlopende flow in acht stappen (sinds 0.16.0):
+//   1. Route (GPX)  2. Bronnen (zoeken in + eigen POI's uit een CSV)
+//   3. Categorieën (+ optioneel OSM)  4. Zoeken  5. Kaart met corridor-slider
+//   6. Wikipedia-samenvattingen  7. CSV voor EuroPoi
+//   8. Onderweg (zelfstandig gebruik: GPS volgen langs de route)
+// Een stap wordt pas bruikbaar als de vorige klaar is. Wie route, zoekbron,
+// categorieën of de OSM-schakelaar wijzigt, maakt eerdere zoekresultaten
+// ongeldig; die worden dan gewist (resetResults). Bij "Alleen eigen POI's"
+// zijn stap 3 en 6 ingeklapt (niet nodig).
 // Eigen POI's (CSV, stap 2) staan los van de zoekresultaten: importeren of
 // verwijderen na het zoeken vraagt geen nieuwe zoekactie.
 
@@ -74,10 +76,10 @@ const OSM_TIMEOUT_MS = 30000
 const EIGEN_CATEGORY_KEY = 'eigen'
 const EIGEN_CATEGORY_LABEL = 'Eigen POI'
 const EIGEN_DUBBEL_METERS = 100
-// Keuzerondjes "Zoeken in" bij stap 3 (0.15.0, zoekbron.js).
+// Keuzerondjes "Zoeken in" bovenaan stap 2 (0.15.0/0.16.0, zoekbron.js).
 const ZOEKBRON_KEUZES = [
-  { key: 'wiki', label: 'Wikidata/Wikipedia', uitleg: "De categorieën van stap 2; eigen POI's doen niet mee." },
-  { key: 'eigen', label: "Alleen eigen POI's", uitleg: 'Uit de CSV van stap 2; geen internet nodig.' },
+  { key: 'wiki', label: 'Wikidata/Wikipedia', uitleg: "De categorieën van stap 3; eigen POI's doen niet mee." },
+  { key: 'eigen', label: "Alleen eigen POI's", uitleg: 'Uit je eigen CSV (hieronder); geen internet nodig.' },
   { key: 'beide', label: 'Beide', uitleg: "Wikidata/Wikipedia én de eigen POI's." },
 ]
 // Zoveel overgeslagen regels worden met regelnummer en reden getoond.
@@ -238,7 +240,7 @@ function App() {
   // POI's zonder tekst (alleen naam of korte Wikidata-omschrijving) toch
   // melden en exporteren (0.12.0)? Standaard niet.
   const [ookZonderTekst, setOokZonderTekst] = useState(false)
-  // Zoekbron (stap 3) en wanneer eigen POI's meedoen (stap 2), 0.15.0:
+  // Zoekbron en wanneer eigen POI's meedoen (beide stap 2), 0.15.0:
   // bewaard en bij het starten teruggezet (zoekbron.js).
   const [bron, setBron] = useState(leesBron)
   const [eigenMelden, setEigenMelden] = useState(leesEigenMelden)
@@ -253,7 +255,7 @@ function App() {
     }
   }, [])
 
-  // Verstreken tijd bij de voortgangsmelding van stap 3: elke nieuwe melding
+  // Verstreken tijd bij de voortgangsmelding van stap 4: elke nieuwe melding
   // (volgende zoekopdracht) begint weer bij 0. Zo is bij een trage Wikidata-
   // server te zien dat de app nog bezig is, en hoe lang één verzoek duurt.
   useEffect(() => {
@@ -399,7 +401,7 @@ function App() {
   }, [allPois, routeInfo, categoryLabelByKey])
   const eigenCount = routeMeasuredPois.filter((p) => p.eigen).length
   // Eigen POI's verder dan EIGEN_MAX_METERS (bij 'altijd melden'): wel
-  // zichtbaar, doen niet mee. Bij 'alleen binnen de corridor' toont stap 4 dat
+  // zichtbaar, doen niet mee. Bij 'alleen binnen de corridor' toont stap 5 dat
   // per POI.
   const eigenTeVer =
     eigenMelden === 'altijd'
@@ -429,7 +431,7 @@ function App() {
   )
   const corridorPois = mapPoisSorted.filter((p) => p.inCorridor)
   // POI's binnen de corridor die ook gemeld worden (Onderweg) en meegaan in
-  // de export: zonder tekst alleen als dat bij stap 5 is aangezet.
+  // de export: zonder tekst alleen als dat bij stap 6 is aangezet.
   const meldtMee = (p) => ookZonderTekst || heeftTekst(p, summariesById)
   const meldPois = corridorPois.filter(meldtMee)
   const zonderTekstCount = corridorPois.length - meldPois.length
@@ -822,7 +824,7 @@ function App() {
           })
         })
       if (wikidataJobs.length === 0) {
-        setSearchError('Kies minimaal één categorie bij stap 2.')
+        setSearchError('Kies minimaal één categorie bij stap 3.')
         return
       }
       const osmCategories = useOsm ? selected.filter((c) => c.osmTags && c.osmTags.length > 0) : []
@@ -1032,7 +1034,7 @@ function App() {
         return
       }
       if (corridorPois.length === 0) {
-        setExportError('Er liggen geen POI\'s binnen de corridor. Verbreed de strook bij stap 4.')
+        setExportError('Er liggen geen POI\'s binnen de corridor. Verbreed de strook bij stap 5.')
         return
       }
       // Eerst de ontbrekende samenvattingen ophalen, zodat de CSV nooit per
@@ -1050,17 +1052,17 @@ function App() {
           setSummaryLoading(false)
         }
       }
-      // Zonder tekst alleen als dat bij stap 5 is aangezet (0.12.0).
+      // Zonder tekst alleen als dat bij stap 6 is aangezet (0.12.0).
       const exportPois = corridorPois.filter((p) => ookZonderTekst || heeftTekst(p, summaries))
       if (exportPois.length === 0) {
         setExportError(
-          "Geen van de POI's binnen de corridor heeft een tekst. Zet bij stap 5 'Ook POI's zonder tekst melden' aan, of verbreed de corridor."
+          "Geen van de POI's binnen de corridor heeft een tekst. Zet bij stap 6 'Ook POI's zonder tekst melden' aan, of verbreed de corridor."
         )
         return
       }
       // Tekst: alleen de Wikipedia-samenvatting (of de zin uit Wikidata),
       // zonder bronvermelding (die zou in EuroPoi worden voorgelezen; WikiPoi
-      // toont hem bij stap 5). Zonder beide de Wikidata-omschrijving; eigen
+      // toont hem bij stap 6). Zonder beide de Wikidata-omschrijving; eigen
       // POI's hun eigen beschrijving. Staat de naam er niet in, dan komt hij
       // ervóór ("Naam. Toelichting", 0.13.0), zodat ook EuroPoi hem noemt.
       // Leeg blijft leeg: EuroPoi leest dan zelf de naam.
@@ -1192,35 +1194,32 @@ function App() {
           <p className="muted app-versie">WikiPoi {APP_VERSION}</p>
         </Step>
 
-        <Step number={2} title="Categorieën">
-          {!categoriesAvailable && <p className="error">Fout: poi-categories.js is niet correct geladen.</p>}
-          {categoriesAvailable && (
-            <>
-              {alleenEigen && (
-                <p className="muted">
-                  Bij stap 3 is gekozen voor alleen eigen POI's: de categorieën doen nu niet mee.
-                </p>
-              )}
-              <ul className="category-list">{coreCategories.map((cat) => renderCategoryItem(cat, false))}</ul>
-              <p className="category-group-title">
-                Verzamelcategorieën <span className="muted">(max. {maxExtraCategories} tegelijk)</span>
-              </p>
-              <ul className="category-list">{extraCategories.map((cat) => renderCategoryItem(cat, true))}</ul>
-              <label className={searchLoading || alleenEigen ? 'toggle-row is-disabled' : 'toggle-row'}>
-                <input
-                  type="checkbox"
-                  checked={useOsm}
-                  disabled={searchLoading || alleenEigen}
-                  onChange={toggleOsm}
-                />
-                <span>
-                  Ook OpenStreetMap doorzoeken
-                  <br />
-                  <span className="muted">Vindt soms extra punten, maar maakt het zoeken trager.</span>
-                </span>
-              </label>
-            </>
-          )}
+        <Step number={2} title="Bronnen">
+          <fieldset className="keuze-groep keuze-groep-boven">
+            <legend>Zoeken in</legend>
+            {ZOEKBRON_KEUZES.map((k) => {
+              const uit = searchLoading || (k.key !== 'wiki' && !eigenImport)
+              return (
+                <label key={k.key} className={uit ? 'toggle-row is-disabled' : 'toggle-row'}>
+                  <input
+                    type="radio"
+                    name="zoekbron"
+                    checked={bronEffectief === k.key}
+                    disabled={uit}
+                    onChange={() => kiesBron(k.key)}
+                  />
+                  <span>
+                    {k.label}
+                    <br />
+                    <span className="muted">{k.uitleg}</span>
+                  </span>
+                </label>
+              )
+            })}
+            {!eigenImport && (
+              <p className="muted">Voeg hieronder een CSV toe voor eigen POI's.</p>
+            )}
+          </fieldset>
           <div className="eigen-pois">
             <label className={searchLoading ? 'btn btn-indigo btn-small is-disabled' : 'btn btn-indigo btn-small'}>
               <input
@@ -1246,8 +1245,7 @@ function App() {
               <p className="muted">
                 Optioneel: een CSV in EuroPoi-formaat (lat;lng;pluscode;name;desc;category;radius;mp3). Eigen
                 POI's verschijnen na het zoeken. Daarna kun je kiezen of ze altijd meedoen (tot{' '}
-                {EIGEN_MAX_METERS / 1000} km van de route) of alleen binnen de corridor, en of je ook in
-                Wikidata zoekt.
+                {EIGEN_MAX_METERS / 1000} km van de route) of alleen binnen de corridor.
               </p>
             )}
             {eigenImport && (
@@ -1285,7 +1283,7 @@ function App() {
                     <span>
                       Alleen binnen de corridor
                       <br />
-                      <span className="muted">Net als de gevonden POI's (breedte instellen bij stap 4).</span>
+                      <span className="muted">Net als de gevonden POI's (breedte instellen bij stap 5).</span>
                     </span>
                   </label>
                 </fieldset>
@@ -1426,28 +1424,38 @@ function App() {
           </div>
         </Step>
 
-        <Step number={3} title="Zoeken" disabled={!routeInfo} hint="Kies eerst een route bij stap 1.">
-          {eigenImport && (
-            <fieldset className="keuze-groep keuze-groep-boven">
-              <legend>Zoeken in</legend>
-              {ZOEKBRON_KEUZES.map((k) => (
-                <label key={k.key} className={searchLoading ? 'toggle-row is-disabled' : 'toggle-row'}>
-                  <input
-                    type="radio"
-                    name="zoekbron"
-                    checked={bronEffectief === k.key}
-                    disabled={searchLoading}
-                    onChange={() => kiesBron(k.key)}
-                  />
-                  <span>
-                    {k.label}
-                    <br />
-                    <span className="muted">{k.uitleg}</span>
-                  </span>
-                </label>
-              ))}
-            </fieldset>
+        <Step
+          number={3}
+          title="Categorieën"
+          disabled={alleenEigen}
+          hint="Niet nodig: je zoekt alleen in je eigen POI's (stap 2)."
+        >
+          {!categoriesAvailable && <p className="error">Fout: poi-categories.js is niet correct geladen.</p>}
+          {categoriesAvailable && (
+            <>
+              <ul className="category-list">{coreCategories.map((cat) => renderCategoryItem(cat, false))}</ul>
+              <p className="category-group-title">
+                Verzamelcategorieën <span className="muted">(max. {maxExtraCategories} tegelijk)</span>
+              </p>
+              <ul className="category-list">{extraCategories.map((cat) => renderCategoryItem(cat, true))}</ul>
+              <label className={searchLoading || alleenEigen ? 'toggle-row is-disabled' : 'toggle-row'}>
+                <input
+                  type="checkbox"
+                  checked={useOsm}
+                  disabled={searchLoading || alleenEigen}
+                  onChange={toggleOsm}
+                />
+                <span>
+                  Ook OpenStreetMap doorzoeken
+                  <br />
+                  <span className="muted">Vindt soms extra punten, maar maakt het zoeken trager.</span>
+                </span>
+              </label>
+            </>
           )}
+        </Step>
+
+        <Step number={4} title="Zoeken" disabled={!routeInfo} hint="Kies eerst een route bij stap 1.">
           <button
             type="button"
             className="btn btn-yellow btn-wide"
@@ -1458,8 +1466,8 @@ function App() {
           </button>
           {!alleenEigen && selectedCategoryKeys.length === 0 && (
             <p className="muted">
-              Kies minimaal één categorie bij stap 2
-              {eigenImport ? ", of kies hierboven 'Alleen eigen POI's'." : '.'}
+              Kies minimaal één categorie bij stap 3
+              {eigenImport ? ", of kies bij stap 2 'Alleen eigen POI's'." : '.'}
             </p>
           )}
           {searchProgress && (
@@ -1487,7 +1495,7 @@ function App() {
           {searchError && <p className="error">{searchError}</p>}
         </Step>
 
-        <Step number={4} title="Kaart" disabled={!routeInfo} hint="Kies eerst een route bij stap 1.">
+        <Step number={5} title="Kaart" disabled={!routeInfo} hint="Kies eerst een route bij stap 1.">
           <button type="button" className="btn btn-indigo btn-small" onClick={() => setShowMap((v) => !v)}>
             {showMap ? 'Kaart verbergen' : 'Kaart tonen'}
           </button>
@@ -1513,16 +1521,20 @@ function App() {
             value={corridorMeters}
             onChange={(e) => setCorridorMeters(Number(e.target.value))}
           />
-          {!searchDone && <p className="muted">Na het zoeken bij stap 3 verschijnen hier de POI's.</p>}
+          {!searchDone && <p className="muted">Na het zoeken bij stap 4 verschijnen hier de POI's.</p>}
           {searchDone && mapPois.length === 0 && (
-            <p className="muted">Geen POI's gevonden. Kies andere categorieën bij stap 2.</p>
+            <p className="muted">
+              {alleenEigen
+                ? "Geen eigen POI's gevonden."
+                : "Geen POI's gevonden. Kies andere categorieën bij stap 3."}
+            </p>
           )}
           {searchDone && mapPois.length > 0 && (
             <>
               <p>
                 <strong>{corridorPois.length}</strong> van {mapPois.length} POI's binnen de corridor
                 {zonderTekstCount > 0
-                  ? `, waarvan ${zonderTekstCount} zonder tekst (${zonderTekstCount === 1 ? 'doet' : 'doen'} niet mee, zie stap 5).`
+                  ? `, waarvan ${zonderTekstCount} zonder tekst (${zonderTekstCount === 1 ? 'doet' : 'doen'} niet mee, zie stap 6).`
                   : '.'}
               </p>
               <ul className="poi-list">
@@ -1560,7 +1572,16 @@ function App() {
           )}
         </Step>
 
-        <Step number={5} title="Samenvattingen" disabled={!searchDone} hint="Zoek eerst POI's bij stap 3.">
+        <Step
+          number={6}
+          title="Samenvattingen"
+          disabled={!searchDone || alleenEigen}
+          hint={
+            alleenEigen
+              ? "Niet nodig: eigen POI's hebben hun eigen beschrijving."
+              : "Zoek eerst POI's bij stap 4."
+          }
+        >
           <p>
             <strong>{summaryFoundCount}</strong> van {corridorPois.length} POI's binnen de corridor
             hebben een Wikipedia-samenvatting
@@ -1573,7 +1594,7 @@ function App() {
             </p>
           )}
           <p className="muted">
-            Optioneel: bij opslaan (stap 6) worden ontbrekende samenvattingen automatisch opgehaald.
+            Optioneel: bij opslaan (stap 7) worden ontbrekende samenvattingen automatisch opgehaald.
           </p>
           <label className="toggle-row">
             <input type="checkbox" checked={ookZonderTekst} onChange={() => setOokZonderTekst((v) => !v)} />
@@ -1658,7 +1679,7 @@ function App() {
           )}
         </Step>
 
-        <Step number={6} title="Exporteren" disabled={!searchDone} hint="Zoek eerst POI's bij stap 3.">
+        <Step number={7} title="Exporteren" disabled={!searchDone} hint="Zoek eerst POI's bij stap 4.">
           <label htmlFor="route-name" className="field-label">
             Routenaam (categorie in EuroPoi)
           </label>
@@ -1708,10 +1729,10 @@ function App() {
         </Step>
 
         <Step
-          number={7}
+          number={8}
           title="Onderweg"
           disabled={corridorPois.length === 0}
-          hint="Zoek eerst POI's bij stap 3; er moet minstens één POI binnen de corridor liggen."
+          hint="Zoek eerst POI's bij stap 4; er moet minstens één POI binnen de corridor liggen."
         >
           <Onderweg pois={meldPois} summariesById={summariesById} routePunten={routeInfo ? routeInfo.points : null} />
         </Step>
