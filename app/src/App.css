@@ -440,6 +440,28 @@ body::before {
   vertical-align: middle;
 }
 
+/* Keuzerondjes (0.15.0): "Eigen POI's melden" in stap 2, "Zoeken in" in stap 3 */
+
+.keuze-groep {
+  min-width: 0;
+  margin: 12px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.keuze-groep legend {
+  padding: 0;
+  font-weight: 700;
+}
+
+.keuze-groep .toggle-row {
+  margin-top: 8px;
+}
+
+.keuze-groep-boven {
+  margin: 0 0 14px;
+}
+
 /* Verkleind icoon als tegel (Eigen POI) in plaats van een rondje. */
 .category-dot.category-tegel {
   width: 1.15em;

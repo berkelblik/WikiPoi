@@ -27,6 +27,17 @@ import * as AudioOpslag from './onderweg/audioOpslag.js'
 import './App.css'
 import { version as APP_VERSION } from '../package.json'
 import { tekstMetNaam, toelichtingVan } from './onderweg/voorleestekst.js'
+import {
+  EIGEN_MAX_METERS,
+  effectieveBron,
+  zoektWiki,
+  gebruiktEigen,
+  grensMeters,
+  leesBron,
+  bewaarBron,
+  leesEigenMelden,
+  bewaarEigenMelden,
+} from './zoekbron.js'
 
 // WikiPoi — één doorlopende flow in zeven stappen:
 //   1. Route (GPX)  2. Categorieën (+ optioneel OSM)  3. Zoeken
@@ -55,18 +66,20 @@ const WIKIDATA_MERGE_METERS = 10
 // Slechtste geval per categorie: 2 rondes x 2 servers x 30 s + 3 s pauze.
 const OSM_TIMEOUT_MS = 30000
 
-// Eigen POI's uit een CSV (EuroPoi-formaat): eigen categorie en kleur, altijd
-// binnen de corridor, geen Wikipedia. Een gevonden POI met dezelfde naam
-// (hoofdletters/spaties genegeerd) binnen deze afstand van een eigen POI
-// vervalt: de eigen POI wint.
+// Eigen POI's uit een CSV (EuroPoi-formaat): eigen categorie en kleur, geen
+// Wikipedia. Een gevonden POI met dezelfde naam (hoofdletters/spaties
+// genegeerd) binnen deze afstand van een eigen POI vervalt: de eigen POI wint.
+// Of ze meedoen tot EIGEN_MAX_METERS (2 km) of alleen binnen de corridor, en
+// of er ook (of alleen) in Wikidata wordt gezocht: zie zoekbron.js (0.15.0).
 const EIGEN_CATEGORY_KEY = 'eigen'
 const EIGEN_CATEGORY_LABEL = 'Eigen POI'
 const EIGEN_DUBBEL_METERS = 100
-// Eigen POI's doen mee tot deze afstand van de route, ook buiten de corridor.
-// Verder weg blijven ze zichtbaar op de kaart en in de lijst (vervaagd, net als
-// gevonden POI's buiten de corridor), maar doen ze niet mee: geen export, geen
-// aankondiging in Onderweg (triggerstraal zou anders afstand + 50 m worden).
-const EIGEN_MAX_METERS = 2000
+// Keuzerondjes "Zoeken in" bij stap 3 (0.15.0, zoekbron.js).
+const ZOEKBRON_KEUZES = [
+  { key: 'wiki', label: 'Wikidata/Wikipedia', uitleg: "De categorieën van stap 2; eigen POI's doen niet mee." },
+  { key: 'eigen', label: "Alleen eigen POI's", uitleg: 'Uit de CSV van stap 2; geen internet nodig.' },
+  { key: 'beide', label: 'Beide', uitleg: "Wikidata/Wikipedia én de eigen POI's." },
+]
 // Zoveel overgeslagen regels worden met regelnummer en reden getoond.
 const EIGEN_MAX_REDENEN = 5
 // Zoveel niet-gekoppelde audiobestanden worden bij naam genoemd.
@@ -225,6 +238,10 @@ function App() {
   // POI's zonder tekst (alleen naam of korte Wikidata-omschrijving) toch
   // melden en exporteren (0.12.0)? Standaard niet.
   const [ookZonderTekst, setOokZonderTekst] = useState(false)
+  // Zoekbron (stap 3) en wanneer eigen POI's meedoen (stap 2), 0.15.0:
+  // bewaard en bij het starten teruggezet (zoekbron.js).
+  const [bron, setBron] = useState(leesBron)
+  const [eigenMelden, setEigenMelden] = useState(leesEigenMelden)
 
   const isNative = Capacitor.isNativePlatform()
 
@@ -273,6 +290,9 @@ function App() {
   }, [categoryList])
 
   const searchDone = wikidataResults !== null
+  // Zonder eigen POI's wordt altijd in Wikidata gezocht.
+  const bronEffectief = effectieveBron(bron, !!eigenImport)
+  const alleenEigen = bronEffectief === 'eigen'
 
   // Alle POI's: na het zoeken de eigen POI's (CSV) plus de gevonden POI's
   // (Wikidata + eventueel OSM, al gefilterd bij het zoeken). Een gevonden POI
@@ -295,9 +315,9 @@ function App() {
   }, [eigenAudio, eigenImport])
 
   const { allPois, eigenVervangen } = useMemo(() => {
-    const gevonden = [...(wikidataResults || []), ...(osmResults || [])]
+    const gevonden = zoektWiki(bronEffectief) ? [...(wikidataResults || []), ...(osmResults || [])] : []
     const eigen =
-      searchDone && eigenImport
+      searchDone && eigenImport && gebruiktEigen(bronEffectief)
         ? eigenImport.pois.map((p) => ({
             ...p,
             audioLokaal: audioKoppeling.perPoi[p.id] || null,
@@ -317,7 +337,7 @@ function App() {
         )
     )
     return { allPois: [...eigen, ...over], eigenVervangen: gevonden.length - over.length }
-  }, [wikidataResults, osmResults, eigenImport, searchDone, audioKoppeling, audioKopie])
+  }, [wikidataResults, osmResults, eigenImport, searchDone, audioKoppeling, audioKopie, bronEffectief])
 
   // Blob-URL's van audiobestanden (browser) vrijgeven bij vervangen of afsluiten.
   useEffect(() => {
@@ -378,10 +398,15 @@ function App() {
     })
   }, [allPois, routeInfo, categoryLabelByKey])
   const eigenCount = routeMeasuredPois.filter((p) => p.eigen).length
-  // Eigen POI's verder dan EIGEN_MAX_METERS: wel zichtbaar, doen niet mee.
-  const eigenTeVer = routeMeasuredPois.filter(
-    (p) => p.eigen && Number.isFinite(p.distanceToRoute) && p.distanceToRoute > EIGEN_MAX_METERS
-  ).length
+  // Eigen POI's verder dan EIGEN_MAX_METERS (bij 'altijd melden'): wel
+  // zichtbaar, doen niet mee. Bij 'alleen binnen de corridor' toont stap 4 dat
+  // per POI.
+  const eigenTeVer =
+    eigenMelden === 'altijd'
+      ? routeMeasuredPois.filter(
+          (p) => p.eigen && Number.isFinite(p.distanceToRoute) && p.distanceToRoute > EIGEN_MAX_METERS
+        ).length
+      : 0
 
   // Goedkope stap die wél bij elke sliderbeweging draait: binnen/buiten de
   // corridor markeren.
@@ -389,13 +414,14 @@ function App() {
     () =>
       routeMeasuredPois.map((p) => ({
         ...p,
-        // Eigen POI's doen mee tot EIGEN_MAX_METERS, ook buiten de corridor.
+        // Eigen POI's doen mee tot EIGEN_MAX_METERS, ook buiten de corridor,
+        // of (keuze 'corridor') alleen binnen de corridor.
         inCorridor:
           p.distanceToRoute === null
             ? true
-            : p.distanceToRoute <= (p.eigen ? EIGEN_MAX_METERS : corridorMeters),
+            : p.distanceToRoute <= grensMeters(p.eigen, eigenMelden, corridorMeters),
       })),
-    [routeMeasuredPois, corridorMeters]
+    [routeMeasuredPois, corridorMeters, eigenMelden]
   )
   const mapPoisSorted = useMemo(
     () => [...mapPois].sort((a, b) => (a.distanceToRoute ?? 0) - (b.distanceToRoute ?? 0)),
@@ -459,6 +485,22 @@ function App() {
     if (searchLoading) return
     setUseOsm((v) => !v)
     resetResults()
+  }
+
+  // Andere zoekbron: eerdere resultaten gelden niet meer.
+  function kiesBron(nieuw) {
+    if (searchLoading || nieuw === bron) return
+    setBron(nieuw)
+    bewaarBron(nieuw)
+    resetResults()
+  }
+
+  // Wanneer eigen POI's meedoen: alleen een filter, geen nieuwe zoekactie.
+  function kiesEigenMelden(nieuw) {
+    if (searchLoading) return
+    setEigenMelden(nieuw)
+    bewaarEigenMelden(nieuw)
+    setExportMessage('')
   }
 
   function handleGpxFileChange(event) {
@@ -575,6 +617,9 @@ function App() {
   }
 
   function verwijderEigenPois() {
+    // Werd alleen in de eigen POI's gezocht, dan is er zonder CSV niets meer
+    // over: opnieuw zoeken (nu in Wikidata).
+    if (alleenEigen) resetResults()
     setEigenImport(null)
     setEigenFout('')
     setEigenAudio(null)
@@ -717,6 +762,14 @@ function App() {
   async function runSearch() {
     if (!routeInfo) return
     resetResults()
+    // Alleen eigen POI's: niets op te halen, geen internet nodig. De eigen
+    // POI's verschijnen zodra searchDone waar is (allPois).
+    if (alleenEigen) {
+      setMergedCount(0)
+      setOsmResults([])
+      setWikidataResults([])
+      return
+    }
     setSearchLoading(true)
     try {
       if (
@@ -1077,7 +1130,7 @@ function App() {
   function renderCategoryItem(cat, isExtra) {
     const checked = selectedCategoryKeys.includes(cat.key)
     const blocked = isExtra && !checked && extraSelectedCount >= maxExtraCategories
-    const disabled = searchLoading || blocked
+    const disabled = searchLoading || blocked || alleenEigen
     return (
       <li key={cat.key} className={disabled ? 'category-item is-disabled' : 'category-item'}>
         <label>
@@ -1143,13 +1196,23 @@ function App() {
           {!categoriesAvailable && <p className="error">Fout: poi-categories.js is niet correct geladen.</p>}
           {categoriesAvailable && (
             <>
+              {alleenEigen && (
+                <p className="muted">
+                  Bij stap 3 is gekozen voor alleen eigen POI's: de categorieën doen nu niet mee.
+                </p>
+              )}
               <ul className="category-list">{coreCategories.map((cat) => renderCategoryItem(cat, false))}</ul>
               <p className="category-group-title">
                 Verzamelcategorieën <span className="muted">(max. {maxExtraCategories} tegelijk)</span>
               </p>
               <ul className="category-list">{extraCategories.map((cat) => renderCategoryItem(cat, true))}</ul>
-              <label className={searchLoading ? 'toggle-row is-disabled' : 'toggle-row'}>
-                <input type="checkbox" checked={useOsm} disabled={searchLoading} onChange={toggleOsm} />
+              <label className={searchLoading || alleenEigen ? 'toggle-row is-disabled' : 'toggle-row'}>
+                <input
+                  type="checkbox"
+                  checked={useOsm}
+                  disabled={searchLoading || alleenEigen}
+                  onChange={toggleOsm}
+                />
                 <span>
                   Ook OpenStreetMap doorzoeken
                   <br />
@@ -1182,7 +1245,9 @@ function App() {
             {!eigenImport && !eigenFout && (
               <p className="muted">
                 Optioneel: een CSV in EuroPoi-formaat (lat;lng;pluscode;name;desc;category;radius;mp3). Eigen
-                POI's verschijnen na het zoeken en doen mee tot {EIGEN_MAX_METERS / 1000} km van de route.
+                POI's verschijnen na het zoeken. Daarna kun je kiezen of ze altijd meedoen (tot{' '}
+                {EIGEN_MAX_METERS / 1000} km van de route) of alleen binnen de corridor, en of je ook in
+                Wikidata zoekt.
               </p>
             )}
             {eigenImport && (
@@ -1190,6 +1255,40 @@ function App() {
                 <p className="success">
                   <CategoryDot categoryKey={EIGEN_CATEGORY_KEY} /> {eigenImport.melding}
                 </p>
+                <fieldset className="keuze-groep">
+                  <legend>Eigen POI's melden</legend>
+                  <label className={searchLoading ? 'toggle-row is-disabled' : 'toggle-row'}>
+                    <input
+                      type="radio"
+                      name="eigen-melden"
+                      checked={eigenMelden === 'altijd'}
+                      disabled={searchLoading}
+                      onChange={() => kiesEigenMelden('altijd')}
+                    />
+                    <span>
+                      Altijd
+                      <br />
+                      <span className="muted">
+                        Tot {EIGEN_MAX_METERS / 1000} km van de route, ook buiten de corridor; gemeld op het
+                        dichtstbijzijnde punt van de route.
+                      </span>
+                    </span>
+                  </label>
+                  <label className={searchLoading ? 'toggle-row is-disabled' : 'toggle-row'}>
+                    <input
+                      type="radio"
+                      name="eigen-melden"
+                      checked={eigenMelden === 'corridor'}
+                      disabled={searchLoading}
+                      onChange={() => kiesEigenMelden('corridor')}
+                    />
+                    <span>
+                      Alleen binnen de corridor
+                      <br />
+                      <span className="muted">Net als de gevonden POI's (breedte instellen bij stap 4).</span>
+                    </span>
+                  </label>
+                </fieldset>
                 {eigenImport.overgeslagen.length > 0 && (
                   <div className="muted">
                     {eigenImport.overgeslagen.length === 1
@@ -1328,15 +1427,41 @@ function App() {
         </Step>
 
         <Step number={3} title="Zoeken" disabled={!routeInfo} hint="Kies eerst een route bij stap 1.">
+          {eigenImport && (
+            <fieldset className="keuze-groep keuze-groep-boven">
+              <legend>Zoeken in</legend>
+              {ZOEKBRON_KEUZES.map((k) => (
+                <label key={k.key} className={searchLoading ? 'toggle-row is-disabled' : 'toggle-row'}>
+                  <input
+                    type="radio"
+                    name="zoekbron"
+                    checked={bronEffectief === k.key}
+                    disabled={searchLoading}
+                    onChange={() => kiesBron(k.key)}
+                  />
+                  <span>
+                    {k.label}
+                    <br />
+                    <span className="muted">{k.uitleg}</span>
+                  </span>
+                </label>
+              ))}
+            </fieldset>
+          )}
           <button
             type="button"
             className="btn btn-yellow btn-wide"
             onClick={runSearch}
-            disabled={searchLoading || selectedCategoryKeys.length === 0}
+            disabled={searchLoading || (!alleenEigen && selectedCategoryKeys.length === 0)}
           >
             {searchLoading ? 'Bezig met zoeken…' : searchDone ? 'Opnieuw zoeken' : "POI's zoeken"}
           </button>
-          {selectedCategoryKeys.length === 0 && <p className="muted">Kies minimaal één categorie bij stap 2.</p>}
+          {!alleenEigen && selectedCategoryKeys.length === 0 && (
+            <p className="muted">
+              Kies minimaal één categorie bij stap 2
+              {eigenImport ? ", of kies hierboven 'Alleen eigen POI's'." : '.'}
+            </p>
+          )}
           {searchProgress && (
             <p className="muted">
               {searchProgress}
@@ -1349,7 +1474,7 @@ function App() {
               {eigenCount > 0 && `, inclusief ${eigenCount} eigen`}
               {eigenVervangen > 0 && `, ${eigenVervangen} vervangen door een eigen POI`}
               {mergedCount > 0 && `, ${mergedCount} dubbele samengevoegd`}
-              {useOsm && `, waarvan ${osmFoundCount} via OpenStreetMap`}.
+              {useOsm && !alleenEigen && `, waarvan ${osmFoundCount} via OpenStreetMap`}.
             </p>
           )}
           {searchDone && eigenTeVer > 0 && (
@@ -1415,7 +1540,9 @@ function App() {
                             : 'afstand onbekend'}
                           {poi.eigen
                             ? !poi.inCorridor
-                              ? `, verder dan ${EIGEN_MAX_METERS / 1000} km: doet niet mee`
+                              ? eigenMelden === 'corridor'
+                                ? ', buiten de corridor: doet niet mee'
+                                : `, verder dan ${EIGEN_MAX_METERS / 1000} km: doet niet mee`
                               : Number.isFinite(poi.distanceToRoute) && poi.distanceToRoute > corridorMeters
                                 ? ', buiten de corridor maar telt mee'
                                 : ''
