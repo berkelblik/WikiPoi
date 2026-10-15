@@ -4,6 +4,7 @@ import '../../src/wikidata-search.js'
 import '../../src/route-buffer.js'
 import '../../src/osm-fallback.js'
 import '../../src/wikipedia-summary.js'
+import '../../src/artikel-via-ligging.js'
 import '../../src/wikidata-zin.js'
 import '../../src/commons-foto.js'
 import '../../src/poi-categories.js'
@@ -38,6 +39,19 @@ import {
   leesEigenMelden,
   bewaarEigenMelden,
 } from './zoekbron.js'
+import {
+  MAX_TALEN,
+  basis,
+  taalNaam,
+  effectieveVolgorde,
+  beginTalen,
+  lijstRijen,
+  wisselTaal,
+  verplaatsTaal,
+  volgordeTekst,
+  leesTaalKeuze,
+  bewaarTaalKeuze,
+} from './taalvolgorde.js'
 
 // WikiPoi — één doorlopende flow in acht stappen (sinds 0.16.0):
 //   1. Route (GPX)  2. Bronnen (zoeken in + eigen POI's uit een CSV)
@@ -48,6 +62,10 @@ import {
 // categorieën of de OSM-schakelaar wijzigt, maakt eerdere zoekresultaten
 // ongeldig; die worden dan gewist (resetResults). Bij "Alleen eigen POI's"
 // zijn stap 3 en 6 ingeklapt (niet nodig).
+// Taal van de teksten (0.17.0, stap 2, taalvolgorde.js): automatisch
+// (telefoontaal → taal van het land → en → fr → de) of een eigen volgorde.
+// Heeft een POI geen artikel in de eerste taal, dan zoekt stap 6 in die
+// taal naar een artikel op dezelfde plek (artikel-via-ligging.js).
 // Eigen POI's (CSV, stap 2) staan los van de zoekresultaten: importeren of
 // verwijderen na het zoeken vraagt geen nieuwe zoekactie.
 
@@ -244,6 +262,11 @@ function App() {
   // bewaard en bij het starten teruggezet (zoekbron.js).
   const [bron, setBron] = useState(leesBron)
   const [eigenMelden, setEigenMelden] = useState(leesEigenMelden)
+  // Taal van de teksten (0.17.0): { modus: 'auto'|'eigen', talen } —
+  // bewaard (taalvolgorde.js). taalInfo: de volgorde die bij het laatste
+  // zoeken gold { modus, talen, landTaal, landFout }, of null.
+  const [taalKeuze, setTaalKeuze] = useState(leesTaalKeuze)
+  const [taalInfo, setTaalInfo] = useState(null)
 
   const isNative = Capacitor.isNativePlatform()
 
@@ -412,18 +435,32 @@ function App() {
 
   // Goedkope stap die wél bij elke sliderbeweging draait: binnen/buiten de
   // corridor markeren.
+  // Artikel via de ligging gevonden (stap 6, 0.17.0): naam, artikel en
+  // taal van dat artikel; de oorspronkelijke naam blijft bewaard.
   const mapPois = useMemo(
     () =>
-      routeMeasuredPois.map((p) => ({
-        ...p,
-        // Eigen POI's doen mee tot EIGEN_MAX_METERS, ook buiten de corridor,
-        // of (keuze 'corridor') alleen binnen de corridor.
-        inCorridor:
-          p.distanceToRoute === null
-            ? true
-            : p.distanceToRoute <= grensMeters(p.eigen, eigenMelden, corridorMeters),
-      })),
-    [routeMeasuredPois, corridorMeters, eigenMelden]
+      routeMeasuredPois.map((p) => {
+        const lig = summariesById[p.id] && summariesById[p.id].viaLigging
+        return {
+          ...p,
+          ...(lig
+            ? {
+                label: lig.naam,
+                labelLanguage: lig.taal,
+                wikipediaUrl: lig.url,
+                articleLanguage: lig.taal,
+                naamWikidata: p.label,
+              }
+            : null),
+          // Eigen POI's doen mee tot EIGEN_MAX_METERS, ook buiten de corridor,
+          // of (keuze 'corridor') alleen binnen de corridor.
+          inCorridor:
+            p.distanceToRoute === null
+              ? true
+              : p.distanceToRoute <= grensMeters(p.eigen, eigenMelden, corridorMeters),
+        }
+      }),
+    [routeMeasuredPois, corridorMeters, eigenMelden, summariesById]
   )
   const mapPoisSorted = useMemo(
     () => [...mapPois].sort((a, b) => (a.distanceToRoute ?? 0) - (b.distanceToRoute ?? 0)),
@@ -452,6 +489,9 @@ function App() {
   const wikidataZinCount = corridorPois.filter(
     (p) => summariesById[p.id] && summariesById[p.id].summary && summariesById[p.id].summary.viaWikidata
   ).length
+  const viaLiggingCount = corridorPois.filter(
+    (p) => summariesById[p.id] && summariesById[p.id].summary && summariesById[p.id].viaLigging
+  ).length
   // De categorie (= routenaam) koppelt de POI's in EuroPoi aan de route;
   // die heet daar standaard naar het GPX-bestand. Waarschuwen bij verschil.
   const fileRouteName = routeInfo ? routeNameFromFileName(routeInfo.fileName) : ''
@@ -459,6 +499,7 @@ function App() {
 
   function resetResults() {
     setWikidataResults(null)
+    setTaalInfo(null)
     setOsmResults(null)
     setMergedCount(0)
     setSearchProgress('')
@@ -495,6 +536,28 @@ function App() {
     setBron(nieuw)
     bewaarBron(nieuw)
     resetResults()
+  }
+
+  // Andere taal van de teksten: de artikelen moeten opnieuw opgehaald
+  // worden, dus eerdere resultaten gelden niet meer.
+  function kiesTaalKeuze(nieuw) {
+    if (searchLoading) return
+    setTaalKeuze(nieuw)
+    bewaarTaalKeuze(nieuw)
+    resetResults()
+  }
+
+  function kiesTaalModus(modus) {
+    if (modus === taalKeuze.modus) return
+    kiesTaalKeuze(
+      modus === 'eigen'
+        ? { modus: 'eigen', talen: beginTalen(taalKeuze, telefoonTaal()) }
+        : { modus: 'auto', talen: taalKeuze.talen }
+    )
+  }
+
+  function wijzigEigenTalen(talen) {
+    kiesTaalKeuze({ modus: 'eigen', talen })
   }
 
   // Wanneer eigen POI's meedoen: alleen een filter, geen nieuwe zoekactie.
@@ -798,15 +861,37 @@ function App() {
       // kleur en icoon). Daarna één verzoek per hasProperty-categorie
       // ("Gebouwd erfgoed"), zie dedupeFirstWins().
       const selected = categoryList.filter((c) => selectedCategoryKeys.includes(c.key))
+      if (selected.length === 0) {
+        setSearchError('Kies minimaal één categorie bij stap 3.')
+        return
+      }
+
+      // Taal van de teksten (0.17.0). Automatisch: eerst de taal van het
+      // land rond het beginpunt van de route (één Wikidata-verzoek). Lukt
+      // dat niet, dan zoeken we zonder; dat staat dan bij stap 4.
+      let landTaal = null
+      let landFout = false
+      if (taalKeuze.modus !== 'eigen' && routeInfo.points && routeInfo.points.length > 0) {
+        setSearchProgress('Taal van het land bepalen')
+        try {
+          landTaal = await window.WikiPoiWikidataSearch.fetchLandTaal(routeInfo.points[0])
+          if (!landTaal) landFout = true
+        } catch (err) {
+          console.warn('Taal van het land bepalen mislukt:', err)
+          landFout = true
+        }
+      }
+      const talen = effectieveVolgorde(taalKeuze, telefoonTaal(), landTaal)
+      setTaalInfo({ modus: taalKeuze.modus, talen, landTaal, landFout })
+
       const qidCategories = selected.filter((c) => c.qids.length > 0)
       const wikidataJobs = []
       if (qidCategories.length > 0) {
         wikidataJobs.push({
           label: qidCategories.length === 1 ? qidCategories[0].label : 'alle categorieën',
           query: {
-            // Artikel en naam bij voorkeur in de taal van de telefoon; de
-            // module vult zelf aan met terugvaltalen (en, fr, de).
-            language: telefoonTaal(),
+            // Artikel en naam in de taalvolgorde van stap 2 (0.17.0).
+            languages: talen,
             instanceOf: qidCategories.flatMap((c) => c.qids),
             limit: WIKIDATA_LIMIT_PER_CATEGORY * qidCategories.length,
             optimizerHint: qidCategories.length > 1,
@@ -819,7 +904,7 @@ function App() {
         .forEach((c) => {
           wikidataJobs.push({
             label: c.label,
-            query: { language: telefoonTaal(), hasProperty: c.hasProperty },
+            query: { languages: talen, hasProperty: c.hasProperty },
             categoryKeyFor: () => c.key,
           })
         })
@@ -848,6 +933,8 @@ function App() {
         const before = results.length
         results = window.WikiPoiWikidataSearch.dedupeByProximity(results, {
           thresholdMeters: WIKIDATA_MERGE_METERS,
+          // Bij twee items met een artikel wint de beste taal (0.17.0).
+          languages: talen,
         })
         merged = before - results.length
       }
@@ -938,14 +1025,32 @@ function App() {
     ) {
       throw new Error('wikipedia-summary.js is niet correct geladen.')
     }
-    const enriched = await window.WikiPoiWikipediaSummary.fetchSummariesForCandidates(candidates, {
-      maxSentences: SUMMARY_MAX_SENTENCES,
-    })
+    const vondsten = await zoekViaLigging(candidates)
+    const enriched = await window.WikiPoiWikipediaSummary.fetchSummariesForCandidates(
+      candidates.map((p) => (vondsten[p.id] ? { ...p, wikipediaUrl: vondsten[p.id].url } : p)),
+      { maxSentences: SUMMARY_MAX_SENTENCES }
+    )
     const added = {}
     enriched.forEach((item, index) => {
       const id = item.id || candidates[index].id
-      added[id] = { summary: item.summary || null, summaryError: item.summaryError || '' }
+      const lig = vondsten[id]
+      if (lig && item.summary) {
+        added[id] = { summary: { ...item.summary, lang: lig.taal }, summaryError: '', viaLigging: lig }
+      } else {
+        added[id] = { summary: item.summary || null, summaryError: item.summaryError || '' }
+      }
     })
+    // Artikel via de ligging gevonden, maar ophalen mislukt: dan alsnog het
+    // eigen artikel van de POI (als die er is).
+    const opnieuw = candidates.filter((p) => vondsten[p.id] && !added[p.id].summary && p.wikipediaUrl)
+    if (opnieuw.length > 0) {
+      const tweede = await window.WikiPoiWikipediaSummary.fetchSummariesForCandidates(opnieuw, {
+        maxSentences: SUMMARY_MAX_SENTENCES,
+      })
+      tweede.forEach((item, index) => {
+        added[opnieuw[index].id] = { summary: item.summary || null, summaryError: item.summaryError || '' }
+      })
+    }
     // Terugval voor Wikidata-items zonder samenvatting: een korte Nederlandse
     // zin uit Wikidata-eigenschappen (wikidata-zin.js, één verzoek). Mislukt
     // dit, dan blijft de Wikidata-omschrijving, zoals voorheen. Dezelfde
@@ -971,6 +1076,30 @@ function App() {
     await voegFotosToe(candidates, added, fotoBestanden)
     setSummariesById((prev) => ({ ...prev, ...added }))
     return { ...summariesById, ...added }
+  }
+
+  // Artikel via de ligging (0.17.0): voor POI's zonder artikel in de eerste
+  // taal van de taalvolgorde (keuze bij stap 2) een artikel in die taal op
+  // dezelfde plek zoeken. Geeft { id: vondst } terug; mislukt het, dan {}.
+  async function zoekViaLigging(candidates) {
+    const L = window.WikiPoiArtikelViaLigging
+    const eerste = taalInfo && taalInfo.talen.length > 0 ? taalInfo.talen[0] : null
+    if (!eerste || !L || typeof L.zoekArtikelenViaLigging !== 'function') return {}
+    const zonder = candidates.filter((p) => !p.eigen && basis(p.articleLanguage) !== eerste)
+    if (zonder.length === 0) return {}
+    // Id's van alle gevonden POI's (ook samengevoegde): hun artikelen
+    // horen niet bij een andere POI.
+    const andereIds = new Set()
+    ;[...(wikidataResults || []), ...(osmResults || [])].forEach((p) => {
+      if (p.id) andereIds.add(p.id)
+      ;(p.mergedFrom || []).forEach((m) => m.id && andereIds.add(m.id))
+    })
+    try {
+      return await L.zoekArtikelenViaLigging(zonder, eerste, { andereIds })
+    } catch (err) {
+      console.warn('Artikel via ligging mislukt:', err)
+      return {}
+    }
   }
 
   // Foto's bij de samenvattingen (entry.foto = { bestand, url, maker,
@@ -1220,6 +1349,92 @@ function App() {
               <p className="muted">Voeg hieronder een CSV toe voor eigen POI's.</p>
             )}
           </fieldset>
+          {!alleenEigen && (
+            <fieldset className="keuze-groep keuze-groep-boven">
+              <legend>Taal van de teksten</legend>
+              <label className={searchLoading ? 'toggle-row is-disabled' : 'toggle-row'}>
+                <input
+                  type="radio"
+                  name="taalkeuze"
+                  checked={taalKeuze.modus !== 'eigen'}
+                  disabled={searchLoading}
+                  onChange={() => kiesTaalModus('auto')}
+                />
+                <span>
+                  Automatisch
+                  <br />
+                  <span className="muted">
+                    {taalNaam(telefoonTaal())} (taal van je telefoon), dan de taal van het land van de route, dan
+                    Engels, Frans en Duits.
+                  </span>
+                </span>
+              </label>
+              <label className={searchLoading ? 'toggle-row is-disabled' : 'toggle-row'}>
+                <input
+                  type="radio"
+                  name="taalkeuze"
+                  checked={taalKeuze.modus === 'eigen'}
+                  disabled={searchLoading}
+                  onChange={() => kiesTaalModus('eigen')}
+                />
+                <span>
+                  Eigen volgorde
+                  <br />
+                  <span className="muted">Kies zelf de talen (hoogstens {MAX_TALEN}) en hun volgorde.</span>
+                </span>
+              </label>
+              {taalKeuze.modus === 'eigen' && (
+                <ol className="taal-lijst">
+                  {lijstRijen(taalKeuze.talen).map((r, i) => {
+                    const vol = !r.gekozen && taalKeuze.talen.length >= MAX_TALEN
+                    const laatste = r.gekozen && taalKeuze.talen.length === 1
+                    return (
+                      <li key={r.code} className={r.gekozen ? 'taal-rij is-gekozen' : 'taal-rij'}>
+                        <label className={searchLoading || vol || laatste ? 'is-disabled' : ''}>
+                          <input
+                            type="checkbox"
+                            checked={r.gekozen}
+                            disabled={searchLoading || vol || laatste}
+                            onChange={() => wijzigEigenTalen(wisselTaal(taalKeuze.talen, r.code))}
+                          />
+                          <span>
+                            {r.gekozen && <span className="taal-nr">{i + 1}.</span>}
+                            {r.naam}
+                          </span>
+                        </label>
+                        {r.gekozen && (
+                          <span className="taal-pijlen">
+                            <button
+                              type="button"
+                              className="btn btn-indigo btn-klein"
+                              aria-label={`${r.naam} omhoog`}
+                              disabled={searchLoading || i === 0}
+                              onClick={() => wijzigEigenTalen(verplaatsTaal(taalKeuze.talen, r.code, -1))}
+                            >
+                              ↑
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-indigo btn-klein"
+                              aria-label={`${r.naam} omlaag`}
+                              disabled={searchLoading || i === taalKeuze.talen.length - 1}
+                              onClick={() => wijzigEigenTalen(verplaatsTaal(taalKeuze.talen, r.code, 1))}
+                            >
+                              ↓
+                            </button>
+                          </span>
+                        )}
+                      </li>
+                    )
+                  })}
+                </ol>
+              )}
+              <p className="muted">
+                Heeft een POI geen artikel in de eerste taal, dan zoekt stap 6 in die taal naar een artikel op
+                dezelfde plek. Een andere keuze wist de zoekresultaten.
+              </p>
+            </fieldset>
+          )}
           <div className="eigen-pois">
             <label className={searchLoading ? 'btn btn-indigo btn-small is-disabled' : 'btn btn-indigo btn-small'}>
               <input
@@ -1485,6 +1700,18 @@ function App() {
               {useOsm && !alleenEigen && `, waarvan ${osmFoundCount} via OpenStreetMap`}.
             </p>
           )}
+          {searchDone && taalInfo && (
+            <p className="muted">
+              Taal van de teksten: {volgordeTekst(taalInfo.talen)}
+              {taalInfo.modus === 'eigen'
+                ? ' (eigen volgorde).'
+                : taalInfo.landTaal
+                  ? ` (taal van het land: ${taalNaam(taalInfo.landTaal)}).`
+                  : taalInfo.landFout
+                    ? ' (taal van het land niet bepaald).'
+                    : '.'}
+            </p>
+          )}
           {searchDone && eigenTeVer > 0 && (
             <p className="muted">
               {eigenTeVer === 1 ? "1 eigen POI ligt" : `${eigenTeVer} eigen POI's liggen`} verder dan{' '}
@@ -1587,6 +1814,12 @@ function App() {
             hebben een Wikipedia-samenvatting
             {wikidataZinCount > 0 ? `; ${wikidataZinCount} kregen een zin uit Wikidata.` : '.'}
           </p>
+          {viaLiggingCount > 0 && taalInfo && (
+            <p className="muted">
+              {viaLiggingCount === 1 ? '1 artikel' : `${viaLiggingCount} artikelen`} in het{' '}
+              {taalNaam(taalInfo.talen[0])} gevonden via de ligging (Wikidata had er geen).
+            </p>
+          )}
           {eigenInCorridorCount > 0 && (
             <p className="muted">
               {eigenInCorridorCount} eigen POI's gebruiken hun eigen beschrijving (zonder beschrijving: alleen
@@ -1651,6 +1884,15 @@ function App() {
                         </p>
                       ) : entry.summary ? (
                         <>
+                          {entry.viaLigging && (
+                            <p className="summary-text muted">
+                              Gevonden via de ligging
+                              {poi.naamWikidata && poi.naamWikidata !== poi.label
+                                ? `; in Wikidata: „${poi.naamWikidata}”`
+                                : ''}
+                              .
+                            </p>
+                          )}
                           <p className="summary-text">{entry.summary.extractShort}</p>
                           {entry.summary.attribution && (
                             <p className="summary-text muted">{entry.summary.attribution}</p>

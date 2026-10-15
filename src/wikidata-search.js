@@ -403,15 +403,17 @@
    * voor kleine coördinaatverschillen tussen twee items van één gebouw.
    *
    * Welke blijft: het item met een Wikipedia-koppeling (levert straks de
-   * samenvatting); hebben ze die allebei of geen van beide, dan het eerst
-   * gevonden item. Het behouden item houdt zijn plek in de lijst.
+   * samenvatting); hebben ze die allebei, dan het item waarvan het artikel
+   * het hoogst in options.languages staat (0.17.0: liever het Nederlandse
+   * artikel dan het Engelse); bij gelijke stand of zonder koppeling het
+   * eerst gevonden item. Het behouden item houdt zijn plek in de lijst.
    * Met mergeLabels (standaard aan) komt de naam van de afgevallen
    * item(s) tussen haakjes achter de naam, bijv. "Broederenkerk (Waalse
    * kerk)"; `mergedFrom` bewaart id + naam van de afgevallen items.
    * Items zonder coördinaten worden ongemoeid doorgegeven.
    *
    * @param {Array} items
-   * @param {{thresholdMeters?:number, mergeLabels?:boolean}} [options]
+   * @param {{thresholdMeters?:number, mergeLabels?:boolean, languages?:string[]}} [options]
    * @returns {Array}
    */
   function dedupeByProximity(items, options) {
@@ -419,6 +421,14 @@
     const threshold =
       typeof opts.thresholdMeters === 'number' ? opts.thresholdMeters : 10;
     const mergeLabels = opts.mergeLabels !== false;
+    const languages = Array.isArray(opts.languages) ? opts.languages : [];
+    // Lager = beter: zonder artikel het slechtst; met artikel de plek van de
+    // artikeltaal in de taallijst (onbekende taal of geen lijst: gelijk).
+    const rank = (it) => {
+      if (!it.wikipediaUrl) return Infinity;
+      const i = languages.indexOf(it.articleLanguage);
+      return i >= 0 ? i : languages.length;
+    };
 
     // Clusters: { kept, others: [] } in volgorde van eerste voorkomen.
     const clusters = [];
@@ -435,7 +445,7 @@
         clusters.push({ index: index, kept: it, others: [] });
         return;
       }
-      if (!cluster.kept.wikipediaUrl && it.wikipediaUrl) {
+      if (rank(it) < rank(cluster.kept)) {
         cluster.others.push(cluster.kept);
         cluster.kept = it;
       } else {
@@ -470,6 +480,116 @@
       .concat(passthrough)
       .sort((a, b) => a.index - b.index)
       .map((x) => x.item);
+  }
+
+  // Straal (km) rond het beginpunt van de route waarbinnen de taal van het
+  // land wordt bepaald (0.17.0).
+  const LAND_TAAL_RADIUS_KM = 5;
+  const LAND_TAAL_TIMEOUT_MS = 20000;
+  // Officiële talen van een land die geen Wikipedia-taal zijn of niet
+  // bruikbaar (gebarentalen e.d. hebben meestal geen P424; dit is een
+  // vangnet).
+  const LAND_TAAL_NEGEREN = ['mul', 'und', 'zxx', 'sgn'];
+
+  /**
+   * SPARQL-query voor de taal van het land rond een punt (0.17.0): voor alle
+   * items binnen LAND_TAAL_RADIUS_KM de Wikimedia-taalcode (P424) van de
+   * officiële talen (P37) van hun land (P17) — rijen met ?bron "land" — en
+   * de taal van hun eigen naam (P1705) — rijen met ?bron "eigen". Die laatste
+   * beslist in meertalige landen (België, Zwitserland), zie kiesLandTaal().
+   *
+   * @param {{lat:number,lng:number}} punt
+   * @returns {string}
+   */
+  function buildLandTaalQuery(punt) {
+    const lat = Number(punt && punt.lat);
+    const lng = Number(punt && punt.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      throw new Error('Ongeldig punt voor de taal van het land.');
+    }
+    return (
+      'SELECT ?bron ?code WHERE {\n' +
+      '  SERVICE wikibase:around {\n' +
+      '    ?place wdt:P625 ?loc .\n' +
+      '    bd:serviceParam wikibase:center "Point(' + lng + ' ' + lat + ')"^^geo:wktLiteral .\n' +
+      '    bd:serviceParam wikibase:radius "' + LAND_TAAL_RADIUS_KM + '" .\n' +
+      '  }\n' +
+      '  {\n' +
+      '    ?place wdt:P17 ?land . ?land wdt:P37 ?taal . ?taal wdt:P424 ?code .\n' +
+      '    BIND("land" AS ?bron)\n' +
+      '  } UNION {\n' +
+      '    ?place wdt:P1705 ?eigenNaam .\n' +
+      '    BIND(LANG(?eigenNaam) AS ?code)\n' +
+      '    BIND("eigen" AS ?bron)\n' +
+      '  }\n' +
+      '}\n' +
+      'LIMIT 2000'
+    );
+  }
+
+  /**
+   * Kiest uit de rijen van buildLandTaalQuery() de taal van het land:
+   * alleen officiële talen van een land ("land") komen in aanmerking; per
+   * taal telt elk voorkomen als "land" én als "eigen" (eigen naam van een
+   * plaats) één punt. Zo wint bij een grens het land met de meeste items,
+   * en in een meertalig land de taal van de plaatsnamen. Gelijke stand: de
+   * eerst gevonden taal.
+   *
+   * @param {Array<{bron:string, code:string}>|object} rijen - of de ruwe SPARQL-JSON
+   * @returns {string|null} basistaal, bijv. 'nl' of 'fr'; null als onbekend
+   */
+  function kiesLandTaal(rijen) {
+    let lijst = rijen;
+    if (rijen && rijen.results && Array.isArray(rijen.results.bindings)) {
+      lijst = rijen.results.bindings.map((b) => ({
+        bron: b.bron ? b.bron.value : '',
+        code: b.code ? b.code.value : '',
+      }));
+    }
+    if (!Array.isArray(lijst)) return null;
+    const basis = (c) =>
+      String(c || '').trim().toLowerCase().replace(/_/g, '-').split('-')[0];
+    const ok = (c) => /^[a-z]{2,3}$/.test(c) && !LAND_TAAL_NEGEREN.includes(c);
+    const punten = new Map(); // code → punten, in volgorde van eerste voorkomen
+    const officieel = new Set();
+    for (const r of lijst) {
+      const c = basis(r && r.code);
+      if (!ok(c)) continue;
+      if (r.bron === 'land') officieel.add(c);
+      punten.set(c, (punten.get(c) || 0) + 1);
+    }
+    let beste = null;
+    let besteScore = 0;
+    for (const [c, n] of punten) {
+      if (!officieel.has(c)) continue;
+      if (n > besteScore) {
+        beste = c;
+        besteScore = n;
+      }
+    }
+    return beste;
+  }
+
+  /**
+   * Haalt de taal van het land rond een punt op (één verzoek, zonder
+   * herhaling: dit is een gemak, geen voorwaarde). Gooit bij een fout.
+   *
+   * @param {{lat:number,lng:number}} punt
+   * @param {{timeoutMs?:number}} [options]
+   * @returns {Promise<string|null>}
+   */
+  async function fetchLandTaal(punt, options) {
+    options = options || {};
+    const url =
+      WIKIDATA_SPARQL_ENDPOINT +
+      '?format=json&query=' +
+      encodeURIComponent(buildLandTaalQuery(punt));
+    const data = await performSingleRequest(
+      url,
+      { Accept: 'application/sparql-results+json' },
+      options.timeoutMs || LAND_TAAL_TIMEOUT_MS
+    );
+    return kiesLandTaal(data);
   }
 
   /**
@@ -585,5 +705,8 @@
     dedupeById,
     dedupeByProximity,
     searchWikidataBox,
+    buildLandTaalQuery,
+    kiesLandTaal,
+    fetchLandTaal,
   };
 });

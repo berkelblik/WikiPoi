@@ -489,3 +489,70 @@ body::before {
   font-size: 12px;
   text-align: right;
 }
+
+/* Taal van de teksten, eigen volgorde (0.17.0, stap 2) */
+
+.taal-lijst {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.taal-rij {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 12px;
+  border-radius: 14px;
+  background: var(--wp-navy-light);
+}
+
+.taal-rij label {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  cursor: pointer;
+}
+
+.taal-rij label.is-disabled {
+  opacity: 0.45;
+}
+
+.taal-rij input {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--wp-gold);
+}
+
+.taal-rij:not(.is-gekozen) {
+  opacity: 0.8;
+}
+
+.taal-nr {
+  display: inline-block;
+  min-width: 1.6em;
+  font-weight: 800;
+  color: var(--wp-gold);
+}
+
+.taal-pijlen {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+}
+
+.btn.btn-klein {
+  min-width: 40px;
+  min-height: 36px;
+  padding: 0 10px;
+  border-radius: 10px;
+  border-bottom-width: 3px;
+  font-size: 16px;
+}

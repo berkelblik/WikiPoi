@@ -125,6 +125,39 @@ scenario('Items zonder coördinaten → ongemoeid, volgorde behouden', () => {
   return { ok: eq(actual, expected), expected, actual };
 });
 
+scenario('0.17.0: beide met Wikipedia, languages [nl,en] → het item met het nl-artikel blijft', () => {
+  const input = [
+    { id: 'Q1', label: 'Keppel Castle', lat: 52, lng: 6, wikipediaUrl: 'https://en.wikipedia.org/wiki/Keppel_Castle', articleLanguage: 'en' },
+    { id: 'Q2', label: 'Kasteel Keppel', lat: 52 + 5 * M, lng: 6, wikipediaUrl: 'https://nl.wikipedia.org/wiki/Kasteel_Keppel', articleLanguage: 'nl' },
+  ];
+  const out = dedupeByProximity(input, { languages: ['nl', 'en', 'fr', 'de'] });
+  const expected = { count: 1, id: 'Q2', label: 'Kasteel Keppel (Keppel Castle)' };
+  const actual = { count: out.length, id: out[0] && out[0].id, label: out[0] && out[0].label };
+  return { ok: eq(actual, expected), expected, actual };
+});
+
+scenario('0.17.0: gelijke taal of taal buiten de lijst → eerst gevonden item blijft', () => {
+  const input = [
+    { id: 'Q1', label: 'A', lat: 52, lng: 6, wikipediaUrl: 'https://it.wikipedia.org/wiki/A', articleLanguage: 'it' },
+    { id: 'Q2', label: 'B', lat: 52, lng: 6, wikipediaUrl: 'https://es.wikipedia.org/wiki/B', articleLanguage: 'es' },
+  ];
+  const out = dedupeByProximity(input, { languages: ['nl', 'en'] });
+  const expected = ['Q1'];
+  const actual = out.map((o) => o.id);
+  return { ok: eq(actual, expected), expected, actual };
+});
+
+scenario('0.17.0: met languages wint een artikel nog steeds van geen artikel', () => {
+  const input = [
+    { id: 'Q1', label: 'A', lat: 52, lng: 6, wikipediaUrl: null },
+    { id: 'Q2', label: 'B', lat: 52, lng: 6, wikipediaUrl: 'https://de.wikipedia.org/wiki/B', articleLanguage: 'de' },
+  ];
+  const out = dedupeByProximity(input, { languages: ['nl', 'en'] });
+  const expected = ['Q2'];
+  const actual = out.map((o) => o.id);
+  return { ok: eq(actual, expected), expected, actual };
+});
+
 let allPassed = true;
 for (const s of scenarios) {
   let result;
