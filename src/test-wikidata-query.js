@@ -288,13 +288,31 @@ test('A1: andere naam in dezelfde taal blijft staan', () => {
   assert.strictEqual(r.label, 'kasteel Bredevoort');
 });
 
-test('A1: artikel niet in de eerste taal → kleine letter blijft', () => {
+test('A1 (0.17.4): artikel in tweede taal, naam in dezelfde taal → titel', () => {
   const data = bredevoort('château de Bredevoort', 'fr', undefined);
   delete data.results.bindings[0].art0;
   data.results.bindings[0].art1 = { value: 'https://fr.wikipedia.org/wiki/Ch%C3%A2teau_de_Bredevoort' };
   const r = parseSparqlResults(data, ['nl', 'fr'])[0];
   assert.strictEqual(r.articleLanguage, 'fr');
-  assert.strictEqual(r.label, 'château de Bredevoort');
+  assert.strictEqual(r.label, 'Château de Bredevoort');
+  assert.strictEqual(r.naamWikidata, undefined);
+});
+
+test('0.17.4: artikel niet in de eerste taal, naam in andere taal → blijft', () => {
+  const data = bredevoort('chateau Bredevoort', 'en', undefined);
+  delete data.results.bindings[0].art0;
+  data.results.bindings[0].art1 = { value: 'https://fr.wikipedia.org/wiki/Ch%C3%A2teau_de_Bredevoort' };
+  const r = parseSparqlResults(data, ['nl', 'fr'])[0];
+  assert.strictEqual(r.label, 'chateau Bredevoort');
+});
+
+test('0.17.4: artikel niet in de eerste taal, echt andere naam → blijft', () => {
+  const data = bredevoort('église Sainte-Amélie', 'fr', undefined);
+  delete data.results.bindings[0].art0;
+  data.results.bindings[0].art1 = { value: 'https://fr.wikipedia.org/wiki/%C3%89glise_Sainte-Am%C3%A9lie_de_Dun-les-Places' };
+  const r = parseSparqlResults(data, ['nl', 'fr'])[0];
+  assert.strictEqual(r.label, 'église Sainte-Amélie');
+  assert.strictEqual(r.naamWikidata, undefined);
 });
 
 console.log('\nAlle ' + passed + ' tests geslaagd.');

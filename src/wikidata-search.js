@@ -356,13 +356,20 @@
    * Bredevoort" — op de Franse Wikidata beginnen namen gewoonlijk met een
    * kleine letter), dan wordt de titel de naam, ook als de naam al in de
    * eerste taal is. Dat is geen andere naam, dus naamWikidata blijft leeg.
+   * Sinds 0.17.4 ook als het artikel niet in de eerste taal is, mits naam
+   * en artikel in dezelfde taal zijn ("église Sainte-Amélie …" bij nl → fr).
    *
    * @param {object} result - één resultaat van parseSparqlResults (wordt aangepast)
    * @param {string[]} languages
    */
   function naamUitArtikel(result, languages) {
     const eerste = Array.isArray(languages) && languages.length > 0 ? languages[0] : null;
-    if (!eerste || result.articleLanguage !== eerste || !result.wikipediaUrl) return;
+    if (!eerste || !result.articleLanguage || !result.wikipediaUrl) return;
+    const labelTaal = String(result.labelLanguage || '').toLowerCase().split('-')[0];
+    const inEersteTaal = result.articleLanguage === eerste;
+    // Buiten de eerste taal alleen de hoofdletterregel, en alleen bij een
+    // naam in dezelfde taal als het artikel (0.17.4).
+    if (!inEersteTaal && labelTaal !== result.articleLanguage) return;
     const m = /\.wikipedia\.org\/wiki\/([^?#]+)/i.exec(result.wikipediaUrl);
     if (!m) return;
     let titel;
@@ -380,7 +387,7 @@
       result.label = naam;
       return;
     }
-    const labelTaal = String(result.labelLanguage || '').toLowerCase().split('-')[0];
+    if (!inEersteTaal) return;
     if (!zonderNaam && (!labelTaal || labelTaal === eerste)) return;
     if (!zonderNaam) result.naamWikidata = result.label;
     result.label = naam;
