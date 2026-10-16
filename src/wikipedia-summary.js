@@ -98,11 +98,22 @@
   }
 
   /**
+   * Staat er vlak vóór de punt op `dotIndex` een getal van één of twee
+   * cijfers? Dan is het (vooral in het Duits) vrijwel altijd een
+   * rangtelwoord — "im 17. Jahrhundert", "am 3. Mai" — en geen zinseinde
+   * (0.17.2). Jaartallen (3–4 cijfers, "1582.") tellen wel als zinseinde.
+   */
+  function isOrdinalBefore(text, dotIndex) {
+    return /(?:^|[\s(„“"'«])\d{1,2}$/.test(text.slice(0, dotIndex));
+  }
+
+  /**
    * Verkort platte tekst tot de eerste `maxSentences` zinnen. Eenvoudige,
    * dependency-vrije zinsdetectie: splitst op een punt/uitroepteken/
    * vraagteken gevolgd door een spatie en een hoofdletter (of het einde
-   * van de tekst). Dit is geen perfecte NLP-zinsdetectie (jaartallen als
-   * "22 sept." kunnen in theorie verkeerd breken), maar voor korte
+   * van de tekst). Een punt na een afkorting of na een getal van één of
+   * twee cijfers (Duits rangtelwoord, behalve aan het eind van de tekst)
+   * telt niet. Dit is geen perfecte NLP-zinsdetectie, maar voor korte
    * encyclopedische samenvattingen in de praktijk ruim voldoende.
    *
    * @param {string} text
@@ -123,6 +134,8 @@
     let match;
     while ((match = boundary.exec(clean)) !== null) {
       if (match[0][0] === '.' && isAbbreviationBefore(clean, match.index)) continue;
+      const aanHetEind = match.index + match[0].length >= clean.length;
+      if (match[0][0] === '.' && !aanHetEind && isOrdinalBefore(clean, match.index)) continue;
       count += 1;
       end = match.index + match[0].length;
       if (count >= maxSentences) break;
@@ -390,6 +403,7 @@
     fetchFullBodyExtract,
     truncateToSentences,
     isAbbreviationBefore,
+    isOrdinalBefore,
     stripSectionHeadings,
     fetchSummary,
     fetchSummariesForCandidates,

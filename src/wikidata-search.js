@@ -328,6 +328,7 @@
         result.articleLanguage = m ? m[1].toLowerCase() : null;
         if (result.articleLanguage) result.articles[result.articleLanguage] = result.wikipediaUrl;
       }
+      naamUitArtikel(result, languages);
       if (b.propertyValue && b.propertyValue.value !== undefined) {
         result.propertyValue = b.propertyValue.value;
       }
@@ -338,6 +339,41 @@
       results.push(result);
     }
     return results;
+  }
+
+  /**
+   * Naam uit de titel van het artikel (0.17.1, keuze 7A): is het artikel in
+   * de eerste taal van de lijst (meestal de telefoontaal) en de Wikidata-naam
+   * niet (Engels, Duits, 'mul', of helemaal geen naam), dan wordt de titel
+   * van dat artikel de naam — zonder toevoeging tussen haakjes. Wikidata
+   * heeft voor veel items geen naam in elke taal (Q2769348 "Keppel Castle"
+   * heeft een nl-artikel "Kasteel Keppel", maar geen Nederlandse naam). De
+   * oude naam blijft bewaard in `naamWikidata`. Is de taal van de naam
+   * onbekend (geen xml:lang), dan blijft hij staan.
+   *
+   * @param {object} result - één resultaat van parseSparqlResults (wordt aangepast)
+   * @param {string[]} languages
+   */
+  function naamUitArtikel(result, languages) {
+    const eerste = Array.isArray(languages) && languages.length > 0 ? languages[0] : null;
+    if (!eerste || result.articleLanguage !== eerste || !result.wikipediaUrl) return;
+    const zonderNaam = !result.label || result.label === result.id;
+    const labelTaal = String(result.labelLanguage || '').toLowerCase().split('-')[0];
+    if (!zonderNaam && (!labelTaal || labelTaal === eerste)) return;
+    const m = /\.wikipedia\.org\/wiki\/([^?#]+)/i.exec(result.wikipediaUrl);
+    if (!m) return;
+    let titel;
+    try {
+      titel = decodeURIComponent(m[1]);
+    } catch (e) {
+      titel = m[1];
+    }
+    titel = titel.replace(/_/g, ' ').trim();
+    const naam = titel.replace(/\s*\([^)]*\)\s*$/, '').trim() || titel;
+    if (!naam || naam === result.label) return;
+    if (!zonderNaam) result.naamWikidata = result.label;
+    result.label = naam;
+    result.labelLanguage = eerste;
   }
 
   /**
@@ -702,6 +738,7 @@
     buildBoxQuery,
     parseWktPoint,
     parseSparqlResults,
+    naamUitArtikel,
     dedupeById,
     dedupeByProximity,
     searchWikidataBox,

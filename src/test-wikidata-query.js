@@ -185,4 +185,66 @@ test('parse: oud formaat met ?article (taal uit URL)', () => {
   assert.ok(r[0].wikipediaUrl.includes('Walburgiskerk'));
 });
 
+// --- 0.17.1: naam uit de titel van het artikel (keuze 7A) ------------------
+
+const keppel = (labelLang, extra) => ({
+  results: {
+    bindings: [
+      Object.assign(
+        {
+          item: ent('Q2769348'),
+          itemLabel: labelLang ? { value: 'Keppel Castle', 'xml:lang': labelLang } : { value: 'Keppel Castle' },
+          location: pt(6.22714, 51.99354),
+          art0: { value: 'https://nl.wikipedia.org/wiki/Kasteel_Keppel' },
+          art1: { value: 'https://en.wikipedia.org/wiki/Keppel_Castle' },
+        },
+        extra || {}
+      ),
+    ],
+  },
+});
+
+test('7A: Engelse naam + nl-artikel → naam uit titel, taal nl, oude naam bewaard', () => {
+  const r = parseSparqlResults(keppel('en'), languages)[0];
+  assert.strictEqual(r.label, 'Kasteel Keppel');
+  assert.strictEqual(r.labelLanguage, 'nl');
+  assert.strictEqual(r.naamWikidata, 'Keppel Castle');
+});
+
+test("7A: naam 'mul' + nl-artikel → naam uit titel", () => {
+  const r = parseSparqlResults(keppel('mul'), languages)[0];
+  assert.strictEqual(r.label, 'Kasteel Keppel');
+});
+
+test('7A: Nederlandse naam blijft staan', () => {
+  const r = parseSparqlResults(keppel('nl'), languages)[0];
+  assert.strictEqual(r.label, 'Keppel Castle');
+  assert.strictEqual(r.naamWikidata, undefined);
+});
+
+test('7A: taal van de naam onbekend → naam blijft staan', () => {
+  const r = parseSparqlResults(keppel(null), languages)[0];
+  assert.strictEqual(r.label, 'Keppel Castle');
+});
+
+test('7A: artikel niet in de eerste taal → naam blijft staan', () => {
+  const r = parseSparqlResults(keppel('de', { art0: undefined }), languages)[0];
+  assert.strictEqual(r.articleLanguage, 'en');
+  assert.strictEqual(r.label, 'Keppel Castle');
+});
+
+test('7A: toevoeging tussen haakjes vervalt, codering wordt ontcijferd', () => {
+  const r = parseSparqlResults(
+    keppel('fr', { art0: { value: 'https://nl.wikipedia.org/wiki/Kasteel_van_Ch%C3%A2tillon_(Bourgogne)' } }),
+    languages
+  )[0];
+  assert.strictEqual(r.label, 'Kasteel van Châtillon');
+});
+
+test('7A: geen naam (label = QID) → naam uit titel, geen naamWikidata', () => {
+  const r = parseSparqlResults(keppel(null, { itemLabel: { value: 'Q2769348' } }), languages)[0];
+  assert.strictEqual(r.label, 'Kasteel Keppel');
+  assert.strictEqual(r.naamWikidata, undefined);
+});
+
 console.log('\nAlle ' + passed + ' tests geslaagd.');

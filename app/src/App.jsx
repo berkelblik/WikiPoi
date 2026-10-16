@@ -436,7 +436,8 @@ function App() {
   // Goedkope stap die wél bij elke sliderbeweging draait: binnen/buiten de
   // corridor markeren.
   // Artikel via de ligging gevonden (stap 6, 0.17.0): naam, artikel en
-  // taal van dat artikel; de oorspronkelijke naam blijft bewaard.
+  // taal van dat artikel; de oorspronkelijke naam blijft bewaard
+  // (naamWikidata, net als bij de naam uit de artikeltitel, 0.17.1).
   const mapPois = useMemo(
     () =>
       routeMeasuredPois.map((p) => {
@@ -1877,6 +1878,11 @@ function App() {
                         <CategoryDot categoryKey={poi.categoryKey} />
                         {poi.label}
                       </span>
+                      {poi.naamWikidata && !entry.viaLigging && (
+                        <p className="summary-text muted">
+                          Naam uit het artikel; in Wikidata: „{poi.naamWikidata}”.
+                        </p>
+                      )}
                       {entry.summary && entry.summary.viaWikidata ? (
                         <p className="summary-text">
                           <span className="muted">Geen artikel. Samengesteld uit Wikidata: </span>
