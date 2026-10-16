@@ -13,12 +13,28 @@
  * De track wordt tijdens de rit om de OPSLAAN_MS bewaard (localStorage),
  * zodat hij ook na een herstart van de app nog te delen is. Puur en in Node
  * te testen (test-track.js): opslag en klok zijn in te spuiten.
+ *
+ * Pauze (0.18.1, keuze P1–P4): blijft de gefilterde positie PAUZE_NA_MS
+ * binnen PAUZE_STRAAL_M van het laatste bewegingspunt, dan pauzeert de
+ * opname (ook de ruwe metingen); zodra de positie meer dan HERVAT_M van het
+ * pauzepunt af is, gaat hij verder in een nieuw segment (GPX <trkseg>, op de
+ * kaart een gat). Werkt ook als er geen posities binnenkomen (tik(), elke
+ * seconde vanuit useOnderweg). Een pauze korter dan KORTE_PAUZE_MS telt niet
+ * (geen nieuw segment): zo knipt langzaam wandelen de track niet in stukjes.
+ * Pauzes: data.pauzes = [{ van, tot, start, eind, lat, lng }]; tot = tijd
+ * (GPS-klok) van het eerste punt na de pauze, start/eind = klok van het
+ * toestel (voor de duur). Een punt hoort bij segment n = aantal pauzes met
+ * tot <= tijd van het punt.
  */
 
 export const OPSLAG_SLEUTEL = 'wikipoi-track'
 export const MAX_PUNTEN = 20000
 export const MAX_WEGGEGOOID_WPT = 2000
 export const OPSLAAN_MS = 30000
+export const PAUZE_NA_MS = 3000
+export const PAUZE_STRAAL_M = 5
+export const HERVAT_M = 8
+export const KORTE_PAUZE_MS = 10000
 
 // Statuscodes in de compacte opslag.
 const CODE = { geaccepteerd: 'g', nauwkeurigheid: 'n', sprong: 's' }
@@ -35,9 +51,37 @@ function standaardOpslag() {
 
 const rond = (x, n) => (Number.isFinite(x) ? Number(x.toFixed(n)) : null)
 
+// Haversine in meters (zelfde formule als geo.js; hier los, zodat track.js
+// zonder andere modules werkt).
+function meters(a, b) {
+  const r = (g) => (g * Math.PI) / 180
+  const dLat = r(b.lat - a.lat)
+  const dLng = r(b.lng - a.lng)
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(r(a.lat)) * Math.cos(r(b.lat)) * Math.sin(dLng / 2) ** 2
+  return 6371e3 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h))
+}
+
 export function maakTrack({ nu = () => Date.now(), opslag = standaardOpslag() } = {}) {
   let data = null
   let laatstOpgeslagen = 0
+  // Laatste bewegingspunt { lat, lng, ontvangen } en de lopende pauze.
+  let anker = null
+  let pauze = null
+
+  function openPauze() {
+    pauze = { van: null, tot: null, start: nu(), eind: null, lat: rond(anker.lat, 6), lng: rond(anker.lng, 6) }
+    const laatste = data.gefilterd[data.gefilterd.length - 1]
+    pauze.van = laatste ? laatste[0] : null
+    data.pauzes.push(pauze)
+    opslaan(true)
+  }
+
+  function sluitPauze(tijd) {
+    pauze.tot = tijd
+    pauze.eind = nu()
+    if (pauze.eind - pauze.start < KORTE_PAUZE_MS) data.pauzes.pop()
+    pauze = null
+  }
 
   function opslaan(dwingend) {
     if (!opslag || !data) return
@@ -52,27 +96,64 @@ export function maakTrack({ nu = () => Date.now(), opslag = standaardOpslag() } 
 
   return {
     begin(bron) {
-      data = { start: nu(), eind: null, bron: bron || '', ruw: [], gefilterd: [] }
+      data = { start: nu(), eind: null, bron: bron || '', ruw: [], gefilterd: [], pauzes: [] }
       laatstOpgeslagen = 0
+      anker = null
+      pauze = null
       opslaan(true)
     },
-    /** Ruwe meting met de uitkomst van het filter. */
+    /** Ruwe meting met de uitkomst van het filter (genegeerd tijdens een pauze). */
     meting({ lat, lng, nauwkeurigheid, tijd }, status) {
-      if (!data || data.ruw.length >= MAX_PUNTEN || !CODE[status]) return
+      if (!data || pauze || data.ruw.length >= MAX_PUNTEN || !CODE[status]) return
       data.ruw.push([tijd || nu(), rond(lat, 6), rond(lng, 6), rond(nauwkeurigheid, 1), CODE[status]])
       opslaan(false)
     },
-    /** Getoonde (gefilterde) positie. */
+    /**
+     * Getoonde (gefilterde) positie. Roep dit aan vóór meting() van dezelfde
+     * GPS-meting, zodat die na het hervatten in het nieuwe segment komt.
+     */
     positie({ lat, lng, tijd }) {
       if (!data || data.gefilterd.length >= MAX_PUNTEN) return
-      data.gefilterd.push([tijd || nu(), rond(lat, 6), rond(lng, 6)])
+      const t = tijd || nu()
+      const p = { lat, lng }
+      if (pauze) {
+        if (meters(pauze, p) <= HERVAT_M) return
+        sluitPauze(t)
+        anker = { lat, lng, ontvangen: nu() }
+      } else if (!anker || meters(anker, p) > PAUZE_STRAAL_M) {
+        anker = { lat, lng, ontvangen: nu() }
+      } else if (nu() - anker.ontvangen >= PAUZE_NA_MS) {
+        openPauze()
+        return
+      }
+      data.gefilterd.push([t, rond(lat, 6), rond(lng, 6)])
       opslaan(false)
     },
+    /** Elke seconde: pauze ook zonder nieuwe posities (simulatie op pauze, GPS-gat). */
+    tik() {
+      if (data && !pauze && anker && nu() - anker.ontvangen >= PAUZE_NA_MS) openPauze()
+    },
+    /** True zolang de opname gepauzeerd is. */
+    gepauzeerd: () => !!pauze,
     stop() {
       if (!data) return
+      // Een pauze die bij het stoppen nog loopt, is geen pauze maar het einde.
+      if (pauze) data.pauzes.pop()
+      pauze = null
+      anker = null
       data.eind = nu()
       opslaan(true)
       data = null
+    },
+    /** Bewaarde track weggooien (niet tijdens een rit). */
+    wis() {
+      if (data || !opslag) return
+      try {
+        if (opslag.removeItem) opslag.removeItem(OPSLAG_SLEUTEL)
+        else opslag.setItem(OPSLAG_SLEUTEL, '')
+      } catch {
+        // Niet te wissen: niets aan te doen.
+      }
     },
     /** Lopende track (of null). */
     huidig: () => data,
@@ -94,15 +175,50 @@ export function lijnVan(data) {
   return data && Array.isArray(data.gefilterd) ? data.gefilterd.map((p) => [p[1], p[2]]) : []
 }
 
-/** Lengte van de gefilterde track in meters. */
+/** Afgesloten pauzes (tot bekend), ook bij een track van vóór 0.18.1. */
+function afgeslotenPauzes(data) {
+  return ((data && data.pauzes) || []).filter((p) => p && Number.isFinite(p.tot))
+}
+
+/** Punten ([t, …]) per segment: [[punt, …], …]; lege segmenten weggelaten. */
+export function segmenteer(punten, data) {
+  const grenzen = afgeslotenPauzes(data)
+    .map((p) => p.tot)
+    .sort((a, b) => a - b)
+  const segmenten = []
+  ;(punten || []).forEach((p) => {
+    let n = 0
+    while (n < grenzen.length && grenzen[n] <= p[0]) n += 1
+    if (!segmenten[n]) segmenten[n] = []
+    segmenten[n].push(p)
+  })
+  return segmenten.filter(Boolean)
+}
+
+/** Lijnen voor de kaart, één per segment: [[[lat, lng], …], …]. */
+export function segmentenVan(data) {
+  if (!data || !Array.isArray(data.gefilterd)) return []
+  return segmenteer(data.gefilterd, data).map((seg) => seg.map((p) => [p[1], p[2]]))
+}
+
+/** Lengte van de gefilterde track in meters (zonder de sprongen over pauzes). */
 export function lengteVan(data, afstand) {
-  const lijn = lijnVan(data)
   let m = 0
-  for (let i = 1; i < lijn.length; i++) {
-    const d = afstand({ lat: lijn[i - 1][0], lng: lijn[i - 1][1] }, { lat: lijn[i][0], lng: lijn[i][1] })
-    if (Number.isFinite(d)) m += d
-  }
+  segmentenVan(data).forEach((lijn) => {
+    for (let i = 1; i < lijn.length; i++) {
+      const d = afstand({ lat: lijn[i - 1][0], lng: lijn[i - 1][1] }, { lat: lijn[i][0], lng: lijn[i][1] })
+      if (Number.isFinite(d)) m += d
+    }
+  })
   return m
+}
+
+/** Pauzes en tijd onderweg: { aantal, pauzeMs, onderwegMs } (onderwegMs null bij lopende rit). */
+export function pauzesVan(data) {
+  const pauzes = afgeslotenPauzes(data)
+  const pauzeMs = pauzes.reduce((som, p) => som + Math.max(0, (p.eind || 0) - (p.start || 0)), 0)
+  const onderwegMs = data && data.eind && data.start ? Math.max(0, data.eind - data.start - pauzeMs) : null
+  return { aantal: pauzes.length, pauzeMs, onderwegMs }
 }
 
 /** Telling per status van de ruwe metingen. */
@@ -162,14 +278,25 @@ export function alsGpx(data, { maker = 'WikiPoi', naam = 'WikiPoi-rit' } = {}) {
       `  <wpt lat="${lat}" lon="${lng}"><time>${isoTijd(t)}</time><name>${xml('weggegooid: ' + reden)}</name></wpt>`
     )
   })
+  afgeslotenPauzes(data).forEach((p) => {
+    if (p.lat === null || p.lng === null || !Number.isFinite(p.start)) return
+    const ms = (p.eind || p.start) - p.start
+    const duur = ms < 59500 ? `${Math.round(ms / 1000)} s` : `${Math.round(ms / 60000)} min`
+    regels.push(
+      `  <wpt lat="${p.lat}" lon="${p.lng}"><time>${isoTijd(p.start)}</time><name>${xml(`pauze (${duur})`)}</name></wpt>`
+    )
+  })
   const trk = (titel, punten) => {
     regels.push('  <trk>')
     regels.push(`    <name>${xml(titel)}</name>`)
-    regels.push('    <trkseg>')
-    punten.forEach((p) => {
-      if (p[1] !== null && p[2] !== null) regels.push(trkpt(p[1], p[2], p[0]))
+    const segmenten = segmenteer(punten, data)
+    ;(segmenten.length ? segmenten : [[]]).forEach((seg) => {
+      regels.push('    <trkseg>')
+      seg.forEach((p) => {
+        if (p[1] !== null && p[2] !== null) regels.push(trkpt(p[1], p[2], p[0]))
+      })
+      regels.push('    </trkseg>')
     })
-    regels.push('    </trkseg>')
     regels.push('  </trk>')
   }
   trk('Gefilterd', data.gefilterd || [])

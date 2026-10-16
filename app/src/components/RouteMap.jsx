@@ -18,8 +18,9 @@
  * richting. De kaart volgt de positie; zelf schuiven zet het volgen uit,
  * de knop "Volg mij" (linksboven) zet het weer aan.
  *
- * Stap 8 (0.18.0): de afgelegde track (prop track, [[lat, lng], …]) als
- * groene lijn, en per POI de triggerstraal (prop straalCirkels,
+ * Stap 8 (0.18.0): de afgelegde track (prop track: per segment een lijn
+ * [[[lat, lng], …], …], sinds 0.18.1; één lijn mag ook) als groene
+ * onderbroken lijn, en per POI de triggerstraal (prop straalCirkels,
  * [{ id, lat, lng, straal, voorgelezen }]) als cirkel rond het triggerpunt;
  * al voorgelezen POI's krijgen een grijze cirkel.
  *
@@ -280,12 +281,18 @@ function RouteMap({
     })
   }, [straalCirkels])
 
-  // Afgelegde track (stap 8): één lijn, bij elke nieuwe positie bijgewerkt.
+  // Afgelegde track (stap 8): groene onderbroken lijn, één deel per segment
+  // (0.18.1: na een pauze een nieuw segment, dus een gat), bij elke nieuwe
+  // positie bijgewerkt. Ook een enkele lijn [[lat, lng], …] wordt aanvaard.
   useEffect(() => {
     const map = mapRef.current
     if (!map) return
-    const lijn = Array.isArray(track) ? track : []
-    if (lijn.length < 2) {
+    const invoer = Array.isArray(track) ? track : []
+    const segmenten = (invoer.length && typeof invoer[0][0] === 'number' ? [invoer] : invoer).filter(
+      (seg) => Array.isArray(seg) && seg.length >= 2
+    )
+    const lijn = segmenten
+    if (lijn.length === 0) {
       if (trackLayerRef.current) map.removeLayer(trackLayerRef.current)
       trackLayerRef.current = null
       return
@@ -294,7 +301,8 @@ function RouteMap({
       trackLayerRef.current = L.polyline(lijn, {
         color: COLOR_TRACK,
         weight: 4,
-        opacity: 0.85,
+        opacity: 0.9,
+        dashArray: '8 6',
         interactive: false,
       }).addTo(map)
     } else {

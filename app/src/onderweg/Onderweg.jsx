@@ -27,24 +27,34 @@
  * afloop toont stap 8 het logboek van de laatste rit (logboek.js), met
  * knoppen om het te bekijken en te delen.
  *
- * 0.18.0: keuze "Straal: Automatisch / Alleen vervoerwijze" (bewaard in
- * localStorage wikipoi.straalModus); de triggerstraal staat als cirkel op
- * de kaart, de afgelegde track als groene lijn. Na afloop "Track delen
- * (GPX)" (track.js): gefilterde en ruwe track plus de weggegooide metingen.
+ * 0.18.0: de triggerstraal staat als cirkel op de kaart, de afgelegde
+ * track als groene lijn (track.js).
+ *
+ * 0.18.1 (keuzes S1, T, G, P1–P4): opgeruimd, knoppen zonder vragen.
+ *   - Straal altijd die van de vervoerwijze; de knoppen zeggen het zelf
+ *     ("Fietser — meldt een POI 100 m vooraf").
+ *   - Vinkje "Track opnemen" (standaard aan, bewaard in localStorage
+ *     wikipoi.trackOpnemen). Tijdens de rit "Track: … opgenomen" of "Track
+ *     gepauzeerd (stilstand)"; de track is een groene onderbroken lijn.
+ *   - Na de rit: samenvatting (afstand, tijd onderweg, pauzes) met "Track
+ *     opslaan (GPX)" en "Track weggooien" (met bevestiging).
+ *   - Indeling: vervoerwijze → Track opnemen → Route starten → rit → track
+ *     van de laatste rit → ingeklapt blok "Testen" (simulatie,
+ *     Achtergrond-GPS, filtertellers, logboek).
  */
 import { useState, useMemo } from 'react'
 import { Capacitor } from '@capacitor/core'
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem'
 import { Share } from '@capacitor/share'
+import { useOnderweg, VERVOER, STANDAARD_VERVOER, triggerStraal } from './useOnderweg.js'
 import {
-  useOnderweg,
-  VERVOER,
-  STANDAARD_VERVOER,
-  STRAAL_MODI,
-  STANDAARD_STRAAL_MODUS,
-  triggerStraal,
-} from './useOnderweg.js'
-import { track as trackOpslag, alsGpx, bestandsnaam, lengteVan, tellingVan } from './track.js'
+  track as trackOpslag,
+  alsGpx,
+  bestandsnaam,
+  lengteVan,
+  tellingVan,
+  pauzesVan,
+} from './track.js'
 import { achtergrondMogelijk } from './positieBron.js'
 import { logboek, analyseer, alsTekst, duurTekst, tijdTekst } from './logboek.js'
 import EcoScherm from './EcoScherm.jsx'
@@ -68,23 +78,61 @@ const TEST_ACHTERGROND = true
 // met dichtstbijzijnde POI's eronder in beeld blijft).
 const KAART_HOOGTE = '260px'
 
-const STRAAL_SLEUTEL = 'wikipoi.straalModus'
+const TRACK_SLEUTEL = 'wikipoi.trackOpnemen'
 
-function laadStraalModus() {
+function laadTrackOpnemen() {
   try {
-    const v = localStorage.getItem(STRAAL_SLEUTEL)
-    return v && STRAAL_MODI[v] ? v : STANDAARD_STRAAL_MODUS
+    return localStorage.getItem(TRACK_SLEUTEL) !== 'nee'
   } catch {
-    return STANDAARD_STRAAL_MODUS
+    return true
   }
 }
 
-function bewaarStraalModus(v) {
+function bewaarTrackOpnemen(aan) {
   try {
-    localStorage.setItem(STRAAL_SLEUTEL, v)
+    localStorage.setItem(TRACK_SLEUTEL, aan ? 'ja' : 'nee')
   } catch {
     // Geen opslag: de keuze geldt alleen deze sessie.
   }
+}
+
+// "40 s", "48 min" of "1 u 12 min".
+function ritDuur(ms) {
+  if (!Number.isFinite(ms)) return '?'
+  if (ms < 59500) return `${Math.round(ms / 1000)} s`
+  const min = Math.round(ms / 60000)
+  if (min < 60) return `${min} min`
+  return `${Math.floor(min / 60)} u ${min % 60} min`
+}
+
+// "16-10 14:05" (lokale tijd).
+function ritMoment(ms) {
+  const d = new Date(ms)
+  const twee = (n) => String(n).padStart(2, '0')
+  return `${twee(d.getDate())}-${twee(d.getMonth() + 1)} ${twee(d.getHours())}:${twee(d.getMinutes())}`
+}
+
+// Lengte van de lijnen op de kaart ([[[lat, lng], …], …]) in meters.
+function lengteLijnen(lijnen) {
+  let m = 0
+  ;(lijnen || []).forEach((lijn) => {
+    for (let i = 1; i < lijn.length; i++) {
+      const d = afstand({ lat: lijn[i - 1][0], lng: lijn[i - 1][1] }, { lat: lijn[i][0], lng: lijn[i][1] })
+      if (Number.isFinite(d)) m += d
+    }
+  })
+  return m
+}
+
+// "Track laatste rit (16-10 14:05): 12,4 km · 48 min onderweg · 3 pauzes (14 min)"
+function trackSamenvatting(data) {
+  const p = pauzesVan(data)
+  const delen = [formatAfstand(lengteVan(data, afstand))]
+  if (p.onderwegMs !== null) delen.push(`${ritDuur(p.onderwegMs)} onderweg`)
+  else delen.push('niet afgesloten')
+  if (p.aantal === 0) delen.push('geen pauzes')
+  else delen.push(`${p.aantal} ${p.aantal === 1 ? 'pauze' : 'pauzes'} (${ritDuur(p.pauzeMs)})`)
+  return `Track laatste rit (${ritMoment(data.start)}): ${delen.join(' · ')}`
 }
 
 // "3,2" (km, één decimaal, komma).
@@ -113,8 +161,11 @@ function Onderweg({ pois, summariesById, routePunten }) {
   const [achtergrondAan, setAchtergrondAan] = useState(false)
   const [logboekTonen, setLogboekTonen] = useState(false)
   const [logboekMelding, setLogboekMelding] = useState('')
-  const [straalModus, setStraalModus] = useState(laadStraalModus)
+  const [trackOpnemen, setTrackOpnemen] = useState(laadTrackOpnemen)
   const [trackMelding, setTrackMelding] = useState('')
+  const [weggooienVragen, setWeggooienVragen] = useState(false)
+  // Na "Track weggooien" de (al gelezen) track niet meer tonen.
+  const [weggegooid, setWeggegooid] = useState(false)
   const simulatieMogelijk =
     TEST_SIMULATIE && Array.isArray(routePunten) && routePunten.length >= 2
   const achtergrondKeuze = TEST_ACHTERGROND && achtergrondMogelijk()
@@ -141,13 +192,14 @@ function Onderweg({ pois, summariesById, routePunten }) {
     simVersnelling,
     simVolgendePoi,
     trackLijn,
+    trackGepauzeerd,
   } = useOnderweg(pois, {
     vervoer,
     samenvattingen: summariesById,
     eco: ecoOpen,
     simulatie: simulatieGekozen ? routePunten : null,
     achtergrond: achtergrondGekozen,
-    straalModus,
+    trackOpnemen,
   })
 
   // Triggerstraal per POI rond het triggerpunt, voor de kaart.
@@ -159,21 +211,33 @@ function Onderweg({ pois, summariesById, routePunten }) {
           id: p.id,
           lat: t.lat,
           lng: t.lng,
-          straal: triggerStraal(p, vervoer, straalModus),
+          straal: triggerStraal(vervoer),
           voorgelezen: !!voorgelezen[p.id],
         }
       }),
-    [pois, vervoer, straalModus, voorgelezen]
+    [pois, vervoer, voorgelezen]
   )
 
-  const kiesStraalModus = (v) => {
-    setStraalModus(v)
-    bewaarStraalModus(v)
+  const kiesTrackOpnemen = (aan) => {
+    setTrackOpnemen(aan)
+    bewaarTrackOpnemen(aan)
   }
 
   // Track van de laatste rit (ook van een eerdere app-sessie).
-  const vorigeTrack = useMemo(() => (!actief ? trackOpslag.laad() : null), [actief])
+  const bewaardeTrack = useMemo(() => {
+    if (actief) return null
+    const d = trackOpslag.laad()
+    return d && Array.isArray(d.gefilterd) && d.gefilterd.length > 0 ? d : null
+  }, [actief])
+  const vorigeTrack = weggegooid ? null : bewaardeTrack
   const vorigeTrackTelling = vorigeTrack ? tellingVan(vorigeTrack) : null
+
+  const gooiTrackWeg = () => {
+    trackOpslag.wis()
+    setWeggooienVragen(false)
+    setTrackMelding('Track weggegooid.')
+    setWeggegooid(true)
+  }
 
   const deelTrack = async () => {
     setTrackMelding('')
@@ -187,8 +251,8 @@ function Onderweg({ pois, summariesById, routePunten }) {
           directory: Directory.Cache,
           encoding: Encoding.UTF8,
         })
-        await Share.share({ title: naam, files: [geschreven.uri], dialogTitle: 'Track delen of opslaan' })
-        setTrackMelding(`"${naam}" is aangeboden om te delen of op te slaan.`)
+        await Share.share({ title: naam, files: [geschreven.uri], dialogTitle: 'Track opslaan' })
+        setTrackMelding(`"${naam}" aangeboden; kies bijv. "Opslaan in Bestanden" of Drive.`)
       } else {
         const url = URL.createObjectURL(new Blob([gpx], { type: 'application/gpx+xml' }))
         const link = document.createElement('a')
@@ -203,10 +267,10 @@ function Onderweg({ pois, summariesById, routePunten }) {
     } catch (err) {
       const bericht = err && err.message ? err.message : String(err)
       if (/cancel/i.test(bericht)) {
-        setTrackMelding('Delen geannuleerd.')
+        setTrackMelding('Opslaan geannuleerd.')
         return
       }
-      setTrackMelding('Track delen mislukt: ' + bericht)
+      setTrackMelding('Track opslaan mislukt: ' + bericht)
     }
   }
 
@@ -234,6 +298,9 @@ function Onderweg({ pois, summariesById, routePunten }) {
 
   const routeStarten = () => {
     setSimMelding('')
+    setTrackMelding('')
+    setWeggooienVragen(false)
+    setWeggegooid(false)
     start()
     if (ECO_BIJ_START) setEcoOpen(true)
   }
@@ -250,14 +317,13 @@ function Onderweg({ pois, summariesById, routePunten }) {
   // Eigen POI's (CSV) hebben geen samenvatting nodig.
   const zonderSamenvatting = pois.filter((p) => !p.eigen && !(p.id in (summariesById || {}))).length
 
+  const testenZichtbaar = simulatieMogelijk || achtergrondKeuze || (TEST_ACHTERGROND && vorigeTrack) || vorigLogboek
+
   return (
     <>
       <p className="muted">
         Volgt je GPS-positie langs de route en leest elke POI één keer voor zodra je in de buurt
-        bent. Afstand = tot het punt op de route dat het dichtst bij de POI ligt. Triggerstraal:
-        {straalModus === 'vervoer'
-          ? ' alleen de straal van de vervoerwijze.'
-          : ' automatisch (straal van de vervoerwijze, of afstand POI–route + 50 m als dat meer is).'}
+        bent.
       </p>
       {zonderSamenvatting > 0 && (
         <p className="muted">
@@ -274,44 +340,21 @@ function Onderweg({ pois, summariesById, routePunten }) {
             aria-pressed={key === vervoer}
             onClick={() => setVervoer(key)}
           >
-            {v.label} ({v.straal} m)
+            {v.label} — meldt een POI {v.straal} m vooraf
           </button>
         ))}
       </div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '12px', alignItems: 'center' }}>
-        <span className="muted">Straal:</span>
-        {Object.entries(STRAAL_MODI).map(([key, m]) => (
-          <button
-            key={key}
-            type="button"
-            className={key === straalModus ? 'btn btn-yellow btn-small' : 'btn btn-indigo btn-small'}
-            aria-pressed={key === straalModus}
-            onClick={() => kiesStraalModus(key)}
-          >
-            {m.label}
-          </button>
-        ))}
-      </div>
-      {simulatieMogelijk && !actief && (
-        <label
-          className="muted"
-          style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}
-        >
-          <input type="checkbox" checked={simAan} onChange={(e) => setSimAan(e.target.checked)} />
-          Simulatie: rit langs de route zonder GPS (testmodus)
-        </label>
-      )}
-      {achtergrondKeuze && !actief && !simulatieGekozen && (
+      {!actief && (
         <label
           className="muted"
           style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}
         >
           <input
             type="checkbox"
-            checked={achtergrondAan}
-            onChange={(e) => setAchtergrondAan(e.target.checked)}
+            checked={trackOpnemen}
+            onChange={(e) => kiesTrackOpnemen(e.target.checked)}
           />
-          Achtergrond-GPS: blijft werken met het scherm uit (proef, met vaste melding)
+          Track opnemen (je afgelegde weg; pauzeert vanzelf als je stilstaat)
         </label>
       )}
       <button
@@ -392,6 +435,13 @@ function Onderweg({ pois, summariesById, routePunten }) {
           · voorgelezen: {aantalVoorgelezen} van {pois.length}
         </p>
       )}
+      {actief && trackOpnemen && (
+        <p className="muted">
+          {trackGepauzeerd
+            ? 'Track gepauzeerd (stilstand) — gaat verder zodra je weer beweegt.'
+            : `Track: ${formatAfstand(lengteLijnen(trackLijn))} opgenomen.`}
+        </p>
+      )}
       {actief && (
         <div className="map-frame" style={{ height: KAART_HOOGTE, marginBottom: '12px' }}>
           <RouteMap
@@ -423,59 +473,119 @@ function Onderweg({ pois, summariesById, routePunten }) {
                 {poi.label}{' '}
                 <span className="muted">
                   ({formatAfstand(poi.afstandTriggerpunt)}
-                  {poi.klok !== null ? `, op ${poi.klok} uur` : ''}, straal{' '}
-                  {formatAfstand(poi.straal)})
+                  {poi.klok !== null ? `, op ${poi.klok} uur` : ''})
                 </span>
               </span>
             </li>
           ))}
         </ul>
       )}
-      {vorigeTrack && vorigeTrack.ruw && vorigeTrack.ruw.length > 0 && (
+      {vorigeTrack && (
         <div style={{ marginTop: '16px' }}>
-          <p className="muted">
-            Track laatste rit: {formatAfstand(lengteVan(vorigeTrack, afstand))},{' '}
-            {vorigeTrack.gefilterd.length} posities; metingen {vorigeTrack.ruw.length}, waarvan
-            weggegooid {vorigeTrackTelling.nauwkeurigheid} (nauwkeurigheid) en{' '}
-            {vorigeTrackTelling.sprong} (sprong).
-          </p>
-          <button type="button" className="btn btn-indigo btn-small" onClick={deelTrack}>
-            Track delen (GPX)
-          </button>
-          {trackMelding && <p className="muted">{trackMelding}</p>}
-        </div>
-      )}
-      {vorigLogboek && (
-        <div style={{ marginTop: '16px' }}>
-          <p className="muted">Logboek laatste rit: {logboekSamenvatting(vorigLogboek)}</p>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '8px' }}>
-            <button type="button" className="btn btn-indigo btn-small" onClick={deelLogboek}>
-              Logboek delen
-            </button>
-            <button
-              type="button"
-              className="btn btn-indigo btn-small"
-              aria-pressed={logboekTonen}
-              onClick={() => setLogboekTonen((v) => !v)}
-            >
-              {logboekTonen ? 'Logboek verbergen' : 'Logboek tonen'}
-            </button>
-          </div>
-          {logboekMelding && <p className="muted">{logboekMelding}</p>}
-          {logboekTonen && (
-            <pre
-              style={{
-                whiteSpace: 'pre-wrap',
-                fontSize: '12px',
-                maxHeight: '320px',
-                overflow: 'auto',
-                userSelect: 'text',
-              }}
-            >
-              {alsTekst(vorigLogboek)}
-            </pre>
+          <p className="muted">{trackSamenvatting(vorigeTrack)}</p>
+          {weggooienVragen ? (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center' }}>
+              <span className="muted">Track definitief weggooien?</span>
+              <button type="button" className="btn btn-pink btn-small" onClick={gooiTrackWeg}>
+                Ja, weggooien
+              </button>
+              <button
+                type="button"
+                className="btn btn-indigo btn-small"
+                onClick={() => setWeggooienVragen(false)}
+              >
+                Nee, bewaren
+              </button>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+              <button type="button" className="btn btn-green btn-small" onClick={deelTrack}>
+                Track opslaan (GPX)
+              </button>
+              <button
+                type="button"
+                className="btn btn-indigo btn-small"
+                onClick={() => {
+                  setTrackMelding('')
+                  setWeggooienVragen(true)
+                }}
+              >
+                Track weggooien
+              </button>
+            </div>
           )}
         </div>
+      )}
+      {trackMelding && <p className="muted">{trackMelding}</p>}
+      {testenZichtbaar && (
+        <details style={{ marginTop: '16px' }}>
+          <summary className="muted" style={{ cursor: 'pointer' }}>
+            Testen
+          </summary>
+          <div style={{ marginTop: '8px' }}>
+            {simulatieMogelijk && !actief && (
+              <label
+                className="muted"
+                style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}
+              >
+                <input type="checkbox" checked={simAan} onChange={(e) => setSimAan(e.target.checked)} />
+                Simulatie: rit langs de route zonder GPS
+              </label>
+            )}
+            {achtergrondKeuze && !actief && !simulatieGekozen && (
+              <label
+                className="muted"
+                style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}
+              >
+                <input
+                  type="checkbox"
+                  checked={achtergrondAan}
+                  onChange={(e) => setAchtergrondAan(e.target.checked)}
+                />
+                Achtergrond-GPS: blijft werken met het scherm uit (proef, met vaste melding)
+              </label>
+            )}
+            {TEST_ACHTERGROND && vorigeTrack && vorigeTrack.ruw && vorigeTrack.ruw.length > 0 && (
+              <p className="muted">
+                Filter laatste rit: {vorigeTrack.gefilterd.length} posities; metingen{' '}
+                {vorigeTrack.ruw.length}, waarvan weggegooid {vorigeTrackTelling.nauwkeurigheid}{' '}
+                (nauwkeurigheid) en {vorigeTrackTelling.sprong} (sprong).
+              </p>
+            )}
+            {vorigLogboek && (
+              <>
+                <p className="muted">Logboek laatste rit: {logboekSamenvatting(vorigLogboek)}</p>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '8px' }}>
+                  <button type="button" className="btn btn-indigo btn-small" onClick={deelLogboek}>
+                    Logboek delen
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-indigo btn-small"
+                    aria-pressed={logboekTonen}
+                    onClick={() => setLogboekTonen((v) => !v)}
+                  >
+                    {logboekTonen ? 'Logboek verbergen' : 'Logboek tonen'}
+                  </button>
+                </div>
+                {logboekMelding && <p className="muted">{logboekMelding}</p>}
+                {logboekTonen && (
+                  <pre
+                    style={{
+                      whiteSpace: 'pre-wrap',
+                      fontSize: '12px',
+                      maxHeight: '320px',
+                      overflow: 'auto',
+                      userSelect: 'text',
+                    }}
+                  >
+                    {alsTekst(vorigLogboek)}
+                  </pre>
+                )}
+              </>
+            )}
+          </div>
+        </details>
       )}
       {actief && ecoOpen && (
         <EcoScherm

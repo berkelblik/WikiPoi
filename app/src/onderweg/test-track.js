@@ -3,11 +3,24 @@
  *
  * Netwerkloze test voor track.js (0.18.0): begin/stop, metingen en posities,
  * opslaan en laden, lijn, lengte, telling, bestandsnaam en GPX.
+ * 0.18.1: pauze bij stilstand, hervatten in een nieuw segment, korte pauzes,
+ * tik(), pauze bij stoppen, wissen en tracks van vóór 0.18.1.
  *
  * Uitvoeren vanuit app/:  node src/onderweg/test-track.js
  */
 import assert from 'node:assert'
-import { maakTrack, lijnVan, lengteVan, tellingVan, alsGpx, bestandsnaam, OPSLAG_SLEUTEL, OPSLAAN_MS } from './track.js'
+import {
+  maakTrack,
+  lijnVan,
+  lengteVan,
+  tellingVan,
+  alsGpx,
+  bestandsnaam,
+  segmentenVan,
+  pauzesVan,
+  OPSLAG_SLEUTEL,
+  OPSLAAN_MS,
+} from './track.js'
 import { afstand } from './geo.js'
 
 process.env.TZ = 'UTC'
@@ -106,6 +119,127 @@ test('GPX: twee tracks en weggegooide metingen als wpt', () => {
   assert.strictEqual((ruw.match(/<trkpt /g) || []).length, 4)
   assert.ok(gpx.trim().endsWith('</gpx>'))
   assert.strictEqual(alsGpx(null), '')
+})
+
+// 0.18.1: rit met stilstand. Elke seconde een positie; klok en GPS-tijd
+// lopen gelijk. 1° breedte ≈ 111 km, dus 0.00001° ≈ 1,1 m.
+function ritMetPauze(pauzeSec) {
+  const o = omgeving(START)
+  const tr = maakTrack({ nu: o.nu, opslag: o.opslag })
+  tr.begin('voorgrond')
+  let s = 0
+  const stap = (lat) => {
+    o.zet(START + s * 1000)
+    const m = { lat, lng: 6.5, nauwkeurigheid: 5, tijd: START + s * 1000 }
+    tr.positie(m)
+    tr.meting(m, 'geaccepteerd')
+    s += 1
+  }
+  // 5 s rijden, 20 m per seconde verder.
+  for (let i = 0; i < 5; i++) stap(52.0 + i * 0.00018)
+  const stilLat = 52.0 + 4 * 0.00018
+  // Stilstand met ruis van ± 2 m.
+  for (let i = 0; i < pauzeSec; i++) stap(stilLat + (i % 2 ? 0.00002 : -0.00002))
+  // Weer rijden.
+  for (let i = 1; i <= 5; i++) stap(stilLat + i * 0.00018)
+  return { o, tr }
+}
+
+test('Pauze na 3 s stilstand, verder in een nieuw segment', () => {
+  const o = omgeving(START)
+  const tr = maakTrack({ nu: o.nu, opslag: o.opslag })
+  tr.begin('voorgrond')
+  const zet = (sec, lat) => {
+    o.zet(START + sec * 1000)
+    tr.positie({ lat, lng: 6.5, tijd: START + sec * 1000 })
+  }
+  zet(0, 52.0)
+  zet(1, 52.00002)
+  zet(2, 52.0)
+  assert.strictEqual(tr.gepauzeerd(), false, 'na 2 s nog niet')
+  zet(3, 52.00002)
+  assert.strictEqual(tr.gepauzeerd(), true, 'na 3 s gepauzeerd')
+  const voor = tr.huidig().gefilterd.length
+  tr.meting({ lat: 52.0, lng: 6.5, nauwkeurigheid: 5, tijd: START + 4000 }, 'geaccepteerd')
+  zet(30, 52.00005) // 5,6 m: nog binnen 8 m
+  assert.strictEqual(tr.gepauzeerd(), true)
+  assert.strictEqual(tr.huidig().gefilterd.length, voor, 'geen punten tijdens pauze')
+  assert.strictEqual(tr.huidig().ruw.length, 0, 'geen ruwe metingen tijdens pauze')
+  zet(31, 52.0001) // 11 m: verder
+  assert.strictEqual(tr.gepauzeerd(), false)
+  const d = tr.huidig()
+  assert.strictEqual(d.pauzes.length, 1)
+  assert.strictEqual(d.pauzes[0].tot, START + 31000)
+  assert.strictEqual(d.pauzes[0].eind - d.pauzes[0].start, 28000)
+  assert.strictEqual(segmentenVan(d).length, 2)
+})
+
+test('Hele rit: segmenten, lengte zonder sprong, pauzes en GPX', () => {
+  const { o, tr } = ritMetPauze(60)
+  o.zet(START + 80000)
+  tr.stop()
+  const d = tr.laad()
+  const segs = segmentenVan(d)
+  assert.strictEqual(segs.length, 2)
+  // Rijden 4×20 m + stilstand (ruis) vóór de pauze, daarna 4×20 m: het
+  // eerste punt na de pauze ligt ± 20 m verder, dat stuk telt niet mee.
+  const lengte = lengteVan(d, afstand)
+  assert.ok(lengte > 150 && lengte < 175, lengte)
+  const p = pauzesVan(d)
+  assert.strictEqual(p.aantal, 1)
+  assert.ok(p.pauzeMs >= 55000 && p.pauzeMs <= 60000, p.pauzeMs)
+  assert.strictEqual(p.onderwegMs, 80000 - p.pauzeMs)
+  const gpx = alsGpx(d)
+  assert.strictEqual((gpx.match(/<trkseg>/g) || []).length, 4, 'twee segmenten in elk van de twee tracks')
+  assert.match(gpx, /<name>pauze \(58 s\)<\/name>/)
+})
+
+test('Korte pauze (< 10 s) maakt geen nieuw segment', () => {
+  const { tr } = ritMetPauze(8)
+  const d = tr.huidig()
+  assert.strictEqual(d.pauzes.length, 0)
+  assert.strictEqual(segmentenVan(d).length, 1)
+  assert.strictEqual(tr.gepauzeerd(), false)
+})
+
+test('tik(): pauze ook zonder nieuwe posities', () => {
+  const o = omgeving(START)
+  const tr = maakTrack({ nu: o.nu, opslag: o.opslag })
+  tr.begin('simulatie')
+  tr.positie({ lat: 52.0, lng: 6.5, tijd: START })
+  o.zet(START + 2000)
+  tr.tik()
+  assert.strictEqual(tr.gepauzeerd(), false)
+  o.zet(START + 3000)
+  tr.tik()
+  assert.strictEqual(tr.gepauzeerd(), true)
+  // Lopende pauze is meteen bewaard (herstart tijdens pauze).
+  assert.strictEqual(JSON.parse(o.ruw.get(OPSLAG_SLEUTEL)).pauzes.length, 1)
+})
+
+test('Stoppen tijdens een pauze: geen pauze, maar het einde', () => {
+  const { o, tr } = ritMetPauze(0)
+  o.zet(START + 60000)
+  tr.tik()
+  assert.strictEqual(tr.gepauzeerd(), true)
+  tr.stop()
+  const d = tr.laad()
+  assert.strictEqual(d.pauzes.length, 0)
+  assert.strictEqual(pauzesVan(d).aantal, 0)
+  assert.strictEqual(tr.gepauzeerd(), false)
+})
+
+test('Wissen en track van vóór 0.18.1 (zonder pauzes)', () => {
+  const oud = { start: START, eind: START + 5000, ruw: [], gefilterd: [[START, 52, 6.5], [START + 1000, 52.001, 6.5]] }
+  assert.strictEqual(segmentenVan(oud).length, 1)
+  assert.deepStrictEqual(pauzesVan(oud), { aantal: 0, pauzeMs: 0, onderwegMs: 5000 })
+  assert.match(alsGpx(oud), /<trkseg>/)
+  const { o, tr } = rit()
+  tr.wis()
+  assert.ok(o.ruw.has(OPSLAG_SLEUTEL), 'niet wissen tijdens een rit')
+  tr.stop()
+  tr.wis()
+  assert.strictEqual(tr.laad(), null)
 })
 
 console.log(`\n${geslaagd} tests geslaagd.`)
