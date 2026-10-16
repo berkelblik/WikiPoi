@@ -247,4 +247,54 @@ test('7A: geen naam (label = QID) → naam uit titel, geen naamWikidata', () => 
   assert.strictEqual(r.naamWikidata, undefined);
 });
 
+// --- 0.17.3: alleen hoofdletters anders (keuze A1) --------------------------
+
+const bredevoort = (label, labelLang, artikel) => ({
+  results: {
+    bindings: [
+      {
+        item: ent('Q2280425'),
+        itemLabel: labelLang ? { value: label, 'xml:lang': labelLang } : { value: label },
+        location: pt(6.62, 51.94),
+        art0: { value: artikel },
+      },
+    ],
+  },
+});
+
+test('A1: Franse naam met kleine letter → artikeltitel, geen naamWikidata', () => {
+  const r = parseSparqlResults(
+    bredevoort('château de Bredevoort', 'fr', 'https://fr.wikipedia.org/wiki/Ch%C3%A2teau_de_Bredevoort'),
+    ['fr', 'de', 'nl', 'en']
+  )[0];
+  assert.strictEqual(r.label, 'Château de Bredevoort');
+  assert.strictEqual(r.labelLanguage, 'fr');
+  assert.strictEqual(r.naamWikidata, undefined);
+});
+
+test('A1: ook bij onbekende taal van de naam', () => {
+  const r = parseSparqlResults(
+    bredevoort('château de Bredevoort', null, 'https://fr.wikipedia.org/wiki/Ch%C3%A2teau_de_Bredevoort'),
+    ['fr', 'nl']
+  )[0];
+  assert.strictEqual(r.label, 'Château de Bredevoort');
+});
+
+test('A1: andere naam in dezelfde taal blijft staan', () => {
+  const r = parseSparqlResults(
+    bredevoort('kasteel Bredevoort', 'nl', 'https://nl.wikipedia.org/wiki/Kasteel_van_Bredevoort'),
+    ['nl']
+  )[0];
+  assert.strictEqual(r.label, 'kasteel Bredevoort');
+});
+
+test('A1: artikel niet in de eerste taal → kleine letter blijft', () => {
+  const data = bredevoort('château de Bredevoort', 'fr', undefined);
+  delete data.results.bindings[0].art0;
+  data.results.bindings[0].art1 = { value: 'https://fr.wikipedia.org/wiki/Ch%C3%A2teau_de_Bredevoort' };
+  const r = parseSparqlResults(data, ['nl', 'fr'])[0];
+  assert.strictEqual(r.articleLanguage, 'fr');
+  assert.strictEqual(r.label, 'château de Bredevoort');
+});
+
 console.log('\nAlle ' + passed + ' tests geslaagd.');

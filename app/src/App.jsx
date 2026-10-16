@@ -64,8 +64,9 @@ import {
 // zijn stap 3 en 6 ingeklapt (niet nodig).
 // Taal van de teksten (0.17.0, stap 2, taalvolgorde.js): automatisch
 // (telefoontaal → taal van het land → en → fr → de) of een eigen volgorde.
-// Heeft een POI geen artikel in de eerste taal, dan zoekt stap 6 in die
-// taal naar een artikel op dezelfde plek (artikel-via-ligging.js).
+// Heeft een POI geen artikel in de eerste taal, dan zoekt stap 6 op
+// dezelfde plek naar een artikel in een taal die hoger staat dan zijn eigen
+// artikel (artikel-via-ligging.js; sinds 0.17.3 niet alleen de eerste taal).
 // Eigen POI's (CSV, stap 2) staan los van de zoekresultaten: importeren of
 // verwijderen na het zoeken vraagt geen nieuwe zoekactie.
 
@@ -490,9 +491,26 @@ function App() {
   const wikidataZinCount = corridorPois.filter(
     (p) => summariesById[p.id] && summariesById[p.id].summary && summariesById[p.id].summary.viaWikidata
   ).length
-  const viaLiggingCount = corridorPois.filter(
+  const viaLiggingPois = corridorPois.filter(
     (p) => summariesById[p.id] && summariesById[p.id].summary && summariesById[p.id].viaLigging
-  ).length
+  )
+  const viaLiggingCount = viaLiggingPois.length
+  // Aantal per taal, in de volgorde van de taallijst (keuze C, 0.17.3).
+  const viaLiggingPerTaal = (() => {
+    const tel = {}
+    viaLiggingPois.forEach((p) => {
+      const t = summariesById[p.id].viaLigging.taal
+      tel[t] = (tel[t] || 0) + 1
+    })
+    const volgorde = taalInfo ? taalInfo.talen : []
+    return Object.keys(tel)
+      .sort((a, b) => {
+        const ia = volgorde.indexOf(a)
+        const ib = volgorde.indexOf(b)
+        return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib)
+      })
+      .map((taal) => ({ taal, aantal: tel[taal] }))
+  })()
   // De categorie (= routenaam) koppelt de POI's in EuroPoi aan de route;
   // die heet daar standaard naar het GPX-bestand. Waarschuwen bij verschil.
   const fileRouteName = routeInfo ? routeNameFromFileName(routeInfo.fileName) : ''
@@ -1080,12 +1098,15 @@ function App() {
   }
 
   // Artikel via de ligging (0.17.0): voor POI's zonder artikel in de eerste
-  // taal van de taalvolgorde (keuze bij stap 2) een artikel in die taal op
-  // dezelfde plek zoeken. Geeft { id: vondst } terug; mislukt het, dan {}.
+  // taal van de taalvolgorde (keuze bij stap 2) een artikel op dezelfde plek
+  // zoeken. Sinds 0.17.3 (B1) in alle talen die hoger staan dan het eigen
+  // artikel, in volgorde; de eerste vondst wint. Geeft { id: vondst } terug;
+  // mislukt het, dan {}.
   async function zoekViaLigging(candidates) {
     const L = window.WikiPoiArtikelViaLigging
-    const eerste = taalInfo && taalInfo.talen.length > 0 ? taalInfo.talen[0] : null
-    if (!eerste || !L || typeof L.zoekArtikelenViaLigging !== 'function') return {}
+    const talen = taalInfo ? taalInfo.talen : []
+    const eerste = talen.length > 0 ? talen[0] : null
+    if (!eerste || !L || typeof L.zoekArtikelenViaLiggingInTalen !== 'function') return {}
     const zonder = candidates.filter((p) => !p.eigen && basis(p.articleLanguage) !== eerste)
     if (zonder.length === 0) return {}
     // Id's van alle gevonden POI's (ook samengevoegde): hun artikelen
@@ -1096,7 +1117,7 @@ function App() {
       ;(p.mergedFrom || []).forEach((m) => m.id && andereIds.add(m.id))
     })
     try {
-      return await L.zoekArtikelenViaLigging(zonder, eerste, { andereIds })
+      return await L.zoekArtikelenViaLiggingInTalen(zonder, talen, { andereIds })
     } catch (err) {
       console.warn('Artikel via ligging mislukt:', err)
       return {}
@@ -1431,8 +1452,8 @@ function App() {
                 </ol>
               )}
               <p className="muted">
-                Heeft een POI geen artikel in de eerste taal, dan zoekt stap 6 in die taal naar een artikel op
-                dezelfde plek. Een andere keuze wist de zoekresultaten.
+                Heeft een POI geen artikel in de eerste taal, dan zoekt stap 6 op dezelfde plek naar een artikel in
+                een taal die hoger in de lijst staat. Een andere keuze wist de zoekresultaten.
               </p>
             </fieldset>
           )}
@@ -1815,10 +1836,17 @@ function App() {
             hebben een Wikipedia-samenvatting
             {wikidataZinCount > 0 ? `; ${wikidataZinCount} kregen een zin uit Wikidata.` : '.'}
           </p>
-          {viaLiggingCount > 0 && taalInfo && (
+          {viaLiggingCount > 0 && viaLiggingPerTaal.length === 1 && (
             <p className="muted">
               {viaLiggingCount === 1 ? '1 artikel' : `${viaLiggingCount} artikelen`} in het{' '}
-              {taalNaam(taalInfo.talen[0])} gevonden via de ligging (Wikidata had er geen).
+              {taalNaam(viaLiggingPerTaal[0].taal)} gevonden via de ligging (Wikidata had er geen in die taal).
+            </p>
+          )}
+          {viaLiggingPerTaal.length > 1 && (
+            <p className="muted">
+              {viaLiggingCount} artikelen gevonden via de ligging:{' '}
+              {viaLiggingPerTaal.map((v) => `${v.aantal} in het ${taalNaam(v.taal)}`).join(', ')} (Wikidata had
+              er geen in die talen).
             </p>
           )}
           {eigenInCorridorCount > 0 && (

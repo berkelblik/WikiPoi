@@ -22,6 +22,12 @@
  *     "Keppel Castle" wel "Kasteel Keppel", maar niet het dorp "Laag-Keppel".
  * Liever soms geen vondst dan een verkeerde tekst.
  *
+ * Meer talen (0.17.3, keuze B1): heeft de POI zijn beste artikel in taal
+ * nummer k van de lijst (of geen artikel), dan zoeken we via de ligging in
+ * de talen 1 … k−1, in volgorde, en stoppen bij de eerste vondst. Zo krijgt
+ * "Burg Keppel" bij Frans → Duits → Nederlands → Engels het Duitse "Schloss
+ * Keppel" in plaats van het Engelse eigen artikel.
+ *
  * Werkt zowel als CommonJS-module (Node, voor de test) als los <script> in
  * de browser (window.WikiPoiArtikelViaLigging).
  */
@@ -357,8 +363,60 @@
     return vondsten;
   }
 
+  /** Taalcode zonder regio: 'de-AT' → 'de'. */
+  function basisTaal(code) {
+    return String(code || '').toLowerCase().split('-')[0];
+  }
+
+  /**
+   * Talen waarin we via de ligging zoeken (B1): alle talen die in de lijst
+   * hoger staan dan de taal van het eigen artikel van de POI; heeft de POI
+   * geen artikel in een taal uit de lijst, dan alle talen.
+   *
+   * @param {object} poi - { articleLanguage? }
+   * @param {string[]} talen - taalvolgorde, bijv. ['fr', 'de', 'nl', 'en']
+   * @returns {string[]}
+   */
+  function talenVoorLigging(poi, talen) {
+    const lijst = (talen || []).map(basisTaal).filter(Boolean);
+    const k = lijst.indexOf(basisTaal(poi && poi.articleLanguage));
+    return k === -1 ? lijst : lijst.slice(0, k);
+  }
+
+  /**
+   * Zoekt via de ligging in meerdere talen (B1): eerst in de eerste taal
+   * voor alle POI's die daar geen artikel hebben, dan in de tweede taal
+   * voor de POI's die nog geen vondst hebben en waarvan het eigen artikel
+   * lager staat, enzovoort. Per POI dus hoogstens één verzoek per taal die
+   * hoger staat dan zijn eigen artikel.
+   *
+   * @param {Array<object>} pois
+   * @param {string[]} talen - taalvolgorde
+   * @param {object} [options] - zie zoekArtikelenViaLigging
+   * @param {function(string, Object):Promise<Object>} [zoeker] - voor de test;
+   *   standaard zoekArtikelenViaLigging(pois, taal, options)
+   * @returns {Promise<Object<string, object>>} per POI-id een vondst (met .taal)
+   */
+  async function zoekArtikelenViaLiggingInTalen(pois, talen, options, zoeker) {
+    const zoek = zoeker || ((lijst, taal) => zoekArtikelenViaLigging(lijst, taal, options));
+    const kandidaten = (pois || []).filter((p) => p && !p.eigen);
+    const vondsten = {};
+    const lijst = (talen || []).map(basisTaal).filter(Boolean);
+    for (const taal of lijst) {
+      const nog = kandidaten.filter((p) => !vondsten[p.id] && talenVoorLigging(p, lijst).includes(taal));
+      if (nog.length === 0) continue;
+      const gevonden = (await zoek(nog, taal)) || {};
+      Object.keys(gevonden).forEach((id) => {
+        if (!vondsten[id]) vondsten[id] = gevonden[id];
+      });
+    }
+    return vondsten;
+  }
+
   return {
     STRAAL_METERS,
+    talenVoorLigging,
+    zoekArtikelenViaLiggingInTalen,
     woorden,
     titelVanUrl,
     namenVan,

@@ -163,7 +163,52 @@ check('artikelUrl', L.artikelUrl('nl', 'Kasteel Keppel'), 'https://nl.wikipedia.
 check('naamVanTitel: haakjes vervallen', L.naamVanTitel('Sint-Dionysiuskerk (Markelo)'), 'Sint-Dionysiuskerk');
 check('naamVanTitel: zonder haakjes', L.naamVanTitel('Kasteel Keppel'), 'Kasteel Keppel');
 
-console.log(
-  mislukt === 0 ? `\nAlle ${geslaagd} tests geslaagd.` : `\n${mislukt} van ${geslaagd + mislukt} tests mislukt.`
-);
-process.exit(mislukt === 0 ? 0 : 1);
+// --- 0.17.3: via de ligging in meer talen (keuze B1) ----------------------
+
+const talen = ['fr', 'de', 'nl', 'en'];
+check('Talen: artikel in en (4e) → fr, de, nl', L.talenVoorLigging({ articleLanguage: 'en' }, talen), ['fr', 'de', 'nl']);
+check('Talen: artikel in de (2e) → fr', L.talenVoorLigging({ articleLanguage: 'de' }, talen), ['fr']);
+check('Talen: artikel in fr (1e) → geen', L.talenVoorLigging({ articleLanguage: 'fr' }, talen), []);
+check('Talen: geen artikel → alle talen', L.talenVoorLigging({}, talen), talen);
+check('Talen: artikel buiten de lijst → alle talen', L.talenVoorLigging({ articleLanguage: 'es' }, talen), talen);
+check('Talen: regiocode telt als taal', L.talenVoorLigging({ articleLanguage: 'de-AT' }, talen), ['fr']);
+
+(async () => {
+  // Nagebootst geozoeken: per taal welke POI's een vondst hebben.
+  const vondstenPerTaal = {
+    fr: { kerk: { taal: 'fr', titel: 'Église' } },
+    de: { keppel: { taal: 'de', titel: 'Schloss Keppel' }, kerk: { taal: 'de', titel: 'Kirche' } },
+    nl: { molen: { taal: 'nl', titel: 'Molen' } },
+  };
+  const rondes = [];
+  const zoeker = async (lijst, taal) => {
+    rondes.push(taal + ':' + lijst.map((p) => p.id).join(','));
+    const uit = {};
+    lijst.forEach((p) => {
+      if (vondstenPerTaal[taal] && vondstenPerTaal[taal][p.id]) uit[p.id] = vondstenPerTaal[taal][p.id];
+    });
+    return uit;
+  };
+  const pois = [
+    { id: 'keppel', articleLanguage: 'en' },
+    { id: 'kerk' },
+    { id: 'frans', articleLanguage: 'fr' },
+    { id: 'duits', articleLanguage: 'de' },
+    { id: 'molen', articleLanguage: 'en' },
+    { id: 'eigen', eigen: true },
+  ];
+  const v = await L.zoekArtikelenViaLiggingInTalen(pois, talen, {}, zoeker);
+  check('Meer talen: Keppel krijgt Duits (fr niets)', v.keppel && v.keppel.titel, 'Schloss Keppel');
+  check('Meer talen: eerste vondst wint (fr vóór de)', v.kerk && v.kerk.titel, 'Église');
+  check('Meer talen: molen pas in nl gevonden', v.molen && v.molen.titel, 'Molen');
+  check('Meer talen: artikel in eerste taal → niet gezocht', 'frans' in v, false);
+  check('Meer talen: rondes', rondes, ['fr:keppel,kerk,duits,molen', 'de:keppel,molen', 'nl:molen']);
+  check('Meer talen: eigen POI nooit gezocht', rondes.some((r) => r.includes('eigen')), false);
+  const leeg = await L.zoekArtikelenViaLiggingInTalen([], talen, {}, zoeker);
+  check('Meer talen: geen POI\'s → {}', leeg, {});
+
+  console.log(
+    mislukt === 0 ? `\nAlle ${geslaagd} tests geslaagd.` : `\n${mislukt} van ${geslaagd + mislukt} tests mislukt.`
+  );
+  process.exit(mislukt === 0 ? 0 : 1);
+})();

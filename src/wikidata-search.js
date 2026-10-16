@@ -351,15 +351,18 @@
    * oude naam blijft bewaard in `naamWikidata`. Is de taal van de naam
    * onbekend (geen xml:lang), dan blijft hij staan.
    *
+   * Hoofdletters (0.17.3, keuze A1): verschillen naam en artikeltitel alleen
+   * in hoofd-/kleine letters ("château de Bredevoort" ↔ "Château de
+   * Bredevoort" — op de Franse Wikidata beginnen namen gewoonlijk met een
+   * kleine letter), dan wordt de titel de naam, ook als de naam al in de
+   * eerste taal is. Dat is geen andere naam, dus naamWikidata blijft leeg.
+   *
    * @param {object} result - één resultaat van parseSparqlResults (wordt aangepast)
    * @param {string[]} languages
    */
   function naamUitArtikel(result, languages) {
     const eerste = Array.isArray(languages) && languages.length > 0 ? languages[0] : null;
     if (!eerste || result.articleLanguage !== eerste || !result.wikipediaUrl) return;
-    const zonderNaam = !result.label || result.label === result.id;
-    const labelTaal = String(result.labelLanguage || '').toLowerCase().split('-')[0];
-    if (!zonderNaam && (!labelTaal || labelTaal === eerste)) return;
     const m = /\.wikipedia\.org\/wiki\/([^?#]+)/i.exec(result.wikipediaUrl);
     if (!m) return;
     let titel;
@@ -371,6 +374,14 @@
     titel = titel.replace(/_/g, ' ').trim();
     const naam = titel.replace(/\s*\([^)]*\)\s*$/, '').trim() || titel;
     if (!naam || naam === result.label) return;
+    const zonderNaam = !result.label || result.label === result.id;
+    if (!zonderNaam && naam.toLocaleLowerCase() === String(result.label).toLocaleLowerCase()) {
+      // Alleen hoofdletters anders (A1): titel overnemen, taal van de naam blijft.
+      result.label = naam;
+      return;
+    }
+    const labelTaal = String(result.labelLanguage || '').toLowerCase().split('-')[0];
+    if (!zonderNaam && (!labelTaal || labelTaal === eerste)) return;
     if (!zonderNaam) result.naamWikidata = result.label;
     result.label = naam;
     result.labelLanguage = eerste;
