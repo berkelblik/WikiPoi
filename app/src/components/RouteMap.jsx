@@ -9,7 +9,7 @@
  * Afgeslankte variant van EuroPoi src/components/LeafletMap.jsx: zelfde
  * aanpak (gewone Leaflet, geen React-Leaflet; ResizeObserver →
  * invalidateSize() zodat in-/uitklappen geen grijze vlakken geeft; OSM/SAT-
- * wissel rechtsboven), maar zonder crosshair en GPS-track. Nieuw t.o.v.
+ * wissel rechtsboven), maar zonder crosshair (track sinds 0.18.0, zie onder). Nieuw t.o.v.
  * EuroPoi: fitBounds() op de route i.p.v. centreren op de gebruiker.
  *
  * Eigen positie (alleen als de prop positie is meegegeven, in stap 7
@@ -17,6 +17,11 @@
  * GPS-nauwkeurigheid en, zodra de rijrichting bekend is, een pijltje in die
  * richting. De kaart volgt de positie; zelf schuiven zet het volgen uit,
  * de knop "Volg mij" (linksboven) zet het weer aan.
+ *
+ * Stap 8 (0.18.0): de afgelegde track (prop track, [[lat, lng], …]) als
+ * groene lijn, en per POI de triggerstraal (prop straalCirkels,
+ * [{ id, lat, lng, straal, voorgelezen }]) als cirkel rond het triggerpunt;
+ * al voorgelezen POI's krijgen een grijze cirkel.
  *
  * Leaflet komt hier uit npm (import) i.p.v. dynamisch van unpkg zoals in
  * EuroPoi: dan zit het in de app-bundel en werkt de kaartcode ook zonder
@@ -93,6 +98,9 @@ const LEGEND_SWATCH_SIZE = 18
 // Eigen positie: kleur, grootte van het icoon (stip + pijltje) en het
 // zoomniveau waarop de kaart bij de eerste positie inzoomt.
 const COLOR_POSITIE = '#2563eb'
+const COLOR_TRACK = '#16a34a'
+const COLOR_STRAAL = '#f97316'
+const COLOR_STRAAL_KLAAR = '#94a3b8'
 const POSITIE_ICOON_PX = 44
 const POSITIE_ZOOM = 16
 
@@ -135,7 +143,15 @@ function escapeHtml(text) {
     .replace(/"/g, '&quot;')
 }
 
-function RouteMap({ routePoints, pois, corridorMeters, positie = null, rijrichting = null }) {
+function RouteMap({
+  routePoints,
+  pois,
+  corridorMeters,
+  positie = null,
+  rijrichting = null,
+  track = null,
+  straalCirkels = null,
+}) {
   const containerRef = useRef(null)
   const mapRef = useRef(null)
   const tileLayerRef = useRef(null)
@@ -144,6 +160,8 @@ function RouteMap({ routePoints, pois, corridorMeters, positie = null, rijrichti
   const poiLayerRef = useRef(null)
   const positieMarkerRef = useRef(null)
   const nauwkeurigheidRef = useRef(null)
+  const trackLayerRef = useRef(null)
+  const straalLayerRef = useRef(null)
   // Eerste positie na het starten: dan inzoomen, daarna alleen meeschuiven.
   const eerstePositieRef = useRef(true)
   // Breedtegraad van het routemidden, voor de omrekening meters → pixels.
@@ -213,6 +231,7 @@ function RouteMap({ routePoints, pois, corridorMeters, positie = null, rijrichti
       preferCanvas: true,
     }).setView(DEFAULT_CENTER, DEFAULT_ZOOM)
     mapRef.current = map
+    straalLayerRef.current = L.layerGroup().addTo(map)
     poiLayerRef.current = L.layerGroup().addTo(map)
     map.on('zoomend', updateCorridorWidth)
     // Alleen slepen door de gebruiker vuurt dragstart (niet setView/panTo).
@@ -235,8 +254,53 @@ function RouteMap({ routePoints, pois, corridorMeters, positie = null, rijrichti
       poiLayerRef.current = null
       positieMarkerRef.current = null
       nauwkeurigheidRef.current = null
+      trackLayerRef.current = null
+      straalLayerRef.current = null
     }
   }, [])
+
+  // Triggerstraal per POI (stap 8).
+  useEffect(() => {
+    const layer = straalLayerRef.current
+    if (!layer) return
+    layer.clearLayers()
+    ;(straalCirkels || []).forEach((c) => {
+      if (!Number.isFinite(c.lat) || !Number.isFinite(c.lng) || !(c.straal > 0)) return
+      const kleur = c.voorgelezen ? COLOR_STRAAL_KLAAR : COLOR_STRAAL
+      L.circle([c.lat, c.lng], {
+        radius: c.straal,
+        color: kleur,
+        weight: 1.5,
+        opacity: 0.8,
+        dashArray: '4 4',
+        fillColor: kleur,
+        fillOpacity: 0.08,
+        interactive: false,
+      }).addTo(layer)
+    })
+  }, [straalCirkels])
+
+  // Afgelegde track (stap 8): één lijn, bij elke nieuwe positie bijgewerkt.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    const lijn = Array.isArray(track) ? track : []
+    if (lijn.length < 2) {
+      if (trackLayerRef.current) map.removeLayer(trackLayerRef.current)
+      trackLayerRef.current = null
+      return
+    }
+    if (!trackLayerRef.current) {
+      trackLayerRef.current = L.polyline(lijn, {
+        color: COLOR_TRACK,
+        weight: 4,
+        opacity: 0.85,
+        interactive: false,
+      }).addTo(map)
+    } else {
+      trackLayerRef.current.setLatLngs(lijn)
+    }
+  }, [track])
 
   // Tegellaag (OSM/SAT) wisselen.
   useEffect(() => {

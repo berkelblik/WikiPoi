@@ -8,6 +8,19 @@
  *
  * Triggerstraal "Automatisch" (EuroPoi-regels, route-modus):
  *   max(straal van de vervoerwijze, afstand POI–route + 50 m).
+ * Of (0.18.0, keuze C2) "Alleen vervoerwijze": de straal van de
+ * vervoerwijze, ook voor POI's ver van de route (gemeten tot het punt op
+ * de route, dus ze triggeren nog steeds bij het passeren).
+ *
+ * Positiefilter (0.18.0, positieFilter.js): GPS-metingen gaan eerst door
+ * het filter (nauwkeurigheid ≤ 25 m met terugval, sprongfilter per
+ * vervoerwijze, gemiddelde over 5 metingen); alleen de gefilterde positie
+ * bepaalt pointer, rijrichting en trigger. De simulatie gaat er niet door
+ * ("Naar volgende POI" is een bewuste sprong).
+ *
+ * Track (0.18.0, track.js, keuze B2): elke ruwe meting (met de uitkomst
+ * van het filter) en elke gefilterde positie; de lijn van de gefilterde
+ * posities staat op de kaart (trackLijn), na afloop te delen als GPX.
  *
  * Rijrichting: niet uit coords.heading (op Android via @capacitor/geolocation
  * vaak leeg), maar berekend uit twee GPS-punten die minstens
@@ -46,7 +59,7 @@
  * van de voorgelezen toelichting. Lukt geen enkele bron, dan wordt de
  * toelichting alsnog voorgelezen (zonder klokzin, die klonk al).
  *
- * Bouwstap 4 van "Onderweg": eco-scherm. Nog geen track.
+ * Bouwstap 4 van "Onderweg": eco-scherm; sinds 0.18.0 met track.
  */
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { afstand, peiling, klokRichting } from './geo.js'
@@ -57,6 +70,8 @@ import { logboek, koppelBrowser } from './logboek.js'
 import { klokZin } from '../taal.js'
 import { voorleesDelen } from './voorleestekst.js'
 import { maakSimulatie, volgendeDoel, SIM_SNELHEID_KMU, SIM_VOORLOOP_M } from './simulatie.js'
+import { maakPositieFilter, MAX_SNELHEID_KMU, tellersTekst } from './positieFilter.js'
+import { track } from './track.js'
 
 // Minimale verplaatsing voordat de rijrichting wordt (bij)gewerkt. Kleiner
 // maakt de richting bij stilstand onrustig door GPS-ruis.
@@ -76,8 +91,16 @@ export const STANDAARD_VERVOER = 'fietser'
 // Extra marge bovenop de afstand POI–route (EuroPoi: poiToRoute + 50).
 const ROUTE_MARGE_M = 50
 
-export function triggerStraal(poi, vervoer) {
+// Straalmodus (0.18.0, keuze C2).
+export const STRAAL_MODI = {
+  automatisch: { label: 'Automatisch' },
+  vervoer: { label: 'Alleen vervoerwijze' },
+}
+export const STANDAARD_STRAAL_MODUS = 'automatisch'
+
+export function triggerStraal(poi, vervoer, modus = STANDAARD_STRAAL_MODUS) {
   const basis = (VERVOER[vervoer] || VERVOER[STANDAARD_VERVOER]).straal
+  if (modus === 'vervoer') return basis
   const totRoute = Number.isFinite(poi.distanceToRoute) ? poi.distanceToRoute : 0
   return Math.max(basis, totRoute + ROUTE_MARGE_M)
 }
@@ -158,6 +181,19 @@ function laadFotosVooraf(pois, samenvattingen) {
   })
 }
 
+// Ruwe meting uit de vorm van de Geolocation-API ({ coords, timestamp }),
+// of null bij een ongeldige positie.
+function leesMeting(pos) {
+  const c = pos && pos.coords
+  if (!c || !Number.isFinite(c.latitude) || !Number.isFinite(c.longitude)) return null
+  return {
+    lat: c.latitude,
+    lng: c.longitude,
+    nauwkeurigheid: c.accuracy,
+    tijd: Number.isFinite(pos.timestamp) ? pos.timestamp : Date.now(),
+  }
+}
+
 function foutTekst(err) {
   return 'GPS-fout: ' + (err && err.message ? err.message : String(err))
 }
@@ -192,6 +228,7 @@ export function useOnderweg(
     eco = false,
     simulatie = null,
     achtergrond = false,
+    straalModus = STANDAARD_STRAAL_MODUS,
   } = {}
 ) {
   const [actief, setActief] = useState(false)
@@ -207,6 +244,8 @@ export function useOnderweg(
   // Laatst automatisch voorgelezen POI (id), voor de herhaalknop op het
   // eco-scherm; blijft staan tot de volgende POI aan de beurt is.
   const [laatstePoiId, setLaatstePoiId] = useState(null)
+  // Lijn van de gefilterde posities van deze rit: [[lat, lng], …].
+  const [trackLijn, setTrackLijn] = useState([])
 
   const bronRef = useRef(null) // { bron, stop } van positieBron.js
   const logboekStopRef = useRef(null)
@@ -217,6 +256,8 @@ export function useOnderweg(
   const ecoRef = useRef(eco)
   const vervoerRef = useRef(vervoer)
   const simRef = useRef(null)
+  const filterRef = useRef(null)
+  if (filterRef.current === null) filterRef.current = maakPositieFilter()
 
   useEffect(() => {
     samenvattingenRef.current = samenvattingen
@@ -233,16 +274,15 @@ export function useOnderweg(
   // Andere vervoerwijze tijdens een simulatie: andere snelheid.
   useEffect(() => {
     vervoerRef.current = vervoer
+    filterRef.current.zetMaxSnelheid(MAX_SNELHEID_KMU[vervoer] || MAX_SNELHEID_KMU[STANDAARD_VERVOER])
     if (simRef.current) {
       simRef.current.zetSnelheid(SIM_SNELHEID_KMU[vervoer] || SIM_SNELHEID_KMU[STANDAARD_VERVOER])
     }
   }, [vervoer])
 
-  const verwerkPositie = useCallback((pos) => {
-    const c = pos && pos.coords
-    if (!c || !Number.isFinite(c.latitude) || !Number.isFinite(c.longitude)) return
-    const punt = { lat: c.latitude, lng: c.longitude }
-
+  // Gefilterde (of gesimuleerde) positie tonen: rijrichting, positie, track.
+  const toonPositie = useCallback((p) => {
+    const punt = { lat: p.lat, lng: p.lng }
     const vorig = richtingPuntRef.current
     if (!vorig) {
       richtingPuntRef.current = punt
@@ -250,10 +290,38 @@ export function useOnderweg(
       setRijrichting(peiling(vorig, punt))
       richtingPuntRef.current = punt
     }
-
-    logboek.positie({ tijd: pos.timestamp, nauwkeurigheid: c.accuracy })
-    setPositie({ ...punt, nauwkeurigheid: c.accuracy, tijd: pos.timestamp })
+    track.positie(p)
+    setTrackLijn((lijn) => [...lijn, [p.lat, p.lng]])
+    setPositie({ ...punt, nauwkeurigheid: p.nauwkeurigheid, tijd: p.tijd })
   }, [])
+
+  // Simulatie: geen filter.
+  const verwerkPositie = useCallback(
+    (pos) => {
+      const m = leesMeting(pos)
+      if (!m) return
+      logboek.positie({ tijd: m.tijd, nauwkeurigheid: m.nauwkeurigheid })
+      track.meting(m, 'geaccepteerd')
+      toonPositie(m)
+    },
+    [toonPositie]
+  )
+
+  // Echte GPS: eerst door het positiefilter.
+  const verwerkGps = useCallback(
+    (pos) => {
+      const m = leesMeting(pos)
+      if (!m) return
+      const r = filterRef.current.verwerk(m)
+      if (!r || r.status === 'dubbel') return
+      logboek.positie({ tijd: m.tijd, nauwkeurigheid: m.nauwkeurigheid })
+      track.meting(m, r.status)
+      if (r.status !== 'geaccepteerd') return
+      if (r.sprongGeaccepteerd) logboek.noteer('filter', 'sprong geaccepteerd (vorige posities waren fout)')
+      toonPositie(r.punt)
+    },
+    [toonPositie]
+  )
 
   const stopBron = useCallback(() => {
     if (bronRef.current) {
@@ -264,6 +332,9 @@ export function useOnderweg(
 
   const stopLogboek = useCallback(() => {
     if (logboekStopRef.current) {
+      const t = filterRef.current.tellers()
+      if (t.geaccepteerd + t.nauwkeurigheid + t.sprong > 0) logboek.noteer('filter', tellersTekst(t))
+      track.stop()
       logboekStopRef.current()
       logboekStopRef.current = null
     }
@@ -286,12 +357,18 @@ export function useOnderweg(
     setVoorgelezen({})
     setEcoTrigger(null)
     setLaatstePoiId(null)
+    setTrackLijn([])
+    filterRef.current.reset()
+    filterRef.current.zetMaxSnelheid(
+      MAX_SNELHEID_KMU[vervoerRef.current] || MAX_SNELHEID_KMU[STANDAARD_VERVOER]
+    )
     laadFotosVooraf(poisRef.current, samenvattingenRef.current)
     stopSim()
     stopBron()
     stopLogboek()
     if (Array.isArray(simulatie) && simulatie.length >= 2) {
       logboekStopRef.current = beginLogboek('simulatie')
+      track.begin('simulatie')
       const sim = maakSimulatie(simulatie, {
         snelheidKmu:
           SIM_SNELHEID_KMU[vervoerRef.current] || SIM_SNELHEID_KMU[STANDAARD_VERVOER],
@@ -305,11 +382,12 @@ export function useOnderweg(
     }
     const soort = achtergrond ? 'achtergrond' : 'voorgrond'
     logboekStopRef.current = beginLogboek(soort)
+    track.begin(soort)
     try {
       const bron = await startPositieBron(soort, {
         onPositie: (pos) => {
           setFout('')
-          verwerkPositie(pos)
+          verwerkGps(pos)
         },
         onFout: (tekst) => {
           logboek.noteer('gps-fout', tekst)
@@ -327,7 +405,7 @@ export function useOnderweg(
       setFout(tekst)
       setActief(false)
     }
-  }, [simulatie, achtergrond, stopBron, stopSim, stopLogboek, verwerkPositie])
+  }, [simulatie, achtergrond, stopBron, stopSim, stopLogboek, verwerkPositie, verwerkGps])
 
   const stopVoorlezen = useCallback(() => {
     stopSpreken()
@@ -419,13 +497,13 @@ export function useOnderweg(
         return {
           ...p,
           afstandTriggerpunt: afstand(positie, triggerpunt),
-          straal: triggerStraal(p, vervoer),
+          straal: triggerStraal(p, vervoer, straalModus),
           klok: rijrichting === null ? null : klokRichting(rijrichting, peiling(positie, p)),
         }
       })
       .filter((p) => Number.isFinite(p.afstandTriggerpunt))
       .sort((a, b) => a.afstandTriggerpunt - b.afstandTriggerpunt)
-  }, [pois, positie, rijrichting, vervoer])
+  }, [pois, positie, rijrichting, vervoer, straalModus])
 
   // Automatische trigger: alle POI's binnen hun straal die deze rit nog niet
   // aan de beurt waren, dichtstbijzijnde eerst, via de wachtrij.
@@ -496,5 +574,6 @@ export function useOnderweg(
     simPauze,
     simVersnelling,
     simVolgendePoi,
+    trackLijn,
   }
 }

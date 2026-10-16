@@ -20,12 +20,21 @@
  * de vorm van de Geolocation-API: { coords: { latitude, longitude,
  * accuracy }, timestamp }, zodat useOnderweg niet weet welke bron actief is.
  * onInfo krijgt korte meldingen voor het logboek.
+ *
+ * Extra opvraging (0.18.0, keuze A4, zoals EuroPoi-AndroidLite v1.6.0): in
+ * de voorgrondmodus naast watchPosition elke OPVRAAG_MS een losse
+ * getCurrentPosition, omdat watchPosition op sommige toestellen met
+ * tussenpozen levert. Dubbele metingen vangt positieFilter.js af. In de
+ * achtergrondmodus niet: met het scherm uit lopen timers niet betrouwbaar.
  */
 import { Capacitor, registerPlugin } from '@capacitor/core'
 import { Geolocation } from '@capacitor/geolocation'
 import { LocalNotifications } from '@capacitor/local-notifications'
 
 const BackgroundGeolocation = registerPlugin('BackgroundGeolocation')
+
+export const OPVRAAG_MS = 2000
+const OPVRAAG_TIMEOUT_MS = 4000
 
 export const MELDING_TITEL = 'WikiPoi'
 export const MELDING_TEKST = 'WikiPoi volgt uw route'
@@ -38,7 +47,7 @@ function foutTekst(err) {
   return 'GPS-fout: ' + (err && err.message ? err.message : String(err))
 }
 
-async function startVoorgrond({ onPositie, onFout }) {
+async function startVoorgrond({ onPositie, onFout, onInfo }) {
   // Op het web vraagt de browser zelf om toestemming bij watchPosition.
   if (Capacitor.isNativePlatform()) {
     const perm = await Geolocation.requestPermissions()
@@ -56,9 +65,30 @@ async function startVoorgrond({ onPositie, onFout }) {
       onPositie(pos)
     }
   )
+  let gestopt = false
+  let bezig = false
+  const opvraag = setInterval(async () => {
+    if (gestopt || bezig) return
+    bezig = true
+    try {
+      const pos = await Geolocation.getCurrentPosition({
+        enableHighAccuracy: true,
+        timeout: OPVRAAG_TIMEOUT_MS,
+        maximumAge: 0,
+      })
+      if (!gestopt && pos) onPositie(pos)
+    } catch {
+      // Geen positie binnen de tijd: watchPosition blijft lopen.
+    } finally {
+      bezig = false
+    }
+  }, OPVRAAG_MS)
+  onInfo(`extra opvraging elke ${OPVRAAG_MS / 1000} s`)
   return {
     bron: 'voorgrond',
     stop: async () => {
+      gestopt = true
+      clearInterval(opvraag)
       try {
         await Geolocation.clearWatch({ id })
       } catch {
@@ -127,5 +157,5 @@ export async function startPositieBron(soort, { onPositie, onFout = () => {}, on
     if (achtergrondMogelijk()) return startAchtergrond({ onPositie, onFout, onInfo })
     onInfo('achtergrond niet mogelijk op dit platform; voorgrond gebruikt')
   }
-  return startVoorgrond({ onPositie, onFout })
+  return startVoorgrond({ onPositie, onFout, onInfo })
 }

@@ -26,15 +26,30 @@
  * met vaste melding, zodat de app ook met het scherm uit blijft werken. Na
  * afloop toont stap 8 het logboek van de laatste rit (logboek.js), met
  * knoppen om het te bekijken en te delen.
+ *
+ * 0.18.0: keuze "Straal: Automatisch / Alleen vervoerwijze" (bewaard in
+ * localStorage wikipoi.straalModus); de triggerstraal staat als cirkel op
+ * de kaart, de afgelegde track als groene lijn. Na afloop "Track delen
+ * (GPX)" (track.js): gefilterde en ruwe track plus de weggegooide metingen.
  */
 import { useState, useMemo } from 'react'
+import { Capacitor } from '@capacitor/core'
+import { Filesystem, Directory, Encoding } from '@capacitor/filesystem'
 import { Share } from '@capacitor/share'
-import { useOnderweg, VERVOER, STANDAARD_VERVOER } from './useOnderweg.js'
+import {
+  useOnderweg,
+  VERVOER,
+  STANDAARD_VERVOER,
+  STRAAL_MODI,
+  STANDAARD_STRAAL_MODUS,
+  triggerStraal,
+} from './useOnderweg.js'
+import { track as trackOpslag, alsGpx, bestandsnaam, lengteVan, tellingVan } from './track.js'
 import { achtergrondMogelijk } from './positieBron.js'
 import { logboek, analyseer, alsTekst, duurTekst, tijdTekst } from './logboek.js'
 import EcoScherm from './EcoScherm.jsx'
 import { SIM_SNELHEID_KMU, SIM_VERSNELLINGEN } from './simulatie.js'
-import { formatAfstand } from './geo.js'
+import { formatAfstand, afstand } from './geo.js'
 import CategoryDot from '../components/CategoryDot.jsx'
 import RouteMap from '../components/RouteMap.jsx'
 
@@ -52,6 +67,25 @@ const TEST_ACHTERGROND = true
 // Hoogte van de kaart in stap 8 (kleiner dan bij stap 5, zodat de lijst
 // met dichtstbijzijnde POI's eronder in beeld blijft).
 const KAART_HOOGTE = '260px'
+
+const STRAAL_SLEUTEL = 'wikipoi.straalModus'
+
+function laadStraalModus() {
+  try {
+    const v = localStorage.getItem(STRAAL_SLEUTEL)
+    return v && STRAAL_MODI[v] ? v : STANDAARD_STRAAL_MODUS
+  } catch {
+    return STANDAARD_STRAAL_MODUS
+  }
+}
+
+function bewaarStraalModus(v) {
+  try {
+    localStorage.setItem(STRAAL_SLEUTEL, v)
+  } catch {
+    // Geen opslag: de keuze geldt alleen deze sessie.
+  }
+}
 
 // "3,2" (km, één decimaal, komma).
 const km = (meters) => (meters / 1000).toFixed(1).replace('.', ',')
@@ -79,6 +113,8 @@ function Onderweg({ pois, summariesById, routePunten }) {
   const [achtergrondAan, setAchtergrondAan] = useState(false)
   const [logboekTonen, setLogboekTonen] = useState(false)
   const [logboekMelding, setLogboekMelding] = useState('')
+  const [straalModus, setStraalModus] = useState(laadStraalModus)
+  const [trackMelding, setTrackMelding] = useState('')
   const simulatieMogelijk =
     TEST_SIMULATIE && Array.isArray(routePunten) && routePunten.length >= 2
   const achtergrondKeuze = TEST_ACHTERGROND && achtergrondMogelijk()
@@ -104,13 +140,75 @@ function Onderweg({ pois, summariesById, routePunten }) {
     simPauze,
     simVersnelling,
     simVolgendePoi,
+    trackLijn,
   } = useOnderweg(pois, {
     vervoer,
     samenvattingen: summariesById,
     eco: ecoOpen,
     simulatie: simulatieGekozen ? routePunten : null,
     achtergrond: achtergrondGekozen,
+    straalModus,
   })
+
+  // Triggerstraal per POI rond het triggerpunt, voor de kaart.
+  const straalCirkels = useMemo(
+    () =>
+      pois.map((p) => {
+        const t = p.snapPoint || p
+        return {
+          id: p.id,
+          lat: t.lat,
+          lng: t.lng,
+          straal: triggerStraal(p, vervoer, straalModus),
+          voorgelezen: !!voorgelezen[p.id],
+        }
+      }),
+    [pois, vervoer, straalModus, voorgelezen]
+  )
+
+  const kiesStraalModus = (v) => {
+    setStraalModus(v)
+    bewaarStraalModus(v)
+  }
+
+  // Track van de laatste rit (ook van een eerdere app-sessie).
+  const vorigeTrack = useMemo(() => (!actief ? trackOpslag.laad() : null), [actief])
+  const vorigeTrackTelling = vorigeTrack ? tellingVan(vorigeTrack) : null
+
+  const deelTrack = async () => {
+    setTrackMelding('')
+    const gpx = alsGpx(vorigeTrack, { naam: 'WikiPoi-rit' })
+    const naam = bestandsnaam(vorigeTrack)
+    try {
+      if (Capacitor.isNativePlatform()) {
+        const geschreven = await Filesystem.writeFile({
+          path: naam,
+          data: gpx,
+          directory: Directory.Cache,
+          encoding: Encoding.UTF8,
+        })
+        await Share.share({ title: naam, files: [geschreven.uri], dialogTitle: 'Track delen of opslaan' })
+        setTrackMelding(`"${naam}" is aangeboden om te delen of op te slaan.`)
+      } else {
+        const url = URL.createObjectURL(new Blob([gpx], { type: 'application/gpx+xml' }))
+        const link = document.createElement('a')
+        link.href = url
+        link.download = naam
+        document.body.appendChild(link)
+        link.click()
+        link.remove()
+        setTimeout(() => URL.revokeObjectURL(url), 1000)
+        setTrackMelding(`"${naam}" opgeslagen.`)
+      }
+    } catch (err) {
+      const bericht = err && err.message ? err.message : String(err)
+      if (/cancel/i.test(bericht)) {
+        setTrackMelding('Delen geannuleerd.')
+        return
+      }
+      setTrackMelding('Track delen mislukt: ' + bericht)
+    }
+  }
 
   // Logboek van de laatste rit (ook van een eerdere app-sessie), opnieuw
   // gelezen telkens als de route stopt.
@@ -157,7 +255,9 @@ function Onderweg({ pois, summariesById, routePunten }) {
       <p className="muted">
         Volgt je GPS-positie langs de route en leest elke POI één keer voor zodra je in de buurt
         bent. Afstand = tot het punt op de route dat het dichtst bij de POI ligt. Triggerstraal:
-        automatisch (straal van de vervoerwijze, of afstand POI–route + 50 m als dat meer is).
+        {straalModus === 'vervoer'
+          ? ' alleen de straal van de vervoerwijze.'
+          : ' automatisch (straal van de vervoerwijze, of afstand POI–route + 50 m als dat meer is).'}
       </p>
       {zonderSamenvatting > 0 && (
         <p className="muted">
@@ -175,6 +275,20 @@ function Onderweg({ pois, summariesById, routePunten }) {
             onClick={() => setVervoer(key)}
           >
             {v.label} ({v.straal} m)
+          </button>
+        ))}
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '12px', alignItems: 'center' }}>
+        <span className="muted">Straal:</span>
+        {Object.entries(STRAAL_MODI).map(([key, m]) => (
+          <button
+            key={key}
+            type="button"
+            className={key === straalModus ? 'btn btn-yellow btn-small' : 'btn btn-indigo btn-small'}
+            aria-pressed={key === straalModus}
+            onClick={() => kiesStraalModus(key)}
+          >
+            {m.label}
           </button>
         ))}
       </div>
@@ -286,6 +400,8 @@ function Onderweg({ pois, summariesById, routePunten }) {
             corridorMeters={null}
             positie={positie}
             rijrichting={rijrichting}
+            track={trackLijn}
+            straalCirkels={straalCirkels}
           />
         </div>
       )}
@@ -314,6 +430,20 @@ function Onderweg({ pois, summariesById, routePunten }) {
             </li>
           ))}
         </ul>
+      )}
+      {vorigeTrack && vorigeTrack.ruw && vorigeTrack.ruw.length > 0 && (
+        <div style={{ marginTop: '16px' }}>
+          <p className="muted">
+            Track laatste rit: {formatAfstand(lengteVan(vorigeTrack, afstand))},{' '}
+            {vorigeTrack.gefilterd.length} posities; metingen {vorigeTrack.ruw.length}, waarvan
+            weggegooid {vorigeTrackTelling.nauwkeurigheid} (nauwkeurigheid) en{' '}
+            {vorigeTrackTelling.sprong} (sprong).
+          </p>
+          <button type="button" className="btn btn-indigo btn-small" onClick={deelTrack}>
+            Track delen (GPX)
+          </button>
+          {trackMelding && <p className="muted">{trackMelding}</p>}
+        </div>
       )}
       {vorigLogboek && (
         <div style={{ marginTop: '16px' }}>
