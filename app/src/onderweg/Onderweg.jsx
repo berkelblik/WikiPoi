@@ -41,6 +41,10 @@
  *   - Indeling: vervoerwijze → Track opnemen → Route starten → rit → track
  *     van de laatste rit → ingeklapt blok "Testen" (simulatie,
  *     Achtergrond-GPS, filtertellers, logboek).
+ *
+ * 0.19.0: keuzevenster bij meerdere POI's tegelijk (KeuzeVenster.jsx,
+ * poiKeuze.js) en de lijst "Later beluisteren" (ook na de rit, tot de
+ * volgende start; ook op het eco-scherm).
  */
 import { useState, useMemo } from 'react'
 import { Capacitor } from '@capacitor/core'
@@ -58,6 +62,7 @@ import {
 import { achtergrondMogelijk } from './positieBron.js'
 import { logboek, analyseer, alsTekst, duurTekst, tijdTekst } from './logboek.js'
 import EcoScherm from './EcoScherm.jsx'
+import KeuzeVenster from './KeuzeVenster.jsx'
 import { SIM_SNELHEID_KMU, SIM_VERSNELLINGEN } from './simulatie.js'
 import { formatAfstand, afstand } from './geo.js'
 import CategoryDot from '../components/CategoryDot.jsx'
@@ -193,6 +198,11 @@ function Onderweg({ pois, summariesById, routePunten }) {
     simVolgendePoi,
     trackLijn,
     trackGepauzeerd,
+    keuze,
+    kies,
+    keuzeLater,
+    later,
+    speelLater,
   } = useOnderweg(pois, {
     vervoer,
     samenvattingen: summariesById,
@@ -480,6 +490,23 @@ function Onderweg({ pois, summariesById, routePunten }) {
           ))}
         </ul>
       )}
+      {later.length > 0 && (
+        <div style={{ marginTop: '12px' }}>
+          <p className="muted">Later beluisteren ({later.length}):</p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+            {later.map((poi) => (
+              <button
+                key={poi.id}
+                type="button"
+                className="btn btn-indigo btn-small"
+                onClick={() => speelLater(poi)}
+              >
+                ▶ {poi.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       {vorigeTrack && (
         <div style={{ marginTop: '16px' }}>
           <p className="muted">{trackSamenvatting(vorigeTrack)}</p>
@@ -595,9 +622,12 @@ function Onderweg({ pois, summariesById, routePunten }) {
           samenvatting={ecoPoi && summariesById ? summariesById[ecoPoi.id] || null : null}
           laatstePoi={laatstePoi}
           onHerhaal={herhaal}
+          later={later}
+          onLater={speelLater}
           onSluiten={() => setEcoOpen(false)}
         />
       )}
+      {actief && keuze && <KeuzeVenster keuze={keuze} onKies={kies} onLater={keuzeLater} />}
     </>
   )
 }

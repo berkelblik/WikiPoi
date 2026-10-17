@@ -19,6 +19,10 @@
  * voorgelezen POI, tot de volgende POI aan de beurt is. Een tik op de knop
  * telt niet mee als bel of sluiten.
  *
+ * "Later beluisteren" (0.19.0): is het scherm zwart, dan staan de POI's die
+ * niet gekozen of al gepasseerd waren als gedimde knoppen "▶ <naam>"
+ * (maximaal LATER_MAX) boven de herhaalknop; tik = voorlezen.
+ *
  * Het scherm wordt via een portal direct in <body> gezet, zodat de stijlen
  * van de stappen (o.a. marges van alinea's in .step) er geen invloed op
  * hebben. Met foto is de klok kleiner, zodat de foto meer ruimte krijgt.
@@ -61,7 +65,20 @@ function afstandDelen(meters) {
 
 const STREEPJES = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330]
 
-function EcoScherm({ poi, positie, rijrichting, samenvatting, laatstePoi, onHerhaal, onSluiten }) {
+// Hoeveel "Later beluisteren"-knoppen het zwarte scherm hoogstens toont.
+const LATER_MAX = 3
+
+function EcoScherm({
+  poi,
+  positie,
+  rijrichting,
+  samenvatting,
+  laatstePoi,
+  onHerhaal,
+  later = [],
+  onLater,
+  onSluiten,
+}) {
   const tikken = useRef(0)
   const tikTimer = useRef(null)
   // Foto die niet laadde (geen verbinding of weg): niet meer tonen.
@@ -192,11 +209,25 @@ function EcoScherm({ poi, positie, rijrichting, samenvatting, laatstePoi, onHerh
         <p className="eco-hint">1× tikken = bel · 3× snel tikken = sluiten</p>
       </div>
     )
-  } else if (laatstePoi && onHerhaal) {
+  } else if ((laatstePoi && onHerhaal) || (later.length > 0 && onLater)) {
+    const laterKlik = (doel) => (e) => {
+      e.stopPropagation()
+      onLater(doel)
+    }
     inhoud = (
-      <button type="button" className="eco-herhaal eco-herhaal-gedimd" onClick={herhaalKlik(laatstePoi)}>
-        ↻ {laatstePoi.label}
-      </button>
+      <div className="eco-onderaan">
+        {onLater &&
+          later.slice(0, LATER_MAX).map((p) => (
+            <button key={p.id} type="button" className="eco-herhaal eco-later" onClick={laterKlik(p)}>
+              ▶ {p.label}
+            </button>
+          ))}
+        {laatstePoi && onHerhaal && (
+          <button type="button" className="eco-herhaal eco-later" onClick={herhaalKlik(laatstePoi)}>
+            ↻ {laatstePoi.label}
+          </button>
+        )}
+      </div>
     )
   }
 

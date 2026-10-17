@@ -1,0 +1,82 @@
+/* Keuzevenster (0.19.0): onderaan, boven app en eco-scherm (z-index 2000). */
+.keuze-venster {
+  position: fixed;
+  left: 12px;
+  right: 12px;
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  max-width: 480px;
+  margin: 0 auto;
+  z-index: 2100;
+  box-sizing: border-box;
+  padding: 16px;
+  border-radius: 18px;
+  background: #1b1d2e;
+  border: 2px solid #f5c84c;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  color: #f3f4f6;
+  font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+  /* M1: bij veel POI's niet hoger dan 70 % van het scherm; de knoppen scrollen. */
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.keuze-titel {
+  margin: 0 0 4px;
+  font-size: 20px;
+  font-weight: 700;
+  color: #f5c84c;
+}
+
+.keuze-hint {
+  margin: 0 0 12px;
+  font-size: 15px;
+  line-height: 1.35;
+  color: #c7c9d3;
+}
+
+.keuze-knoppen {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 5px;
+  margin: -5px;
+}
+
+.keuze-poi {
+  flex: 0 0 auto;
+}
+
+.keuze-poi {
+  min-height: 60px;
+  padding: 12px 16px;
+  border: none;
+  border-radius: 12px;
+  background: #f5c84c;
+  color: #1b1d2e;
+  font-size: 20px;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.keuze-poi-standaard {
+  outline: 3px solid #ffffff;
+  outline-offset: 2px;
+}
+
+.keuze-later {
+  width: 100%;
+  margin-top: 12px;
+  min-height: 48px;
+  border: 1px solid #4b4f63;
+  border-radius: 12px;
+  background: transparent;
+  color: #f3f4f6;
+  font-size: 17px;
+  cursor: pointer;
+}

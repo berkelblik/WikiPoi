@@ -61,6 +61,14 @@
  * van de voorgelezen toelichting. Lukt geen enkele bron, dan wordt de
  * toelichting alsnog voorgelezen (zonder klokzin, die klonk al).
  *
+ * Meerdere POI's tegelijk (0.19.0, poiKeuze.js, keuzes O1–O7): komen er
+ * twee of meer tegelijk binnen hun straal, dan klinkt één bel, worden de
+ * namen genoemd en opent een keuzevenster (keuze); zonder keuze na 10 s
+ * de dichtstbijzijnde. Komt er een bij tijdens het voorlezen: venster "Ook
+ * hier" zonder bel. Niet gekozen of al gepasseerde POI's gaan naar "Later
+ * beluisteren" (later); bij een pauze van de track worden die aangeboden.
+ * Met het scherm uit geen venster: dichtstbijzijnde eerst, rest naar later.
+ *
  * Bouwstap 4 van "Onderweg": eco-scherm; sinds 0.18.0 met track.
  */
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
@@ -74,6 +82,18 @@ import { voorleesDelen } from './voorleestekst.js'
 import { maakSimulatie, volgendeDoel, SIM_SNELHEID_KMU, SIM_VOORLOOP_M } from './simulatie.js'
 import { maakPositieFilter, MAX_SNELHEID_KMU, tellersTekst } from './positieFilter.js'
 import { track, segmentenVan } from './track.js'
+import {
+  besluitBinnen,
+  keuzeVerlopen,
+  kiesUit,
+  volgendeUitWachtrij,
+  pauzeKeuze,
+  aankondigingTekst,
+  pauzeTekst,
+  voegToe,
+  KEUZE_MS,
+  PAUZE_KEUZE_MS,
+} from './poiKeuze.js'
 
 // Minimale verplaatsing voordat de rijrichting wordt (bij)gewerkt. Kleiner
 // maakt de richting bij stilstand onrustig door GPS-ruis.
@@ -105,20 +125,22 @@ export function triggerStraal(vervoer) {
 // - 'eco': dubbele bel, dan naam (indien nodig) en toelichting, zonder klokzin.
 // Heeft de POI audio (eigen POI met mp3-link of gekoppeld bestand), dan
 // klinkt die in plaats van de toelichting, met de toelichting als terugval.
-function spreekPoi(poi, samenvattingen, klok, { soort = 'handmatig', onStart, onEinde } = {}) {
+// zonderBel (0.19.0): geen bel, bijv. na een keuze in het venster (de bel
+// klonk al bij de aankondiging). Geeft false als er niets voor te lezen is.
+function spreekPoi(poi, samenvattingen, klok, { soort = 'handmatig', zonderBel = false, onStart, onEinde } = {}) {
   const online = typeof navigator === 'undefined' || navigator.onLine !== false
   const audio = audioBronnen(poi, online)
   if (audio.bronnen.length > 0) {
-    speelPoiAudio(poi, samenvattingen, klok, audio, { soort, onStart, onEinde })
-    return
+    speelPoiAudio(poi, samenvattingen, klok, audio, { soort, zonderBel, onStart, onEinde })
+    return true
   }
   const delen = voorleesDelen(poi, samenvattingen, soort === 'eco' ? null : klok)
-  if (delen.length === 0) return
+  if (delen.length === 0) return false
   let startGebruikt = false
-  if (soort === 'lijst') {
+  if (soort === 'lijst' && !zonderBel) {
     bel({ onStart })
     startGebruikt = true
-  } else if (soort === 'eco') {
+  } else if (soort === 'eco' && !zonderBel) {
     dubbeleBel({ onStart })
     startGebruikt = true
   }
@@ -129,16 +151,17 @@ function spreekPoi(poi, samenvattingen, klok, { soort = 'handmatig', onStart, on
       onEinde: i === delen.length - 1 ? onEinde : undefined,
     })
   })
+  return true
 }
 
 // Variant van spreekPoi voor een POI met audio: bel (lijst/eco), klokzin
 // (niet bij eco), dan de audio met de toelichting zonder klokzin als terugval.
-function speelPoiAudio(poi, samenvattingen, klok, audio, { soort, onStart, onEinde }) {
+function speelPoiAudio(poi, samenvattingen, klok, audio, { soort, zonderBel, onStart, onEinde }) {
   let startGebruikt = false
-  if (soort === 'lijst') {
+  if (soort === 'lijst' && !zonderBel) {
     bel({ onStart })
     startGebruikt = true
-  } else if (soort === 'eco') {
+  } else if (soort === 'eco' && !zonderBel) {
     dubbeleBel({ onStart })
     startGebruikt = true
   }
@@ -182,6 +205,17 @@ function leesMeting(pos) {
     nauwkeurigheid: c.accuracy,
     tijd: Number.isFinite(pos.timestamp) ? pos.timestamp : Date.now(),
   }
+}
+
+// Is het scherm te zien? (O5: met het scherm uit of een andere app op de
+// voorgrond geen keuzevenster.)
+function labelVan(pois, id) {
+  const p = (pois || []).find((x) => x.id === id)
+  return p ? p.label : String(id)
+}
+
+function schermZichtbaar() {
+  return typeof document === 'undefined' || document.visibilityState !== 'hidden'
 }
 
 function foutTekst(err) {
@@ -237,6 +271,9 @@ export function useOnderweg(
   // Lijnen van de gefilterde posities van deze rit, één per segment.
   const [trackLijn, setTrackLijn] = useState([])
   const [trackGepauzeerd, setTrackGepauzeerd] = useState(false)
+  // Keuzevenster (0.19.0): { soort, ids, tot } of null; "Later beluisteren": ids.
+  const [keuze, setKeuze] = useState(null)
+  const [later, setLater] = useState([])
 
   const bronRef = useRef(null) // { bron, stop } van positieBron.js
   const logboekStopRef = useRef(null)
@@ -249,6 +286,12 @@ export function useOnderweg(
   const simRef = useRef(null)
   const filterRef = useRef(null)
   if (filterRef.current === null) filterRef.current = maakPositieFilter()
+  const keuzeRef = useRef(null)
+  const laterRef = useRef([])
+  const wachtendRef = useRef([]) // ids die na de huidige aan de beurt zijn
+  const bezigIdRef = useRef(null) // POI die nu automatisch wordt voorgelezen
+  const poisMetAfstandRef = useRef([])
+  const pauzeAangebodenRef = useRef(false) // O7: één aanbod per pauze
 
   useEffect(() => {
     samenvattingenRef.current = samenvattingen
@@ -371,6 +414,12 @@ export function useOnderweg(
     setTrackLijn([])
     setTrackGepauzeerd(false)
     pauzeRef.current = false
+    keuzeRef.current = null
+    setKeuze(null)
+    laterRef.current = []
+    setLater([])
+    wachtendRef.current = []
+    bezigIdRef.current = null
     filterRef.current.reset()
     filterRef.current.zetMaxSnelheid(
       MAX_SNELHEID_KMU[vervoerRef.current] || MAX_SNELHEID_KMU[STANDAARD_VERVOER]
@@ -431,11 +480,41 @@ export function useOnderweg(
     return () => clearInterval(iv)
   }, [actief, werkPauzeBij])
 
+  // Venster openen of bijwerken; een meegegeven tot (M3: POI's erbij in een
+  // open venster) blijft staan, anders begint het aftellen.
+  const zetKeuze = useCallback((k) => {
+    keuzeRef.current = k
+      ? {
+          ...k,
+          tot: Number.isFinite(k.tot) ? k.tot : Date.now() + (k.soort === 'pauze' ? PAUZE_KEUZE_MS : KEUZE_MS),
+        }
+      : null
+    setKeuze(keuzeRef.current)
+  }, [])
+
+  const naarLater = useCallback((ids) => {
+    const nieuw = (ids || []).filter((id) => id !== null && id !== undefined && !laterRef.current.includes(id))
+    if (nieuw.length === 0) return
+    laterRef.current = voegToe(laterRef.current, nieuw)
+    setLater(laterRef.current)
+    logboek.noteer('keuze', 'later beluisteren: ' + nieuw.map((id) => labelVan(poisRef.current, id)).join(', '))
+  }, [])
+
+  const uitLater = useCallback((id) => {
+    if (!laterRef.current.includes(id)) return
+    laterRef.current = laterRef.current.filter((x) => x !== id)
+    setLater(laterRef.current)
+  }, [])
+
+  // "Stil": voorlezen stoppen; wat nog in de wachtrij stond gaat naar "Later".
   const stopVoorlezen = useCallback(() => {
     stopSpreken()
     setNuAanHetVoorlezen(null)
     setEcoTrigger(null)
-  }, [])
+    bezigIdRef.current = null
+    naarLater(wachtendRef.current)
+    wachtendRef.current = []
+  }, [naarLater])
 
   const stop = useCallback(() => {
     stopBron()
@@ -444,8 +523,9 @@ export function useOnderweg(
     stopLogboek()
     pauzeRef.current = false
     setTrackGepauzeerd(false)
+    zetKeuze(null)
     setActief(false)
-  }, [stopBron, stopSim, stopVoorlezen, stopLogboek])
+  }, [stopBron, stopSim, stopVoorlezen, stopLogboek, zetKeuze])
 
   // Bij verlaten van de pagina/component GPS-volgen, simulatie, voorlezen en
   // logboek stoppen.
@@ -531,28 +611,38 @@ export function useOnderweg(
       .sort((a, b) => a.afstandTriggerpunt - b.afstandTriggerpunt)
   }, [pois, positie, rijrichting, vervoer])
 
-  // Automatische trigger: alle POI's binnen hun straal die deze rit nog niet
-  // aan de beurt waren, dichtstbijzijnde eerst, via de wachtrij.
+  // Laatste afstanden/klokrichting, voor besluiten buiten de render om.
   useEffect(() => {
-    if (!actief) return
-    const nieuw = poisMetAfstand.filter(
-      (p) => p.afstandTriggerpunt <= p.straal && !voorgelezenRef.current[p.id]
-    )
-    if (nieuw.length === 0) return
-    const volgende = { ...voorgelezenRef.current }
-    nieuw.forEach((p) => {
-      volgende[p.id] = true
-    })
-    voorgelezenRef.current = volgende
-    setVoorgelezen(volgende)
-    const soort = ecoRef.current ? 'eco' : 'lijst'
-    nieuw.forEach((p) => {
-      logboek.noteer(
-        'trigger',
-        `${p.label} (${Math.round(p.afstandTriggerpunt)} m, straal ${Math.round(p.straal)} m, ${soort})`
-      )
-      spreekPoi(p, samenvattingenRef.current, p.klok, {
+    poisMetAfstandRef.current = poisMetAfstand
+  }, [poisMetAfstand])
+
+  const zoekPoi = useCallback(
+    (id) =>
+      poisMetAfstandRef.current.find((p) => p.id === id) ||
+      poisRef.current.find((p) => p.id === id) ||
+      null,
+    []
+  )
+
+  // Volgende uit de wachtrij; via een ref, omdat speelAuto en volgende
+  // elkaar aanroepen.
+  const volgendeRef = useRef(() => {})
+  const biedPauzeAanRef = useRef(() => {})
+
+  // POI automatisch voorlezen (bel tenzij zonderBel, eco of lijst).
+  const speelAuto = useCallback(
+    (id, { zonderBel = false } = {}) => {
+      const p = zoekPoi(id)
+      if (!p) {
+        volgendeRef.current()
+        return
+      }
+      uitLater(id)
+      bezigIdRef.current = id
+      const soort = ecoRef.current ? 'eco' : 'lijst'
+      const gestart = spreekPoi(p, samenvattingenRef.current, Number.isFinite(p.klok) ? p.klok : null, {
         soort,
+        zonderBel,
         onStart: () => {
           setNuAanHetVoorlezen(p.label)
           setLaatstePoiId(p.id)
@@ -560,13 +650,181 @@ export function useOnderweg(
         },
         onEinde: () => {
           setNuAanHetVoorlezen(null)
-          setEcoTrigger((huidig) =>
-            huidig && huidig.id === p.id ? { ...huidig, klaar: true } : huidig
-          )
+          setEcoTrigger((huidig) => (huidig && huidig.id === p.id ? { ...huidig, klaar: true } : huidig))
+          if (bezigIdRef.current === id) {
+            bezigIdRef.current = null
+            volgendeRef.current()
+          }
         },
       })
+      if (!gestart) {
+        bezigIdRef.current = null
+        volgendeRef.current()
+      }
+    },
+    [zoekPoi, uitLater]
+  )
+
+  // Volgende uit de wachtrij (O6). Niet zolang er op een keuze wordt
+  // gewacht; staat er een venster "Ook hier" open, dan is het nu aan die
+  // POI('s), zonder de 10 s af te wachten.
+  const volgende = useCallback(() => {
+    if (bezigIdRef.current) return
+    const k = keuzeRef.current
+    if (k && k.soort === 'overlap') return
+    if (k && k.soort === 'ook') {
+      zetKeuze(null)
+      wachtendRef.current = voegToe(wachtendRef.current, k.ids)
+    }
+    const r = volgendeUitWachtrij(wachtendRef.current, (id) => {
+      const p = poisMetAfstandRef.current.find((x) => x.id === id)
+      return !!p && p.afstandTriggerpunt <= p.straal
     })
-  }, [actief, poisMetAfstand])
+    wachtendRef.current = r.rest
+    naarLater(r.later)
+    if (r.speel) speelAuto(r.speel)
+    else if (pauzeRef.current) biedPauzeAanRef.current()
+  }, [naarLater, speelAuto, zetKeuze])
+
+  useEffect(() => {
+    volgendeRef.current = volgende
+  }, [volgende])
+
+  // Besluit uit poiKeuze.js uitvoeren.
+  const voer = useCallback(
+    (r, { uitVenster = false } = {}) => {
+      if (r.onderbreek) {
+        const huidig = bezigIdRef.current
+        bezigIdRef.current = null
+        stopSpreken()
+        setNuAanHetVoorlezen(null)
+        if (huidig) naarLater([huidig])
+      }
+      naarLater(r.later)
+      if (r.wachtend.length > 0) wachtendRef.current = voegToe(wachtendRef.current, r.wachtend)
+      if (r.keuze) {
+        zetKeuze(r.keuze)
+        const namen = r.keuze.ids.map((id) => labelVan(poisRef.current, id))
+        logboek.noteer('keuze', `venster ${r.keuze.soort}: ${namen.join(', ')}`)
+        if (r.aankondig) {
+          bel()
+          spreek(aankondigingTekst(namen))
+        }
+      }
+      if (r.speel) speelAuto(r.speel, { zonderBel: uitVenster })
+      else volgende()
+    },
+    [naarLater, zetKeuze, speelAuto, volgende]
+  )
+
+  // Automatische trigger: alle POI's binnen hun straal die deze rit nog niet
+  // aan de beurt waren (dichtstbijzijnde eerst); poiKeuze.js beslist of er
+  // voorgelezen, gekozen of gewacht wordt (0.19.0).
+  useEffect(() => {
+    if (!actief) return
+    const nieuw = poisMetAfstand.filter(
+      (p) => p.afstandTriggerpunt <= p.straal && !voorgelezenRef.current[p.id]
+    )
+    if (nieuw.length === 0) return
+    const volgendeMap = { ...voorgelezenRef.current }
+    nieuw.forEach((p) => {
+      volgendeMap[p.id] = true
+    })
+    voorgelezenRef.current = volgendeMap
+    setVoorgelezen(volgendeMap)
+    const soort = ecoRef.current ? 'eco' : 'lijst'
+    nieuw.forEach((p) => {
+      logboek.noteer(
+        'trigger',
+        `${p.label} (${Math.round(p.afstandTriggerpunt)} m, straal ${Math.round(p.straal)} m, ${soort})`
+      )
+    })
+    voer(
+      besluitBinnen({
+        nieuw,
+        bezig: !!bezigIdRef.current,
+        keuze: keuzeRef.current,
+        zichtbaar: schermZichtbaar(),
+      })
+    )
+  }, [actief, poisMetAfstand, voer])
+
+  // Venster verloopt zonder keuze (O3).
+  useEffect(() => {
+    if (!keuze) return undefined
+    const t = setTimeout(() => {
+      const k = keuzeRef.current
+      if (!k || k.tot !== keuze.tot) return
+      zetKeuze(null)
+      logboek.noteer('keuze', `geen keuze (${k.soort})`)
+      voer(keuzeVerlopen(k), { uitVenster: true })
+    }, Math.max(0, keuze.tot - Date.now()))
+    return () => clearTimeout(t)
+  }, [keuze, voer, zetKeuze])
+
+  // Pauze van de track (O7): POI's uit "Later" aanbieden, één keer per
+  // pauze; bij het begin van de pauze, of zodra het voorlezen tijdens de
+  // pauze klaar is (via volgende()).
+  const biedPauzeAan = useCallback(() => {
+    if (pauzeAangebodenRef.current) return
+    const k = pauzeKeuze({
+      gepauzeerd: pauzeRef.current,
+      later: laterRef.current,
+      bezig: !!bezigIdRef.current,
+      keuze: keuzeRef.current,
+    })
+    if (!k) return
+    pauzeAangebodenRef.current = true
+    zetKeuze(k)
+    logboek.noteer('keuze', `pauze: ${k.ids.length} later beluisteren aangeboden`)
+    spreek(pauzeTekst(k.ids.length))
+  }, [zetKeuze])
+
+  useEffect(() => {
+    biedPauzeAanRef.current = biedPauzeAan
+  }, [biedPauzeAan])
+
+  useEffect(() => {
+    if (trackGepauzeerd) biedPauzeAan()
+    else pauzeAangebodenRef.current = false
+  }, [trackGepauzeerd, biedPauzeAan])
+
+  // Tik in het venster.
+  const kies = useCallback(
+    (id) => {
+      const k = keuzeRef.current
+      if (!k) return
+      zetKeuze(null)
+      logboek.noteer('keuze', `gekozen: ${labelVan(poisRef.current, id)}`)
+      // Aankondiging of pauzezin die nog loopt: afbreken, de keuze gaat voor.
+      if (k.soort !== 'ook' && !bezigIdRef.current) stopSpreken()
+      voer(kiesUit(k, id), { uitVenster: true })
+    },
+    [voer, zetKeuze]
+  )
+
+  // "Later" (overlap/ook) of "Sluiten" (pauze) in het venster.
+  const keuzeLater = useCallback(() => {
+    const k = keuzeRef.current
+    if (!k) return
+    zetKeuze(null)
+    if (k.soort !== 'pauze') naarLater(k.ids)
+    volgende()
+  }, [naarLater, volgende, zetKeuze])
+
+  // POI uit "Later beluisteren" voorlezen (zonder bel, met klokzin).
+  const speelLater = useCallback(
+    (poi) => {
+      if (!poi) return
+      uitLater(poi.id)
+      const p = zoekPoi(poi.id) || poi
+      spreekPoi(p, samenvattingenRef.current, Number.isFinite(p.klok) ? p.klok : null, {
+        onStart: () => setNuAanHetVoorlezen(p.label),
+        onEinde: () => setNuAanHetVoorlezen(null),
+      })
+    },
+    [uitLater, zoekPoi]
+  )
 
   const dichtstbij = poisMetAfstand.slice(0, AANTAL_DICHTSTBIJ)
 
@@ -579,6 +837,14 @@ export function useOnderweg(
       : null
   const aantalVoorgelezen = Object.keys(voorgelezen).length
   const laatstePoi = laatstePoiId ? pois.find((p) => p.id === laatstePoiId) || null : null
+  const keuzePois = keuze
+    ? {
+        soort: keuze.soort,
+        tot: keuze.tot,
+        pois: keuze.ids.map((id) => pois.find((p) => p.id === id)).filter(Boolean),
+      }
+    : null
+  const laterPois = later.map((id) => pois.find((p) => p.id === id)).filter(Boolean)
 
   return {
     actief,
@@ -602,5 +868,10 @@ export function useOnderweg(
     simVolgendePoi,
     trackLijn,
     trackGepauzeerd,
+    keuze: keuzePois,
+    kies,
+    keuzeLater,
+    later: laterPois,
+    speelLater,
   }
 }
