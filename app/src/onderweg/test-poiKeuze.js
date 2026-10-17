@@ -3,6 +3,7 @@
  *
  * Netwerkloze test voor poiKeuze.js (0.19.0): meerdere POI's tegelijk,
  * keuzevenster, verlopen, kiezen, wachtrij (O6), pauze (O7) en teksten.
+ * 0.19.1: herhaling van het pauzevenster hoogstens eens per 5 min (P6).
  *
  * Uitvoeren vanuit app/:  node src/onderweg/test-poiKeuze.js
  */
@@ -13,6 +14,8 @@ import {
   kiesUit,
   volgendeUitWachtrij,
   pauzeKeuze,
+  magPauzeAanbieden,
+  PAUZE_HERHAAL_MS,
   aankondigingTekst,
   pauzeTekst,
   opsomming,
@@ -137,6 +140,16 @@ test('Pauzevenster (O7) alleen bij pauze, iets in Later, niets bezig, geen venst
     }),
     null
   )
+})
+
+test('Pauzevenster herhalen (P6): na 5 min, of eerder als er iets nieuws in Later staat', () => {
+  assert.strictEqual(PAUZE_HERHAAL_MS, 300000)
+  assert.strictEqual(magPauzeAanbieden({ nu: 1000, vorige: null, later: ['a'] }), true)
+  const vorige = { tijd: 1000, ids: ['a', 'b'] }
+  assert.strictEqual(magPauzeAanbieden({ nu: 31000, vorige, later: ['a', 'b'] }), false)
+  assert.strictEqual(magPauzeAanbieden({ nu: 31000, vorige, later: ['b'] }), false)
+  assert.strictEqual(magPauzeAanbieden({ nu: 31000, vorige, later: ['a', 'c'] }), true)
+  assert.strictEqual(magPauzeAanbieden({ nu: 1000 + PAUZE_HERHAAL_MS, vorige, later: ['a'] }), true)
 })
 
 test('Teksten en hulpjes', () => {

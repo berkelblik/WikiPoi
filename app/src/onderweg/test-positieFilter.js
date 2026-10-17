@@ -40,11 +40,12 @@ test('Ongeldige invoer → null', () => {
   assert.strictEqual(f.verwerk(null), null)
 })
 
-test('A1: slechter dan 25 m → weggegooid', () => {
+test('A1: slechter dan 35 m → weggegooid (0.19.1, F2; was 25 m)', () => {
   const f = maakPositieFilter()
   f.verwerk(punt(0, 0))
   assert.strictEqual(f.verwerk(punt(5, 1, 40)).status, 'nauwkeurigheid')
-  assert.strictEqual(f.verwerk(punt(10, 2, 25)).status, 'geaccepteerd')
+  assert.strictEqual(f.verwerk(punt(10, 2, 35)).status, 'geaccepteerd')
+  assert.strictEqual(f.verwerk(punt(12, 3, 27)).status, 'geaccepteerd')
 })
 
 test('A1: onbekende nauwkeurigheid telt als goed', () => {
@@ -56,12 +57,12 @@ test('A1: terugval na 10 s → beste slechte meting (≤ 100 m)', () => {
   const f = maakPositieFilter()
   f.verwerk(punt(0, 0))
   assert.strictEqual(f.verwerk(punt(20, 4, 60)).status, 'nauwkeurigheid')
-  assert.strictEqual(f.verwerk(punt(30, 6, 35)).status, 'nauwkeurigheid')
+  assert.strictEqual(f.verwerk(punt(30, 6, 45)).status, 'nauwkeurigheid')
   assert.strictEqual(f.verwerk(punt(40, 8, 80)).status, 'nauwkeurigheid')
   const r = f.verwerk(punt(50, 10, 70))
   assert.strictEqual(r.status, 'geaccepteerd')
   assert.strictEqual(r.terugval, true)
-  // De beste was die van 35 m (op 30 m); gemiddelde van 0 en 30.
+  // De beste was die van 45 m (op 30 m); gemiddelde van 0 en 30.
   assert.ok(Math.abs(meterVan(r.punt) - 15) < 0.1, meterVan(r.punt))
 })
 

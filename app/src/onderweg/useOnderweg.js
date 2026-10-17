@@ -6,13 +6,19 @@
  * route dat het dichtst bij de POI ligt, snapPoint uit App.jsx) en leest een
  * POI voor zodra je binnen de triggerstraal komt — per rit één keer.
  *
- * Triggerstraal (0.18.1, keuze S1): altijd de straal van de vervoerwijze,
- * ook voor POI's ver van de route. Er wordt gemeten tot het punt op de
- * route, dus zo'n POI triggert nog steeds bij het passeren. (De keuze
- * "Automatisch" uit 0.18.0, met afstand POI–route + 50 m, is vervallen.)
+ * Triggerstraal (0.18.1, keuze S1): de straal van de vervoerwijze; sinds
+ * 0.19.1 gaat een radius > 0 uit de CSV (eigen POI's) voor (trigger.js).
+ * (De keuze "Automatisch" uit 0.18.0, met afstand POI–route + 50 m, is
+ * vervallen.)
+ *
+ * Afstand (0.19.1, keuze T1, trigger.js): de kleinste van de afstand tot
+ * het triggerpunt op de route en de afstand tot de POI zelf. Zo triggert
+ * een POI bij het volgen van de route én als je er werkelijk langs komt
+ * terwijl de route ergens anders loopt. Het logboek noemt beide afstanden
+ * en de afstand POI–route (T2).
  *
  * Positiefilter (0.18.0, positieFilter.js): GPS-metingen gaan eerst door
- * het filter (nauwkeurigheid ≤ 25 m met terugval, sprongfilter per
+ * het filter (nauwkeurigheid ≤ 35 m met terugval, sprongfilter per
  * vervoerwijze, gemiddelde over 5 metingen); alleen de gefilterde positie
  * bepaalt pointer, rijrichting en trigger. De simulatie gaat er niet door
  * ("Naar volgende POI" is een bewuste sprong).
@@ -23,6 +29,11 @@
  * 0.18.1: alleen met optie trackOpnemen; bij stilstand pauzeert de opname
  * (trackGepauzeerd) en gaat bij beweging verder in een nieuw segment
  * (trackLijn = [[[lat, lng], …], …], één lijn per segment).
+ * 0.19.1 (P5/P6): alleen pauze bij aantoonbaar stilstaan (posities binnen
+ * 5 m); uitblijvende posities geven geen pauze meer (tik() alleen bij de
+ * simulatie). Pas een pauze van 20 s telt (track.pauzeTelt()): die komt in
+ * het logboek en alleen dan worden de POI's uit "Later" aangeboden, hoogstens
+ * één keer per 5 min tenzij er iets nieuws in "Later" staat.
  *
  * Rijrichting: niet uit coords.heading (op Android via @capacitor/geolocation
  * vaak leeg), maar berekend uit twee GPS-punten die minstens
@@ -82,12 +93,14 @@ import { voorleesDelen } from './voorleestekst.js'
 import { maakSimulatie, volgendeDoel, SIM_SNELHEID_KMU, SIM_VOORLOOP_M } from './simulatie.js'
 import { maakPositieFilter, MAX_SNELHEID_KMU, tellersTekst } from './positieFilter.js'
 import { track, segmentenVan } from './track.js'
+import { poiStraal, triggerAfstand, triggerTekst } from './trigger.js'
 import {
   besluitBinnen,
   keuzeVerlopen,
   kiesUit,
   volgendeUitWachtrij,
   pauzeKeuze,
+  magPauzeAanbieden,
   aankondigingTekst,
   pauzeTekst,
   voegToe,
@@ -292,6 +305,7 @@ export function useOnderweg(
   const bezigIdRef = useRef(null) // POI die nu automatisch wordt voorgelezen
   const poisMetAfstandRef = useRef([])
   const pauzeAangebodenRef = useRef(false) // O7: één aanbod per pauze
+  const vorigAanbodRef = useRef(null) // P6: { tijd, ids } van het laatste aanbod
 
   useEffect(() => {
     samenvattingenRef.current = samenvattingen
@@ -314,14 +328,29 @@ export function useOnderweg(
     }
   }, [vervoer])
 
-  // Pauzestatus van de track bijwerken (en in het logboek bij een wissel).
+  // Pauzestatus van de track bijwerken. Het scherm toont de pauze na 3 s;
+  // het logboek en het pauze-aanbod (O7) pas als de pauze telt (20 s, P6),
+  // zodat kort stilstaan geen regels oplevert.
   const pauzeRef = useRef(false)
+  const langePauzeRef = useRef(false)
+  const [langePauze, setLangePauze] = useState(false)
   const werkPauzeBij = useCallback(() => {
     const nu = track.gepauzeerd()
-    if (nu === pauzeRef.current) return
-    pauzeRef.current = nu
-    setTrackGepauzeerd(nu)
-    logboek.noteer('info', nu ? 'track gepauzeerd (stilstand)' : 'track verder')
+    if (nu !== pauzeRef.current) {
+      pauzeRef.current = nu
+      setTrackGepauzeerd(nu)
+    }
+    const lang = track.pauzeTelt()
+    if (lang === langePauzeRef.current) return
+    langePauzeRef.current = lang
+    setLangePauze(lang)
+    if (lang) {
+      logboek.noteer('info', 'track gepauzeerd (stilstand)')
+    } else {
+      const p = track.laatstePauze()
+      const s = p && Number.isFinite(p.eind) ? Math.round((p.eind - p.start) / 1000) : null
+      logboek.noteer('info', s === null ? 'track verder' : `track verder (pauze ${s} s)`)
+    }
   }, [])
 
   // Gefilterde (of gesimuleerde) positie tonen: rijrichting, positie, track.
@@ -414,6 +443,9 @@ export function useOnderweg(
     setTrackLijn([])
     setTrackGepauzeerd(false)
     pauzeRef.current = false
+    langePauzeRef.current = false
+    setLangePauze(false)
+    vorigAanbodRef.current = null
     keuzeRef.current = null
     setKeuze(null)
     laterRef.current = []
@@ -469,12 +501,14 @@ export function useOnderweg(
     }
   }, [simulatie, achtergrond, trackOpnemen, stopBron, stopSim, stopLogboek, verwerkPositie, verwerkGps])
 
-  // Elke seconde: pauze van de track ook als er even geen posities komen
-  // (simulatie op pauze, GPS-gat).
+  // Elke seconde: pauzestatus bijwerken (de duur van een pauze loopt door
+  // zonder nieuwe posities). Bij de simulatie ook pauzeren zonder nieuwe
+  // posities (simulatie op pauze); bij echte GPS niet meer (P5: een gat in
+  // de metingen is geen stilstand).
   useEffect(() => {
     if (!actief) return undefined
     const iv = setInterval(() => {
-      track.tik()
+      if (simRef.current) track.tik()
       werkPauzeBij()
     }, 1000)
     return () => clearInterval(iv)
@@ -523,6 +557,8 @@ export function useOnderweg(
     stopLogboek()
     pauzeRef.current = false
     setTrackGepauzeerd(false)
+    langePauzeRef.current = false
+    setLangePauze(false)
     zetKeuze(null)
     setActief(false)
   }, [stopBron, stopSim, stopVoorlezen, stopLogboek, zetKeuze])
@@ -593,17 +629,24 @@ export function useOnderweg(
     })
   }, [])
 
-  // Per POI: afstand tot triggerpunt (snapPoint; anders de POI zelf),
-  // triggerstraal en klokrichting. Gesorteerd op afstand tot triggerpunt.
+  // Per POI: triggerafstand (T1: de kleinste van triggerpunt op de route en
+  // de POI zelf; afstandTriggerpunt), beide afstanden apart, triggerstraal
+  // (radius uit de CSV of die van de vervoerwijze) en klokrichting.
+  // Gesorteerd op triggerafstand.
   const poisMetAfstand = useMemo(() => {
     if (!positie) return []
+    const vervoerStraal = triggerStraal(vervoer)
     return pois
       .map((p) => {
-        const triggerpunt = p.snapPoint || p
+        const t = triggerAfstand(positie, p)
+        const straal = poiStraal(p, vervoerStraal)
         return {
           ...p,
-          afstandTriggerpunt: afstand(positie, triggerpunt),
-          straal: triggerStraal(vervoer),
+          afstandTriggerpunt: t.afstand,
+          afstandPoi: t.totPoi,
+          afstandRoutepunt: t.totRoutepunt,
+          straal,
+          eigenStraal: straal !== vervoerStraal,
           klok: rijrichting === null ? null : klokRichting(rijrichting, peiling(positie, p)),
         }
       })
@@ -683,7 +726,7 @@ export function useOnderweg(
     wachtendRef.current = r.rest
     naarLater(r.later)
     if (r.speel) speelAuto(r.speel)
-    else if (pauzeRef.current) biedPauzeAanRef.current()
+    else if (langePauzeRef.current) biedPauzeAanRef.current()
   }, [naarLater, speelAuto, zetKeuze])
 
   useEffect(() => {
@@ -734,10 +777,7 @@ export function useOnderweg(
     setVoorgelezen(volgendeMap)
     const soort = ecoRef.current ? 'eco' : 'lijst'
     nieuw.forEach((p) => {
-      logboek.noteer(
-        'trigger',
-        `${p.label} (${Math.round(p.afstandTriggerpunt)} m, straal ${Math.round(p.straal)} m, ${soort})`
-      )
+      logboek.noteer('trigger', triggerTekst(p, soort))
     })
     voer(
       besluitBinnen({
@@ -763,18 +803,22 @@ export function useOnderweg(
   }, [keuze, voer, zetKeuze])
 
   // Pauze van de track (O7): POI's uit "Later" aanbieden, één keer per
-  // pauze; bij het begin van de pauze, of zodra het voorlezen tijdens de
-  // pauze klaar is (via volgende()).
+  // pauze; zodra de pauze telt (20 s, P6), of zodra het voorlezen tijdens
+  // de pauze klaar is (via volgende()). Hoogstens één keer per 5 min, tenzij
+  // er sinds het vorige aanbod iets nieuws in "Later" staat.
   const biedPauzeAan = useCallback(() => {
     if (pauzeAangebodenRef.current) return
     const k = pauzeKeuze({
-      gepauzeerd: pauzeRef.current,
+      gepauzeerd: langePauzeRef.current,
       later: laterRef.current,
       bezig: !!bezigIdRef.current,
       keuze: keuzeRef.current,
     })
     if (!k) return
+    const nu = Date.now()
+    if (!magPauzeAanbieden({ nu, vorige: vorigAanbodRef.current, later: k.ids })) return
     pauzeAangebodenRef.current = true
+    vorigAanbodRef.current = { tijd: nu, ids: k.ids }
     zetKeuze(k)
     logboek.noteer('keuze', `pauze: ${k.ids.length} later beluisteren aangeboden`)
     spreek(pauzeTekst(k.ids.length))
@@ -785,9 +829,9 @@ export function useOnderweg(
   }, [biedPauzeAan])
 
   useEffect(() => {
-    if (trackGepauzeerd) biedPauzeAan()
+    if (langePauze) biedPauzeAan()
     else pauzeAangebodenRef.current = false
-  }, [trackGepauzeerd, biedPauzeAan])
+  }, [langePauze, biedPauzeAan])
 
   // Tik in het venster.
   const kies = useCallback(

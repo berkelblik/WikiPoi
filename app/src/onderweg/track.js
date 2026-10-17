@@ -25,6 +25,19 @@
  * (GPS-klok) van het eerste punt na de pauze, start/eind = klok van het
  * toestel (voor de duur). Een punt hoort bij segment n = aantal pauzes met
  * tot <= tijd van het punt.
+ *
+ * 0.19.1 (testrit 17-10, ± 260 pauzes in 40 min):
+ *   P5 Pauze alleen bij aantoonbaar stilstaan: minstens PAUZE_MIN_POSITIES
+ *      gefilterde posities, PAUZE_NA_MS lang, alle binnen PAUZE_STRAAL_M.
+ *      Uitblijvende posities (weggegooide metingen) geven geen pauze meer;
+ *      tik() is alleen nog voor de simulatie.
+ *   P6 Een pauze telt pas vanaf KORTE_PAUZE_MS (20 s); pauzeTelt() zegt of
+ *      de lopende pauze al zo lang duurt.
+ *   P7 Metingen tijdens een pauze worden niet als losse punten opgenomen
+ *      (geen kluwen in de GPX), maar samengevat in de pauze: aantal,
+ *      mediaan nauwkeurigheid en grootste afstand tot het pauzepunt; in de
+ *      GPX als <desc> bij de wpt "pauze (…)".
+ *   F1 Elk punt van de ruwe track krijgt zijn nauwkeurigheid als <desc>.
  */
 
 export const OPSLAG_SLEUTEL = 'wikipoi-track'
@@ -34,7 +47,10 @@ export const OPSLAAN_MS = 30000
 export const PAUZE_NA_MS = 3000
 export const PAUZE_STRAAL_M = 5
 export const HERVAT_M = 8
-export const KORTE_PAUZE_MS = 10000
+export const KORTE_PAUZE_MS = 20000
+export const PAUZE_MIN_POSITIES = 3
+// Hoogstens zoveel nauwkeurigheden per pauze bewaren (voor de mediaan).
+const MAX_PAUZE_METINGEN = 1000
 
 // Statuscodes in de compacte opslag.
 const CODE = { geaccepteerd: 'g', nauwkeurigheid: 'n', sprong: 's' }
@@ -67,19 +83,42 @@ export function maakTrack({ nu = () => Date.now(), opslag = standaardOpslag() } 
   // Laatste bewegingspunt { lat, lng, ontvangen } en de lopende pauze.
   let anker = null
   let pauze = null
+  let vorigePauze = null // laatst afgesloten pauze (ook een korte)
 
   function openPauze() {
-    pauze = { van: null, tot: null, start: nu(), eind: null, lat: rond(anker.lat, 6), lng: rond(anker.lng, 6) }
+    pauze = {
+      van: null,
+      tot: null,
+      start: nu(),
+      eind: null,
+      lat: rond(anker.lat, 6),
+      lng: rond(anker.lng, 6),
+      metingen: 0,
+      nauw: [],
+      maxAfstand: 0,
+    }
     const laatste = data.gefilterd[data.gefilterd.length - 1]
     pauze.van = laatste ? laatste[0] : null
     data.pauzes.push(pauze)
     opslaan(true)
   }
 
+  // Nauwkeurigheden tijdens de pauze samenvatten tot de mediaan (P7).
+  function vatSamen(p) {
+    if (Array.isArray(p.nauw)) {
+      const n = p.nauw.slice().sort((a, b) => a - b)
+      p.mediaanNauw = n.length ? rond(n[Math.floor(n.length / 2)], 1) : null
+      delete p.nauw
+    }
+    p.maxAfstand = rond(p.maxAfstand, 1)
+  }
+
   function sluitPauze(tijd) {
     pauze.tot = tijd
     pauze.eind = nu()
+    vatSamen(pauze)
     if (pauze.eind - pauze.start < KORTE_PAUZE_MS) data.pauzes.pop()
+    vorigePauze = pauze
     pauze = null
   }
 
@@ -100,11 +139,25 @@ export function maakTrack({ nu = () => Date.now(), opslag = standaardOpslag() } 
       laatstOpgeslagen = 0
       anker = null
       pauze = null
+      vorigePauze = null
       opslaan(true)
     },
-    /** Ruwe meting met de uitkomst van het filter (genegeerd tijdens een pauze). */
+    /**
+     * Ruwe meting met de uitkomst van het filter. Tijdens een pauze alleen
+     * meegeteld in de samenvatting van de pauze (P7).
+     */
     meting({ lat, lng, nauwkeurigheid, tijd }, status) {
-      if (!data || pauze || data.ruw.length >= MAX_PUNTEN || !CODE[status]) return
+      if (!data || !CODE[status]) return
+      if (pauze) {
+        pauze.metingen += 1
+        if (Number.isFinite(nauwkeurigheid) && pauze.nauw.length < MAX_PAUZE_METINGEN) {
+          pauze.nauw.push(nauwkeurigheid)
+        }
+        const d = meters(pauze, { lat, lng })
+        if (Number.isFinite(d) && d > pauze.maxAfstand) pauze.maxAfstand = d
+        return
+      }
+      if (data.ruw.length >= MAX_PUNTEN) return
       data.ruw.push([tijd || nu(), rond(lat, 6), rond(lng, 6), rond(nauwkeurigheid, 1), CODE[status]])
       opslaan(false)
     },
@@ -121,20 +174,28 @@ export function maakTrack({ nu = () => Date.now(), opslag = standaardOpslag() } 
         sluitPauze(t)
         anker = { lat, lng, ontvangen: nu() }
       } else if (!anker || meters(anker, p) > PAUZE_STRAAL_M) {
-        anker = { lat, lng, ontvangen: nu() }
-      } else if (nu() - anker.ontvangen >= PAUZE_NA_MS) {
-        openPauze()
-        return
+        anker = { lat, lng, ontvangen: nu(), aantal: 1 }
+      } else {
+        // P5: pas pauze na PAUZE_NA_MS én genoeg posities binnen de straal.
+        anker.aantal = (anker.aantal || 1) + 1
+        if (nu() - anker.ontvangen >= PAUZE_NA_MS && anker.aantal >= PAUZE_MIN_POSITIES) {
+          openPauze()
+          return
+        }
       }
       data.gefilterd.push([t, rond(lat, 6), rond(lng, 6)])
       opslaan(false)
     },
-    /** Elke seconde: pauze ook zonder nieuwe posities (simulatie op pauze, GPS-gat). */
+    /** Elke seconde bij de simulatie: pauze ook zonder nieuwe posities (simulatie op pauze). */
     tik() {
       if (data && !pauze && anker && nu() - anker.ontvangen >= PAUZE_NA_MS) openPauze()
     },
-    /** True zolang de opname gepauzeerd is. */
+    /** True zolang de opname gepauzeerd is (na 3 s stilstand). */
     gepauzeerd: () => !!pauze,
+    /** True als de lopende pauze al KORTE_PAUZE_MS duurt (P6: dan telt hij). */
+    pauzeTelt: () => !!pauze && nu() - pauze.start >= KORTE_PAUZE_MS,
+    /** Laatst afgesloten pauze ({ start, eind, … }), of null. */
+    laatstePauze: () => vorigePauze,
     stop() {
       if (!data) return
       // Een pauze die bij het stoppen nog loopt, is geen pauze maar het einde.
@@ -241,8 +302,19 @@ function xml(tekst) {
 
 const isoTijd = (ms) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z')
 
-function trkpt(lat, lng, tijd) {
-  return `      <trkpt lat="${lat}" lon="${lng}"><time>${isoTijd(tijd)}</time></trkpt>`
+// F1: met nauwkeurigheid (ruwe track) als <desc>"±23 m"</desc>.
+function trkpt(lat, lng, tijd, nauw) {
+  const desc = Number.isFinite(nauw) ? `<desc>±${Math.round(nauw)} m</desc>` : ''
+  return `      <trkpt lat="${lat}" lon="${lng}"><time>${isoTijd(tijd)}</time>${desc}</trkpt>`
+}
+
+// Samenvatting van de metingen tijdens een pauze (P7), of ''.
+function pauzeDesc(p) {
+  if (!Number.isFinite(p.metingen) || p.metingen === 0) return ''
+  const delen = [`${p.metingen} ${p.metingen === 1 ? 'meting' : 'metingen'} tijdens de pauze`]
+  if (Number.isFinite(p.mediaanNauw)) delen.push(`mediaan ±${Math.round(p.mediaanNauw)} m`)
+  if (Number.isFinite(p.maxAfstand)) delen.push(`tot ${Math.round(p.maxAfstand)} m van het pauzepunt`)
+  return delen.join(', ')
 }
 
 /** Bestandsnaam: "WikiPoi-track-2026-10-16-1405.gpx" (lokale tijd). */
@@ -282,25 +354,28 @@ export function alsGpx(data, { maker = 'WikiPoi', naam = 'WikiPoi-rit' } = {}) {
     if (p.lat === null || p.lng === null || !Number.isFinite(p.start)) return
     const ms = (p.eind || p.start) - p.start
     const duur = ms < 59500 ? `${Math.round(ms / 1000)} s` : `${Math.round(ms / 60000)} min`
+    const desc = pauzeDesc(p)
     regels.push(
-      `  <wpt lat="${p.lat}" lon="${p.lng}"><time>${isoTijd(p.start)}</time><name>${xml(`pauze (${duur})`)}</name></wpt>`
+      `  <wpt lat="${p.lat}" lon="${p.lng}"><time>${isoTijd(p.start)}</time><name>${xml(`pauze (${duur})`)}</name>` +
+        (desc ? `<desc>${xml(desc)}</desc>` : '') +
+        '</wpt>'
     )
   })
-  const trk = (titel, punten) => {
+  const trk = (titel, punten, metNauw) => {
     regels.push('  <trk>')
     regels.push(`    <name>${xml(titel)}</name>`)
     const segmenten = segmenteer(punten, data)
     ;(segmenten.length ? segmenten : [[]]).forEach((seg) => {
       regels.push('    <trkseg>')
       seg.forEach((p) => {
-        if (p[1] !== null && p[2] !== null) regels.push(trkpt(p[1], p[2], p[0]))
+        if (p[1] !== null && p[2] !== null) regels.push(trkpt(p[1], p[2], p[0], metNauw ? p[3] : null))
       })
       regels.push('    </trkseg>')
     })
     regels.push('  </trk>')
   }
   trk('Gefilterd', data.gefilterd || [])
-  trk('Ruw (alle metingen)', data.ruw || [])
+  trk('Ruw (alle metingen)', data.ruw || [], true)
   regels.push('</gpx>')
   return regels.join('\n') + '\n'
 }

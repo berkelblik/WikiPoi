@@ -259,20 +259,27 @@ const COORD_PATTERN = /^-?\d+(\.\d+)?$/;
  * - pluscode: wordt ongewijzigd doorgegeven (alleen spaties eromheen weg);
  *   WikiPoi koppelt er lokale audiobestanden mee (bestandsnaam = pluscode,
  *   zoals EuroPoi). De positie komt altijd uit lat/lng.
- * - category en radius worden genegeerd.
+ * - category wordt genegeerd.
+ * - radius (0.19.1): triggerstraal in meters; 0, leeg of geen geldig getal
+ *   = de straal van de vervoerwijze (zoals in EuroPoi).
+ * - Dubbele POI's (0.19.1, D1): dezelfde naam (hoofdletters en spaties
+ *   eromheen tellen niet) op minder dan DUBBEL_MAX_METERS van een eerdere
+ *   regel worden samengevoegd tot de eerste; lege velden (desc, mp3,
+ *   pluscode, radius) worden aangevuld uit de dubbele. Zie merged.
  * - mp3: wordt ongewijzigd doorgegeven (alleen spaties eromheen weg). In
  *   EuroPoi is dit een internetlink; lokale audio koppelt de app apart.
  * - Lege regels tellen niet mee.
  *
  * @param {string} text - inhoud van het bestand
  * @returns {{
- *   pois: Array<{lat:number, lng:number, pluscode:string, name:string, desc:string, mp3:string, line:number}>,
+ *   pois: Array<{lat:number, lng:number, pluscode:string, name:string, desc:string, radius:number, mp3:string, line:number}>,
  *   skipped: Array<{line:number, reason:string}>,
+ *   merged: Array<{line:number, metLine:number, name:string}>,
  *   error: string
  * }} error is gevuld als het bestand als geheel onbruikbaar is.
  */
 function fromEuroPoiCsv(text) {
-  const result = { pois: [], skipped: [], error: '' };
+  const result = { pois: [], skipped: [], merged: [], error: '' };
   let body = String(text || '');
   if (body.charCodeAt(0) === 0xfeff) body = body.slice(1);
 
@@ -283,7 +290,7 @@ function fromEuroPoiCsv(text) {
   }
 
   // Standaardvolgorde van EuroPoi.
-  let col = { lat: 0, lng: 1, pluscode: 2, name: 3, desc: 4, mp3: 7 };
+  let col = { lat: 0, lng: 1, pluscode: 2, name: 3, desc: 4, radius: 6, mp3: 7 };
   let start = 0;
   const first = records[0].fields.map((f) => f.trim().toLowerCase());
   if (first.includes('lat') && (first.includes('lng') || first.includes('lon'))) {
@@ -294,6 +301,7 @@ function fromEuroPoiCsv(text) {
       pluscode: idx('pluscode'),
       name: idx('name'),
       desc: idx('desc'),
+      radius: idx('radius'),
       mp3: idx('mp3'),
     };
     start = 1;
@@ -344,9 +352,43 @@ function fromEuroPoiCsv(text) {
     }
     const mp3 = get(fields, col.mp3);
     const pluscode = get(fields, col.pluscode);
-    result.pois.push({ lat, lng, pluscode, name, desc: cleanText(get(fields, col.desc)), mp3, line });
+    const radius = parseRadius(get(fields, col.radius));
+    const poi = { lat, lng, pluscode, name, desc: cleanText(get(fields, col.desc)), radius, mp3, line };
+    const eerder = result.pois.find((p) => isDubbel(p, poi));
+    if (eerder) {
+      if (!eerder.desc && poi.desc) eerder.desc = poi.desc;
+      if (!eerder.mp3 && poi.mp3) eerder.mp3 = poi.mp3;
+      if (!eerder.pluscode && poi.pluscode) eerder.pluscode = poi.pluscode;
+      if (!(eerder.radius > 0) && poi.radius > 0) eerder.radius = poi.radius;
+      result.merged.push({ line, metLine: eerder.line, name });
+      continue;
+    }
+    result.pois.push(poi);
   }
   return result;
+}
+
+// Straal uit de kolom radius: een getal > 0 met decimale punt, anders 0.
+function parseRadius(text) {
+  if (!/^\d+(\.\d+)?$/.test(text)) return 0;
+  const r = Number(text);
+  return Number.isFinite(r) && r > 0 ? r : 0;
+}
+
+// Dubbele POI (D1): zelfde naam en minder dan DUBBEL_MAX_METERS uit elkaar.
+const DUBBEL_MAX_METERS = 5;
+
+function isDubbel(a, b) {
+  return a.name.trim().toLowerCase() === b.name.trim().toLowerCase() && meters(a, b) < DUBBEL_MAX_METERS;
+}
+
+// Haversine in meters.
+function meters(a, b) {
+  const r = (g) => (g * Math.PI) / 180;
+  const dLat = r(b.lat - a.lat);
+  const dLng = r(b.lng - a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(r(a.lat)) * Math.cos(r(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 6371e3 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 }
 
 // Werkt zowel als CommonJS-module (Node/tests) als los <script> of ESM-bundel-

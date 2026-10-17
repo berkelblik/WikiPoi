@@ -5,6 +5,9 @@
  * opslaan en laden, lijn, lengte, telling, bestandsnaam en GPX.
  * 0.18.1: pauze bij stilstand, hervatten in een nieuw segment, korte pauzes,
  * tik(), pauze bij stoppen, wissen en tracks van vóór 0.18.1.
+ * 0.19.1: pauze alleen bij genoeg posities (P5), telt vanaf 20 s (P6),
+ * metingen tijdens de pauze samengevat (P7), nauwkeurigheid in de ruwe
+ * track (F1).
  *
  * Uitvoeren vanuit app/:  node src/onderweg/test-track.js
  */
@@ -117,6 +120,8 @@ test('GPX: twee tracks en weggegooide metingen als wpt', () => {
   assert.match(gpx, /<trkpt lat="52.0005" lon="6.5"><time>2026-10-16T12:05:03Z<\/time><\/trkpt>/)
   const ruw = gpx.split('<name>Ruw (alle metingen)</name>')[1]
   assert.strictEqual((ruw.match(/<trkpt /g) || []).length, 4)
+  // F1: nauwkeurigheid per ruw punt.
+  assert.match(ruw, /<trkpt lat="52.01" lon="6.5"><time>2026-10-16T12:05:01Z<\/time><desc>±43 m<\/desc><\/trkpt>/)
   assert.ok(gpx.trim().endsWith('</gpx>'))
   assert.strictEqual(alsGpx(null), '')
 })
@@ -194,8 +199,8 @@ test('Hele rit: segmenten, lengte zonder sprong, pauzes en GPX', () => {
   assert.match(gpx, /<name>pauze \(58 s\)<\/name>/)
 })
 
-test('Korte pauze (< 10 s) maakt geen nieuw segment', () => {
-  const { tr } = ritMetPauze(8)
+test('Korte pauze (< 20 s) maakt geen nieuw segment', () => {
+  const { tr } = ritMetPauze(18)
   const d = tr.huidig()
   assert.strictEqual(d.pauzes.length, 0)
   assert.strictEqual(segmentenVan(d).length, 1)
@@ -240,6 +245,77 @@ test('Wissen en track van vóór 0.18.1 (zonder pauzes)', () => {
   tr.stop()
   tr.wis()
   assert.strictEqual(tr.laad(), null)
+})
+
+test('P5: geen pauze zonder genoeg posities (gat in de metingen)', () => {
+  const o = omgeving(START)
+  const tr = maakTrack({ nu: o.nu, opslag: o.opslag })
+  tr.begin('voorgrond')
+  const zet = (sec, lat) => {
+    o.zet(START + sec * 1000)
+    tr.positie({ lat, lng: 6.5, tijd: START + sec * 1000 })
+  }
+  zet(0, 52.0)
+  zet(8, 52.00002) // 8 s later, maar pas de tweede positie
+  assert.strictEqual(tr.gepauzeerd(), false, 'twee posities zijn niet genoeg')
+  zet(9, 52.0)
+  assert.strictEqual(tr.gepauzeerd(), true, 'drie posities binnen 5 m, na 3 s')
+})
+
+test('P6: pauze telt vanaf 20 s; laatste pauze met duur', () => {
+  const o = omgeving(START)
+  const tr = maakTrack({ nu: o.nu, opslag: o.opslag })
+  tr.begin('voorgrond')
+  const zet = (sec, lat) => {
+    o.zet(START + sec * 1000)
+    tr.positie({ lat, lng: 6.5, tijd: START + sec * 1000 })
+  }
+  for (let i = 0; i <= 3; i++) zet(i, 52.0 + (i % 2) * 0.00002)
+  assert.strictEqual(tr.gepauzeerd(), true)
+  o.zet(START + 22000)
+  assert.strictEqual(tr.pauzeTelt(), false, '19 s')
+  o.zet(START + 23000)
+  assert.strictEqual(tr.pauzeTelt(), true, '20 s')
+  zet(40, 52.0002)
+  assert.strictEqual(tr.pauzeTelt(), false)
+  const p = tr.laatstePauze()
+  assert.strictEqual(p.eind - p.start, 37000)
+  assert.strictEqual(tr.huidig().pauzes.length, 1)
+})
+
+test('P7: metingen tijdens de pauze samengevat, niet als losse punten', () => {
+  const o = omgeving(START)
+  const tr = maakTrack({ nu: o.nu, opslag: o.opslag })
+  tr.begin('voorgrond')
+  const d = tr.huidig()
+  const stilLat = 52.0
+  // 4 s stil om de pauze te openen, daarna 60 metingen met ruis.
+  for (let i = 0; i < 4; i++) {
+    const t = START + (4 + i) * 1000
+    o.zet(t)
+    tr.positie({ lat: stilLat, lng: 6.5, tijd: t })
+  }
+  assert.strictEqual(tr.gepauzeerd(), true)
+  const voor = d.ruw.length
+  for (let i = 0; i < 60; i++) {
+    const t = START + (8 + i) * 1000
+    o.zet(t)
+    const m = { lat: stilLat + (i % 3) * 0.00003, lng: 6.5, nauwkeurigheid: 10 + (i % 5) * 5, tijd: t }
+    tr.positie(m)
+    tr.meting(m, i % 4 ? 'geaccepteerd' : 'nauwkeurigheid')
+  }
+  assert.strictEqual(d.ruw.length, voor, 'geen ruwe punten tijdens de pauze')
+  o.zet(START + 70000)
+  tr.positie({ lat: stilLat + 0.0002, lng: 6.5, tijd: START + 70000 })
+  const p = d.pauzes[0]
+  assert.strictEqual(p.metingen, 60)
+  assert.strictEqual(p.mediaanNauw, 20)
+  assert.ok(p.maxAfstand > 6 && p.maxAfstand < 7.5, p.maxAfstand)
+  assert.strictEqual(p.nauw, undefined, 'lijst na afsluiten weg')
+  assert.match(
+    alsGpx(d),
+    /<name>pauze \(1 min\)<\/name><desc>60 metingen tijdens de pauze, mediaan ±20 m, tot 7 m van het pauzepunt<\/desc>/
+  )
 })
 
 console.log(`\n${geslaagd} tests geslaagd.`)

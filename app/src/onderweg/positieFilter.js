@@ -5,7 +5,9 @@
  * een testrit versprong de pointer regelmatig van de werkelijke plek. Zelfde
  * aanpak als EuroPoi-AndroidLite v1.6.0 (src/hooks/useLocation.js:
  * nauwkeurigheid ≤ 25 m, gemiddelde over 5 metingen), aangevuld met een
- * terugval en een sprongfilter:
+ * terugval en een sprongfilter. 0.19.1 (F2): grens 35 m, omdat de Poco
+ * bij de testrit van 17-10 met 25 m 35 % van de metingen weggooide
+ * (mediaan van de weggegooide 27 m).
  *
  * A1 Nauwkeurigheid: een meting met een nauwkeurigheid slechter dan
  *    MAX_NAUWKEURIGHEID_M valt af. Is er TERUGVAL_MS lang geen goede meting
@@ -33,7 +35,7 @@
  */
 import { afstand } from './geo.js'
 
-export const MAX_NAUWKEURIGHEID_M = 25
+export const MAX_NAUWKEURIGHEID_M = 35
 export const TERUGVAL_MS = 10000
 export const TERUGVAL_MAX_M = 100
 export const SPRONG_ACCEPTEREN = 3

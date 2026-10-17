@@ -45,12 +45,18 @@
  * 0.19.0: keuzevenster bij meerdere POI's tegelijk (KeuzeVenster.jsx,
  * poiKeuze.js) en de lijst "Later beluisteren" (ook na de rit, tot de
  * volgende start; ook op het eco-scherm).
+ *
+ * 0.19.1: een POI triggert bij het triggerpunt op de route én bij de POI
+ * zelf (T1); ligt de POI verder van de route, dan staat er op de kaart ook
+ * een cirkel om de POI. Eigen POI's met een radius > 0 in de CSV hebben die
+ * straal (trigger.js).
  */
 import { useState, useMemo } from 'react'
 import { Capacitor } from '@capacitor/core'
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem'
 import { Share } from '@capacitor/share'
 import { useOnderweg, VERVOER, STANDAARD_VERVOER, triggerStraal } from './useOnderweg.js'
+import { poiStraal } from './trigger.js'
 import {
   track as trackOpslag,
   alsGpx,
@@ -212,21 +218,21 @@ function Onderweg({ pois, summariesById, routePunten }) {
     trackOpnemen,
   })
 
-  // Triggerstraal per POI rond het triggerpunt, voor de kaart.
-  const straalCirkels = useMemo(
-    () =>
-      pois.map((p) => {
-        const t = p.snapPoint || p
-        return {
-          id: p.id,
-          lat: t.lat,
-          lng: t.lng,
-          straal: triggerStraal(vervoer),
-          voorgelezen: !!voorgelezen[p.id],
-        }
-      }),
-    [pois, vervoer, voorgelezen]
-  )
+  // Triggerstraal per POI voor de kaart: rond het triggerpunt op de route
+  // en (T1, 0.19.1) ook rond de POI zelf als die er niet vlakbij ligt.
+  const straalCirkels = useMemo(() => {
+    const cirkels = []
+    pois.forEach((p) => {
+      const straal = poiStraal(p, triggerStraal(vervoer))
+      const klaar = !!voorgelezen[p.id]
+      const t = p.snapPoint || p
+      cirkels.push({ id: p.id, lat: t.lat, lng: t.lng, straal, voorgelezen: klaar })
+      if (p.snapPoint && afstand(p, p.snapPoint) > 10) {
+        cirkels.push({ id: `${p.id}-poi`, lat: p.lat, lng: p.lng, straal, voorgelezen: klaar })
+      }
+    })
+    return cirkels
+  }, [pois, vervoer, voorgelezen])
 
   const kiesTrackOpnemen = (aan) => {
     setTrackOpnemen(aan)

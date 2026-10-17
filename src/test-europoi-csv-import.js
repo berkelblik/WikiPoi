@@ -4,8 +4,8 @@
  * Geïsoleerde, netwerkloze test voor europoi-csv.js#fromEuroPoiCsv()
  * (0.10.0, "Eigen POI's"): BOM, CRLF/LF, aanhalingstekens, kopregel in
  * andere volgorde, bestand zonder kopregel, ongeldige regels (decimale
- * komma, ontbrekende naam, buiten bereik), mp3, pluscode (0.11.0) en een
- * rondgang export → import.
+ * komma, ontbrekende naam, buiten bereik), mp3, pluscode (0.11.0), een
+ * rondgang export → import, radius en dubbele POI's (0.19.1).
  *
  * Uitvoeren vanuit de map `src/` met:
  *   node test-europoi-csv-import.js
@@ -121,6 +121,45 @@ const MP3 = 'https://www.spannendegeschiedenis.nl/wp-content/uploads/2021/05/B-8
   check('8c pluscode zonder kopregel', z.pois[0] && z.pois[0].pluscode === '9F37M7RQ+2X', JSON.stringify(z));
   const o = fromEuroPoiCsv('name;lng;lat\nKerk;6.29;52.15\n');
   check('8d geen pluscodekolom', o.pois[0] && o.pois[0].pluscode === '', JSON.stringify(o));
+}
+
+// 9. Radius (0.19.1): > 0 = eigen straal, 0/leeg/ongeldig = vervoerwijze (0).
+{
+  const r = fromEuroPoiCsv(
+    HEADER + '\n' +
+      '52.15;6.29;;Monument X;;r;0;\n' +
+      '52.16;6.29;;Monument Y;;r;200;\n' +
+      '52.17;6.29;;Z;;r;;\n' +
+      '52.18;6.29;;W;;r;abc;\n' +
+      '52.19;6.29;;V;;r;-50;\n' +
+      '52.20;6.29;;U;;r;75.5;\n'
+  );
+  check('9a radius 0', r.pois[0] && r.pois[0].radius === 0, JSON.stringify(r.pois[0]));
+  check('9b radius 200', r.pois[1] && r.pois[1].radius === 200, JSON.stringify(r.pois[1]));
+  check('9c leeg, ongeldig, negatief → 0', r.pois.slice(2, 5).every((p) => p.radius === 0));
+  check('9d radius met decimale punt', r.pois[5] && r.pois[5].radius === 75.5);
+  const z = fromEuroPoiCsv('52.15;6.29;;Kerk;;r;150;\n');
+  check('9e radius zonder kopregel', z.pois[0] && z.pois[0].radius === 150, JSON.stringify(z));
+  const o = fromEuroPoiCsv('name;lng;lat;radius\nKerk;6.29;52.15;120\n');
+  check('9f radius in andere volgorde', o.pois[0] && o.pois[0].radius === 120, JSON.stringify(o));
+}
+
+// 10. Dubbele POI's (0.19.1, D1): zelfde naam en plek (< 5 m) samengevoegd.
+{
+  const r = fromEuroPoiCsv(
+    HEADER + '\n' +
+      '52.150000;6.290000;;Almen, Dorpshuis;;r;0;\n' +
+      '52.150020;6.290000;;almen, dorpshuis ;Tekst;r;200;' + MP3 + '\n' +
+      '52.150200;6.290000;;Almen, Dorpshuis;;r;0;\n' +
+      '52.150000;6.290000;;Dorpskerk;;r;0;\n'
+  );
+  check('10a aantal na samenvoegen', r.pois.length === 3, JSON.stringify(r.pois.map((p) => p.name)));
+  check('10b samengevoegd gemeld', r.merged.length === 1 && r.merged[0].line === 3 && r.merged[0].metLine === 2,
+    JSON.stringify(r.merged));
+  check('10c lege velden aangevuld', r.pois[0].desc === 'Tekst' && r.pois[0].mp3 === MP3 && r.pois[0].radius === 200,
+    JSON.stringify(r.pois[0]));
+  check('10d zelfde naam 22 m verder blijft apart', r.pois[1].name === 'Almen, Dorpshuis' && r.pois[1].line === 4);
+  check('10e andere naam zelfde plek blijft apart', r.pois[2].name === 'Dorpskerk');
 }
 
 if (failures > 0) {

@@ -34,10 +34,15 @@
  * namen ("… en nog twee"); komen er POI's bij in een open venster, dan loopt
  * het aftellen door (tot blijft gelijk), zodat het venster niet eindeloos
  * openblijft in een drukke straat.
+ *
+ * Herhaling pauzevenster (0.19.1, P6): hoogstens één keer per
+ * PAUZE_HERHAAL_MS, tenzij er iets nieuws in "Later" staat
+ * (magPauzeAanbieden).
  */
 
 export const KEUZE_MS = 10000
 export const PAUZE_KEUZE_MS = 30000
+export const PAUZE_HERHAAL_MS = 5 * 60 * 1000
 export const AANKONDIGING_MAX = 3
 
 const leeg = () => ({
@@ -140,6 +145,19 @@ export function volgendeUitWachtrij(wachtend, binnenStraal) {
     later.push(id)
   }
   return { speel: null, later, rest: [] }
+}
+
+/**
+ * Mag het pauzevenster (O7) nu worden aangeboden (0.19.1, P6)? Hoogstens
+ * één keer per PAUZE_HERHAAL_MS, tenzij er sinds het vorige aanbod iets
+ * nieuws in "Later" staat. vorige = { tijd, ids } van het vorige aanbod, of
+ * null.
+ */
+export function magPauzeAanbieden({ nu, vorige, later }) {
+  if (!vorige || !Number.isFinite(vorige.tijd)) return true
+  if (nu - vorige.tijd >= PAUZE_HERHAAL_MS) return true
+  const eerder = new Set(vorige.ids || [])
+  return (later || []).some((id) => !eerder.has(id))
 }
 
 /** Pauzevenster (O7), of null als het niet aan de orde is. */

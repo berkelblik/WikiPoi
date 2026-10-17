@@ -142,8 +142,9 @@ function fotoUrlVan(entry) {
   return entry.summary && entry.summary.thumbnailUrl ? entry.summary.thumbnailUrl : null
 }
 
-// Triggerstraal per POI in de EuroPoi-CSV: altijd 0, EuroPoi kiest zelf
-// (op basis van vervoerswijze en, in route-modus, de afstand tot de route).
+// Triggerstraal per POI in de EuroPoi-CSV: 0, EuroPoi kiest zelf (op basis
+// van vervoerswijze en, in route-modus, de afstand tot de route). Eigen
+// POI's met een radius > 0 in hun CSV houden die (0.19.1).
 const DEFAULT_TRIGGER_RADIUS_METERS = 0
 
 const MAP_HEIGHT = '320px'
@@ -668,6 +669,9 @@ function App() {
             lng: p.lng,
             description: p.desc,
             mp3: p.mp3,
+            // Triggerstraal uit de CSV (0.19.1): > 0 gaat voor die van de
+            // vervoerwijze; 0 = die van de vervoerwijze.
+            radius: p.radius > 0 ? p.radius : 0,
             // Lokale audio: bestandsnaam = pluscode uit de CSV of berekend.
             koppelSleutels: koppelSleutels(p.pluscode, pluscode(p.lat, p.lng)),
             categoryKey: EIGEN_CATEGORY_KEY,
@@ -677,6 +681,10 @@ function App() {
             `${file.name}: ${r.pois.length} POI's ingelezen` +
             (metLink > 0 ? `, waarvan ${metLink} met mp3-link` : '') +
             '.' +
+            (r.merged && r.merged.length > 0
+              ? ` ${r.merged.length === 1 ? '1 dubbele regel' : `${r.merged.length} dubbele regels`} samengevoegd` +
+                ` (${r.merged.map((m) => `regel ${m.line} met ${m.metLine}`).join(', ')}).`
+              : '') +
             (geenLink > 0
               ? ` ${geenLink === 1 ? '1 mp3-verwijzing is' : `${geenLink} mp3-verwijzingen zijn`} geen` +
                 " internetlink en wordt niet afgespeeld (lokale bestanden: via 'Audiobestanden koppelen')."
@@ -1225,7 +1233,8 @@ function App() {
           name: p.label || '(zonder naam)',
           desc,
           category,
-          radius: DEFAULT_TRIGGER_RADIUS_METERS,
+          // Eigen POI's houden hun straal uit de CSV (0.19.1).
+          radius: p.eigen && p.radius > 0 ? p.radius : DEFAULT_TRIGGER_RADIUS_METERS,
           mp3: p.eigen ? p.mp3 || '' : '',
         }
       })
