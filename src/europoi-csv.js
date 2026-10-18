@@ -8,6 +8,7 @@
  *
  * Uitvoerformaat: lat;lng;pluscode;name;desc;category;radius;mp3
  * Inlezen ("Eigen POI's" in WikiPoi): fromEuroPoiCsv(), zelfde formaat.
+ * Sinds 0.19.2 kan de positie ook uit de pluscode komen (OLC.decode).
  * Bestandseisen (bevestigd tegen EuroPoi's referentie-export):
  *   - UTF-8 BOM vooraan het bestand
  *   - CRLF-regeleindes
@@ -15,7 +16,7 @@
  * Geen dependencies — werkt zowel in de browser als in Node.js.
  */
 
-// ---- Open Location Code (Plus Codes) encoder ----
+// ---- Open Location Code (Plus Codes) encoder en decoder ----
 // Poort van de officiële Apache-2.0-licensed implementatie:
 // https://github.com/google/open-location-code/blob/main/js/src/openlocationcode.js
 // Copyright 2014 Google Inc. Licensed under the Apache License, Version 2.0.
@@ -100,7 +101,52 @@ const OLC = (function () {
     return encodeIntegers(latInt, lngInt, codeLength);
   }
 
-  return { encode };
+  // Volledige, nauwkeurige code (0.19.2): 8 tekens vóór de '+' en 2 tot 7
+  // erna (vakje ± 14 m of kleiner). Grovere codes ("9F37R2PM+", opgevuld
+  // "9F470000+") en korte codes ("R2PM+84 Dalem") tellen niet: te grof of
+  // zonder plaats niet te bepalen. Hoofdletters/kleine letters maken niet uit.
+  const VOL = /^[23456789CFGHJMPQRVWX]{8}\+[23456789CFGHJMPQRVWX]{2,7}$/;
+
+  function isFull(code) {
+    const c = String(code || '').trim().toUpperCase();
+    if (!VOL.test(c)) return false;
+    // Eerste teken breedte (max. 180°: index < 9), tweede lengte (max. 360°: index < 18).
+    if (CODE_ALPHABET.indexOf(c[0]) * ENCODING_BASE >= LATITUDE_MAX * 2) return false;
+    if (CODE_ALPHABET.indexOf(c[1]) * ENCODING_BASE >= LONGITUDE_MAX * 2) return false;
+    return true;
+  }
+
+  /**
+   * Midden van het vakje van een volledige code: { lat, lng, latSize,
+   * lngSize } (graden), of null bij een ongeldige of korte code.
+   */
+  function decode(code) {
+    if (!isFull(code)) return null;
+    const c = String(code).trim().toUpperCase().replace('+', '');
+    let lat = -LATITUDE_MAX;
+    let lng = -LONGITUDE_MAX;
+    let res = ENCODING_BASE; // 20 graden voor het eerste paar
+    let latSize = 0;
+    let lngSize = 0;
+    const paren = Math.min(c.length, PAIR_CODE_LENGTH);
+    for (let i = 0; i < paren; i += 2) {
+      lat += CODE_ALPHABET.indexOf(c[i]) * res;
+      lng += CODE_ALPHABET.indexOf(c[i + 1]) * res;
+      latSize = res;
+      lngSize = res;
+      res /= ENCODING_BASE;
+    }
+    for (let i = PAIR_CODE_LENGTH; i < c.length; i++) {
+      latSize /= GRID_ROWS;
+      lngSize /= GRID_COLUMNS;
+      const ndx = CODE_ALPHABET.indexOf(c[i]);
+      lat += Math.floor(ndx / GRID_COLUMNS) * latSize;
+      lng += (ndx % GRID_COLUMNS) * lngSize;
+    }
+    return { lat: lat + latSize / 2, lng: lng + lngSize / 2, latSize, lngSize };
+  }
+
+  return { encode, decode, isFull };
 })();
 
 /**
@@ -123,6 +169,7 @@ function cleanText(value) {
  * @property {string} [category]
  * @property {number} [radius]
  * @property {string} [mp3]
+ * @property {string} [pluscode] - volledige code; anders berekend uit lat/lng (0.19.2)
  */
 
 /**
@@ -140,7 +187,9 @@ function toEuroPoiCsv(pois) {
   for (const poi of pois) {
     const lat = Number(poi.lat).toFixed(6);
     const lng = Number(poi.lng).toFixed(6);
-    const pluscode = OLC.encode(Number(poi.lat), Number(poi.lng), 10);
+    // Eigen pluscode ongewijzigd laten (0.19.2, PC4); anders berekenen.
+    const eigen = String(poi.pluscode || '').trim().toUpperCase();
+    const pluscode = OLC.isFull(eigen) ? eigen : OLC.encode(Number(poi.lat), Number(poi.lng), 10);
     const radius = Number.isFinite(poi.radius) ? poi.radius : 0;
 
     lines.push(
@@ -250,15 +299,26 @@ const COORD_PATTERN = /^-?\d+(\.\d+)?$/;
  * velden met of zonder aanhalingstekens.
  *
  * - Kopregel: herkend als de eerste regel een kolom "lat" én "lng" (of
- *   "lon") bevat; de kolommen worden dan op naam gezocht, dus een andere
+ *   "lon") bevat, of een kolom "pluscode"; de kolommen worden dan op naam gezocht, dus een andere
  *   volgorde mag. Zonder kopregel geldt de vaste EuroPoi-volgorde.
- * - Verplicht per regel: lat, lng (decimale punt, binnen bereik) en name.
+ * - Verplicht per regel: een geldige positie (volledige pluscode, of lat en
+ *   lng met decimale punt binnen bereik) en name.
  *   Ongeldige regels worden overgeslagen en geteld, met reden en
  *   regelnummer. Een decimale komma telt als ongeldig: EuroPoi accepteert
  *   alleen een punt, en het bestand moet in beide apps bruikbaar blijven.
  * - pluscode: wordt ongewijzigd doorgegeven (alleen spaties eromheen weg);
  *   WikiPoi koppelt er lokale audiobestanden mee (bestandsnaam = pluscode,
- *   zoals EuroPoi). De positie komt altijd uit lat/lng.
+ *   zoals EuroPoi).
+ * - Positie (0.19.2, keuzes PC1–PC3): een volledige pluscode gaat voor
+ *   (midden van het vakje); lat/lng is de reserve. Ligt lat/lng binnen het
+ *   vakje van de pluscode (ze kloppen met elkaar), dan wordt lat/lng
+ *   gebruikt: preciezer, en een export van WikiPoi leest zo ongewijzigd in. Zo maakt een decimale
+ *   komma in lat/lng (bijv. na bewerken in een spreadsheet) niet uit zolang
+ *   de pluscode klopt. Liggen pluscode en lat/lng meer dan
+ *   AFWIJKING_MAX_METERS uit elkaar, dan staat dat in warnings. Korte codes
+ *   ("R2PM+84 Dalem") worden niet herkend. Per POI zegt bron welke werd
+ *   gebruikt: 'pluscode', 'latlng' (geen bruikbare pluscode) of 'beide'
+ *   (lat/lng binnen het vakje van de pluscode).
  * - category wordt genegeerd.
  * - radius (0.19.1): triggerstraal in meters; 0, leeg of geen geldig getal
  *   = de straal van de vervoerwijze (zoals in EuroPoi).
@@ -275,11 +335,12 @@ const COORD_PATTERN = /^-?\d+(\.\d+)?$/;
  *   pois: Array<{lat:number, lng:number, pluscode:string, name:string, desc:string, radius:number, mp3:string, line:number}>,
  *   skipped: Array<{line:number, reason:string}>,
  *   merged: Array<{line:number, metLine:number, name:string}>,
+ *   warnings: Array<{line:number, name:string, meters:number}>,
  *   error: string
  * }} error is gevuld als het bestand als geheel onbruikbaar is.
  */
 function fromEuroPoiCsv(text) {
-  const result = { pois: [], skipped: [], merged: [], error: '' };
+  const result = { pois: [], skipped: [], merged: [], warnings: [], error: '' };
   let body = String(text || '');
   if (body.charCodeAt(0) === 0xfeff) body = body.slice(1);
 
@@ -293,7 +354,7 @@ function fromEuroPoiCsv(text) {
   let col = { lat: 0, lng: 1, pluscode: 2, name: 3, desc: 4, radius: 6, mp3: 7 };
   let start = 0;
   const first = records[0].fields.map((f) => f.trim().toLowerCase());
-  if (first.includes('lat') && (first.includes('lng') || first.includes('lon'))) {
+  if ((first.includes('lat') && (first.includes('lng') || first.includes('lon'))) || first.includes('pluscode')) {
     const idx = (n) => first.indexOf(n);
     col = {
       lat: idx('lat'),
@@ -328,32 +389,45 @@ function fromEuroPoiCsv(text) {
       result.skipped.push({ line, reason: 'geen puntkomma als scheidingsteken' });
       continue;
     }
-    if (latText === '' || lngText === '') {
-      result.skipped.push({ line, reason: 'lat of lng ontbreekt' });
-      continue;
-    }
-    if (/^-?\d+,\d+$/.test(latText) || /^-?\d+,\d+$/.test(lngText)) {
-      result.skipped.push({ line, reason: 'decimale komma in coördinaat (gebruik een punt)' });
-      continue;
-    }
-    if (!COORD_PATTERN.test(latText) || !COORD_PATTERN.test(lngText)) {
-      result.skipped.push({ line, reason: 'lat of lng is geen geldig getal' });
-      continue;
-    }
-    const lat = Number(latText);
-    const lng = Number(lngText);
-    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
-      result.skipped.push({ line, reason: 'coördinaat buiten bereik' });
+    const pluscode = get(fields, col.pluscode);
+    const vanCode = OLC.decode(pluscode);
+    const ll = leesLatLng(latText, lngText);
+    if (!vanCode && ll.reden) {
+      const reden = pluscode
+        ? `pluscode ongeldig of niet volledig, en ${ll.reden}`
+        : ll.reden;
+      result.skipped.push({ line, reason: reden });
       continue;
     }
     if (!name) {
       result.skipped.push({ line, reason: 'naam ontbreekt' });
       continue;
     }
+    let lat;
+    let lng;
+    let bron;
+    if (vanCode && !ll.reden && binnenVakje(ll, vanCode)) {
+      lat = ll.lat;
+      lng = ll.lng;
+      bron = 'beide';
+    } else if (vanCode) {
+      lat = Number(vanCode.lat.toFixed(7));
+      lng = Number(vanCode.lng.toFixed(7));
+      bron = 'pluscode';
+      // Vergelijken ook als lat/lng een decimale komma heeft (alleen hier).
+      const vgl = ll.reden ? leesLatLng(latText.replace(',', '.'), lngText.replace(',', '.')) : ll;
+      if (!vgl.reden) {
+        const d = meters({ lat, lng }, vgl);
+        if (d > AFWIJKING_MAX_METERS) result.warnings.push({ line, name, meters: Math.round(d) });
+      }
+    } else {
+      lat = ll.lat;
+      lng = ll.lng;
+      bron = 'latlng';
+    }
     const mp3 = get(fields, col.mp3);
-    const pluscode = get(fields, col.pluscode);
     const radius = parseRadius(get(fields, col.radius));
-    const poi = { lat, lng, pluscode, name, desc: cleanText(get(fields, col.desc)), radius, mp3, line };
+    const poi = { lat, lng, pluscode, name, desc: cleanText(get(fields, col.desc)), radius, mp3, line, bron };
     const eerder = result.pois.find((p) => isDubbel(p, poi));
     if (eerder) {
       if (!eerder.desc && poi.desc) eerder.desc = poi.desc;
@@ -366,6 +440,34 @@ function fromEuroPoiCsv(text) {
     result.pois.push(poi);
   }
   return result;
+}
+
+// Pluscode en lat/lng mogen zoveel verschillen voordat er een waarschuwing
+// komt (0.19.2, PC3). Een code van 10 tekens is een vakje van ± 14 m.
+const AFWIJKING_MAX_METERS = 25;
+
+// Ligt het punt in het vakje van de gedecodeerde pluscode (met wat marge
+// voor afronding)?
+function binnenVakje(p, vak) {
+  const marge = 1e-9;
+  return (
+    Math.abs(p.lat - vak.lat) <= vak.latSize / 2 + marge && Math.abs(p.lng - vak.lng) <= vak.lngSize / 2 + marge
+  );
+}
+
+// lat/lng uit de tekst: { lat, lng } of { reden } (waarom onbruikbaar).
+function leesLatLng(latText, lngText) {
+  if (latText === '' || lngText === '') return { reden: 'lat of lng ontbreekt' };
+  if (/^-?\d+,\d+$/.test(latText) || /^-?\d+,\d+$/.test(lngText)) {
+    return { reden: 'decimale komma in coördinaat (gebruik een punt)' };
+  }
+  if (!COORD_PATTERN.test(latText) || !COORD_PATTERN.test(lngText)) {
+    return { reden: 'lat of lng is geen geldig getal' };
+  }
+  const lat = Number(latText);
+  const lng = Number(lngText);
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return { reden: 'coördinaat buiten bereik' };
+  return { lat, lng };
 }
 
 // Straal uit de kolom radius: een getal > 0 met decimale punt, anders 0.

@@ -147,6 +147,11 @@ function fotoUrlVan(entry) {
 // POI's met een radius > 0 in hun CSV houden die (0.19.1).
 const DEFAULT_TRIGGER_RADIUS_METERS = 0
 
+// "40 m" of "1,5 km" (melding afwijkende pluscode, 0.19.2).
+function afstandTekst(meters) {
+  return meters < 1000 ? `${Math.round(meters)} m` : `${(meters / 1000).toFixed(1).replace('.', ',')} km`
+}
+
 const MAP_HEIGHT = '320px'
 
 // Zoekresultaten van meerdere zoekopdrachten samenvoegen: bij hetzelfde id
@@ -672,6 +677,9 @@ function App() {
             // Triggerstraal uit de CSV (0.19.1): > 0 gaat voor die van de
             // vervoerwijze; 0 = die van de vervoerwijze.
             radius: p.radius > 0 ? p.radius : 0,
+            // Pluscode uit de CSV (0.19.2): bepaalt de positie en gaat
+            // ongewijzigd mee in de export.
+            pluscode: p.pluscode || '',
             // Lokale audio: bestandsnaam = pluscode uit de CSV of berekend.
             koppelSleutels: koppelSleutels(p.pluscode, pluscode(p.lat, p.lng)),
             categoryKey: EIGEN_CATEGORY_KEY,
@@ -688,6 +696,13 @@ function App() {
             (geenLink > 0
               ? ` ${geenLink === 1 ? '1 mp3-verwijzing is' : `${geenLink} mp3-verwijzingen zijn`} geen` +
                 " internetlink en wordt niet afgespeeld (lokale bestanden: via 'Audiobestanden koppelen')."
+              : '') +
+            // PC3 (0.19.2): pluscode en lat/lng verschillen; de pluscode is gebruikt.
+            (r.warnings && r.warnings.length > 0
+              ? ` Pluscode en lat/lng wijken af (pluscode gebruikt): ${r.warnings
+                  .slice(0, 5)
+                  .map((w) => `regel ${w.line} (${w.name}) ${afstandTekst(w.meters)}`)
+                  .join(', ')}${r.warnings.length > 5 ? ` en nog ${r.warnings.length - 5}` : ''}.`
               : ''),
           overgeslagen: r.skipped,
         }
@@ -1235,6 +1250,8 @@ function App() {
           category,
           // Eigen POI's houden hun straal uit de CSV (0.19.1).
           radius: p.eigen && p.radius > 0 ? p.radius : DEFAULT_TRIGGER_RADIUS_METERS,
+          // Eigen pluscode ongewijzigd mee (0.19.2, PC4); anders berekend.
+          pluscode: p.eigen ? p.pluscode || '' : '',
           mp3: p.eigen ? p.mp3 || '' : '',
         }
       })
@@ -1489,7 +1506,8 @@ function App() {
             )}
             {!eigenImport && !eigenFout && (
               <p className="muted">
-                Optioneel: een CSV in EuroPoi-formaat (lat;lng;pluscode;name;desc;category;radius;mp3). Eigen
+                Optioneel: een CSV in EuroPoi-formaat (lat;lng;pluscode;name;desc;category;radius;mp3). Een
+                volledige pluscode bepaalt de plek; lat/lng is de reserve. Eigen
                 POI's verschijnen na het zoeken. Daarna kun je kiezen of ze altijd meedoen (tot{' '}
                 {EIGEN_MAX_METERS / 1000} km van de route) of alleen binnen de corridor.
               </p>

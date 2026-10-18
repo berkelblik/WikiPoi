@@ -5,7 +5,8 @@
  * (0.10.0, "Eigen POI's"): BOM, CRLF/LF, aanhalingstekens, kopregel in
  * andere volgorde, bestand zonder kopregel, ongeldige regels (decimale
  * komma, ontbrekende naam, buiten bereik), mp3, pluscode (0.11.0), een
- * rondgang export → import, radius en dubbele POI's (0.19.1).
+ * rondgang export → import, radius en dubbele POI's (0.19.1), positie uit
+ * de pluscode (0.19.2).
  *
  * Uitvoeren vanuit de map `src/` met:
  *   node test-europoi-csv-import.js
@@ -35,7 +36,7 @@ const MP3 = 'https://www.spannendegeschiedenis.nl/wp-content/uploads/2021/05/B-8
   const text =
     '\uFEFF' +
     HEADER + '\r\n' +
-    '52.150000;6.290000;"9F37M7RQ+2X";"Kerk";"Mooi; oud ""gebouw""";"20261101";0;""\r\n' +
+    '52.150000;6.290000;"9F48572R+22";"Kerk";"Mooi; oud ""gebouw""";"20261101";0;""\r\n' +
     '52.160000;6.300000;"";"Molen";"";"20261101";0;"' + MP3 + '"\r\n';
   const r = fromEuroPoiCsv(text);
   check('1a twee POI\'s', r.pois.length === 2, JSON.stringify(r));
@@ -160,6 +161,48 @@ const MP3 = 'https://www.spannendegeschiedenis.nl/wp-content/uploads/2021/05/B-8
     JSON.stringify(r.pois[0]));
   check('10d zelfde naam 22 m verder blijft apart', r.pois[1].name === 'Almen, Dorpshuis' && r.pois[1].line === 4);
   check('10e andere naam zelfde plek blijft apart', r.pois[2].name === 'Dorpskerk');
+}
+
+// 11. Positie uit de pluscode (0.19.2, PC1–PC4).
+{
+  const { OLC } = require('./europoi-csv.js');
+  const d = OLC.decode('9F37R2PM+84');
+  check('11a decode Dalem', d && Math.abs(d.lat - 51.8358125) < 1e-9 && Math.abs(d.lng - 5.0328125) < 1e-9, JSON.stringify(d));
+  const d11 = OLC.decode('9f48579g+q37');
+  check('11b decode 11 tekens, kleine letters', d11 && OLC.encode(d11.lat, d11.lng, 11) === '9F48579G+Q37');
+  check('11c geen korte, grove of ongeldige code',
+    ['R2PM+84', '9F37R2PM+', '9F470000+', '9F37R2PM84', 'X237R2PM+84', '9F37R2PM+8', ''].every((c) => OLC.decode(c) === null));
+  const r = fromEuroPoiCsv(
+    HEADER + '\n' +
+      '51.8228125;5.0294375;9F37R2PM+84;Dalem;;r;0;\n' +      // pluscode wint, 1,5 km verschil
+      '52,2684375;4,7345625;9F467P9M+9R;Fort;;r;0;\n' +       // decimale komma: pluscode
+      ';;9F467XGX+W2;Batterij;;r;0;\n' +                      // alleen pluscode
+      '52.150000;6.290000;9F48572R+22;Kerk;;r;0;\n' +         // binnen het vakje: lat/lng
+      '52.150000;6.290000;;Molen;;r;0;\n' +                  // geen pluscode: lat/lng
+      '52,15;6,29;R2PM+84;Kort;;r;0;\n'                       // korte code + komma: overgeslagen
+  );
+  const p = (n) => r.pois.find((x) => x.name === n);
+  check('11d Dalem uit pluscode', p('Dalem') && p('Dalem').lat === 51.8358125 && p('Dalem').lng === 5.0328125 && p('Dalem').bron === 'pluscode',
+    JSON.stringify(p('Dalem')));
+  check('11e waarschuwing Dalem', r.warnings.length === 1 && r.warnings[0].line === 2 && r.warnings[0].meters > 1400 && r.warnings[0].meters < 1550,
+    JSON.stringify(r.warnings));
+  const k = fromEuroPoiCsv(HEADER + '\n51,8228125;5,0294375;9F37R2PM+84;Dalem;;r;0;\n');
+  check('11n waarschuwing ook bij decimale komma', k.pois.length === 1 && k.warnings.length === 1, JSON.stringify(k));
+  check('11f decimale komma, geldige pluscode', p('Fort') && p('Fort').bron === 'pluscode' && Math.abs(p('Fort').lat - 52.2684375) < 1e-9);
+  check('11g alleen pluscode', p('Batterij') && p('Batterij').bron === 'pluscode');
+  check('11h binnen het vakje: lat/lng', p('Kerk') && p('Kerk').bron === 'beide' && p('Kerk').lat === 52.15);
+  check('11i zonder pluscode: lat/lng', p('Molen') && p('Molen').bron === 'latlng');
+  check('11j korte code en komma: overgeslagen', !p('Kort') && r.skipped.length === 1 && /pluscode/.test(r.skipped[0].reason),
+    JSON.stringify(r.skipped));
+  const o = fromEuroPoiCsv('pluscode;name\n9F37R2PM+84;Dalem\n');
+  check('11k kopregel met alleen pluscode', o.pois.length === 1 && o.pois[0].lat === 51.8358125, JSON.stringify(o));
+  // PC4: export houdt de eigen pluscode (ook 11 tekens), lat/lng met punt.
+  const csv = toEuroPoiCsvWithBom([
+    { lat: 52.169412, lng: 6.275172, name: 'A', desc: '', pluscode: '9f48579g+q37' },
+    { lat: 51.8358125, lng: 5.0328125, name: 'B', desc: '', pluscode: 'R2PM+84' },
+  ]);
+  check('11l export eigen pluscode', /^52\.169412;6\.275172;"9F48579G\+Q37";/m.test(csv), csv);
+  check('11m export korte code vervangen', /^51\.835813;5\.032813;"9F37R2PM\+84";/m.test(csv), csv);
 }
 
 if (failures > 0) {
