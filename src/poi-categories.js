@@ -60,8 +60,7 @@
    *   nummer dragen in plaats van een vaste waarde.
    * - defaultEnabled: of deze categorie standaard is aangevinkt
    * - searchRadiusMeters (optioneel): overschrijft voor déze categorie de
-   *   standaard zoekstraal die poc-gpx-naar-csv.js/runPipeline() gebruikt
-   *   (searchRadiusMeters-parameter daar, standaard 400m). Weggelaten of
+   *   standaard zoekstraal van de zoekpijplijn (standaard 400m). Weggelaten of
    *   niet gezet ⇒ de categorie gebruikt gewoon de standaardstraal. Nodig
    *   voor categorieën met een van nature hoge dichtheid — bijv. de
    *   toekomstige "Gebouwd erfgoed"-categorie (rijksmonumenten), waar rond
@@ -530,13 +529,11 @@
    * buildBoxQuery() voor hoe deze modus werkt. Op dit moment gebruikt
    * alléén "Gebouwd erfgoed" (P359) deze modus.
    *
-   * LET OP — nog niet aangesloten op poc-gpx-naar-csv.js: de pijplijn
-   * roept momenteel alleen qidsForKeys()/instanceOf aan; om een
-   * hasProperty-categorie als "Gebouwd erfgoed" daadwerkelijk te laten
-   * meezoeken is een aanvullende aanpassing aan runPipeline() nodig (een
-   * aparte Wikidata-aanroep per hasProperty-waarde, naast de bestaande
-   * instanceOf-aanroep per straal-groep). Deze functie levert alvast de
-   * bouwsteen daarvoor.
+   * Een hasProperty-categorie als "Gebouwd erfgoed" vraagt in de
+   * zoekpijplijn een aparte Wikidata-aanroep per hasProperty-waarde, naast
+   * de instanceOf-aanroep per straal-groep. (Het opdrachtregelscript
+   * poc-gpx-naar-csv.js, waarvoor dit oorspronkelijk werd geschreven, is in
+   * 0.19.1 verwijderd.)
    *
    * @param {string[]} selectedKeys
    * @returns {string[]} unieke property-ID's (PID's)
@@ -598,7 +595,7 @@
   /**
    * Groepeert aangevinkte categorie-keys op hun EFFECTIEVE zoekstraal —
    * dat is category.searchRadiusMeters als die gezet is, anders
-   * defaultRadiusMeters. Bedoeld voor poc-gpx-naar-csv.js/runPipeline():
+   * defaultRadiusMeters. Bedoeld voor de zoekpijplijn:
    * omdat verschillende categorieën verschillende zoekstralen kunnen
    * hebben (bijv. een dichte categorie als toekomstige "Gebouwd erfgoed"
    * op 150m, de rest op de standaard ~400m), kan de pijplijn niet langer

@@ -30,7 +30,9 @@ WikiPoi hergebruikt bewust de CSV/Plus Code-aanpak uit EuroPoi's bestaande `gpx2
 
 ## Status
 
-✅ **Werkend.** WikiPoi bestaat uit een Android-app (React + Capacitor) en een opdrachtregelscript. Beide doorzoeken Wikidata (en optioneel OpenStreetMap) langs een GPX-route en leveren een CSV op die direct in EuroPoi te importeren is. De app is getest op Android; verdere verfijning volgt.
+✅ **Werkend.** WikiPoi is een Android-app (React + Capacitor). De app doorzoekt Wikidata (en optioneel OpenStreetMap) langs een GPX-route en levert een CSV op die direct in EuroPoi te importeren is. De app is getest op Android; verdere verfijning volgt.
+
+Het opdrachtregelscript uit de beginfase (`poc-gpx-naar-csv.js`) is in versie 0.19.1 verwijderd: de app doet alles wat het script deed en meer. Het script is terug te vinden in de Git-geschiedenis (tot en met commit `dda02a9`).
 
 ## Gebruik
 
@@ -46,24 +48,6 @@ De app leidt je in zes stappen van route naar CSV:
 6. **Exporteren** — sla de CSV op en deel hem direct, bijvoorbeeld met EuroPoi.
 
 POI's die (vrijwel) op dezelfde plek liggen — zoals twee Wikidata-items voor één pand — worden automatisch samengevoegd tot één POI met gecombineerde naam.
-
-### Het script (Node.js)
-
-Voor ontwikkelaars en voor het in bulk verwerken van routes:
-
-```
-node poc-gpx-naar-csv.js <invoer.gpx> [uitvoer] [zoekstraal_m] [trigger_afstand_m] [categorieën,komma,gescheiden] [osm_skip_drempel] [--preview]
-```
-
-Voorbeeld met de meegeleverde testroute:
-
-```
-node poc-gpx-naar-csv.js examples/voorbeeldroute-achterhoek.gpx /tmp/test.csv 400 400 kerken,molens,kastelen,oorlogsgeschiedenis
-```
-
-Het vierde argument (`trigger_afstand_m`) bepaalt welke gevonden POI's in de CSV komen: alleen punten binnen die afstand van de route gaan mee, net als de strook in de app. Het `radius`-veld in de CSV staat altijd op 0 (zie "Twee afstandsbegrippen").
-
-Met `0` als zesde argument wordt de OpenStreetMap-aanvulling overgeslagen. Lukt de OSM-aanvulling niet (bijvoorbeeld omdat Overpass overbelast is), dan gaat het script door met alleen de Wikidata-resultaten.
 
 ## Architectuur
 
@@ -83,11 +67,11 @@ GPX-route
    │
    ▼
 [ Kaart / preview ]                gebruiker ziet gevonden punten + afstand
-   │                               tot de route; app: strook instellen,
-   │                               script: afstand als vierde argument
+   │                               tot de route en stelt de strook in
    ▼
 [ EuroPoi-CSV genereren ]          src/europoi-csv.js (hergebruikt);
    │                               category = routenaam, radius = 0
+   │                               (eigen POI's: radius uit hun CSV)
    ▼
 CSV klaar voor import in EuroPoi
 ```
@@ -99,11 +83,11 @@ WikiPoi onderscheidt bewust twee verschillende afstanden, die niet hetzelfde zij
 | Parameter | Doel | Typische waarde |
 |---|---|---|
 | **Zoekstraal** | Hoe ver van de route Wikidata/OSM wordt doorzocht naar kandidaten | ~400m (ruim, om niets te missen) |
-| **Strook (corridor)** | Welke gevonden punten in de CSV komen | App: schuifje bij stap 4 (50–500m); script: vierde argument |
+| **Strook (corridor)** | Welke gevonden punten in de CSV komen | Schuifje in de app (50–500m) |
 
 Door ruim te zoeken maar de strook apart instelbaar te houden, kan de gebruiker na het zoeken — zonder opnieuw te hoeven zoeken — bepalen welke gevonden punten relevant genoeg zijn om mee te nemen.
 
-De **triggerstraal** (vanaf welke afstand EuroPoi de audio afspeelt) bepaalt WikiPoi bewust niet: het `radius`-veld in de CSV staat altijd op 0. EuroPoi kiest dan zelf de juiste straal, op basis van de vervoerswijze en, in route-modus, de afstand van het punt tot de route.
+De **triggerstraal** (vanaf welke afstand EuroPoi de audio afspeelt) bepaalt WikiPoi voor gevonden POI's bewust niet: het `radius`-veld in de CSV staat voor die POI's op 0. EuroPoi kiest dan zelf de juiste straal, op basis van de vervoerswijze en, in route-modus, de afstand van het punt tot de route. Eigen POI's uit een ingelezen CSV houden hun eigen `radius`: een waarde groter dan 0 geldt als triggerstraal (ook onderweg in WikiPoi zelf), 0 betekent de straal van de vervoerswijze. Hun plek komt bij voorkeur uit de pluscode (sinds 0.19.2); lat/lng is de reserve.
 
 ### Koppeling met EuroPoi's trigger-mechanisme
 
@@ -113,7 +97,7 @@ Voordat de definitieve CSV wordt gegenereerd, toont WikiPoi een **preview**: all
 
 ## Bouwstenen (modulair, zoals ook EuroPoi is opgezet)
 
-De gedeelde modules staan in `src/` en worden zowel door het script als door de app gebruikt:
+De gedeelde modules staan in `src/` en worden door de app gebruikt:
 
 - **`src/route-buffer.js`** — leest een GPX-track of -route en bepaalt of een punt binnen de zoekstrook ligt
 - **`src/poi-categories.js`** — de vaste, aanvinkbare categorieën met hun Wikidata-QID's en OSM-tags
@@ -121,13 +105,11 @@ De gedeelde modules staan in `src/` en worden zowel door het script als door de 
 - **`src/osm-fallback.js`** — aanvullende zoekactie via OpenStreetMap/Overpass
 - **`src/wikipedia-summary.js`** — haalt Wikipedia-samenvattingen op en kort ze in
 - **`src/europoi-csv.js`** — Plus Code-encoder + CSV-writer (overgenomen uit EuroPoi's `gpx2europoi.html`, ongewijzigd qua uitvoerformaat)
-- **`src/preview-html.js`** — maakt een losse HTML-preview met kaart (optie `--preview` van het script)
 - **`src/test-wikidata-dedupe.js`** en **`src/test-osm-dedupe.js`** — netwerkloze tests van het samenvoegen en ontdubbelen
 
 Daarnaast:
 
 - **`app/`** — de React/Capacitor-app (Android); de kaart staat in `app/src/components/RouteMap.jsx`
-- **`poc-gpx-naar-csv.js`** — het opdrachtregelscript dat de modules tot één pijplijn verbindt
 - **`examples/`** — GPX-testroutes
 
 Elk blokje is losstaand testbaar en vervangbaar — als een van de externe bronnen (Wikidata, Wikipedia, OSM) van API verandert, hoeft alleen dat blokje aangepast te worden.
