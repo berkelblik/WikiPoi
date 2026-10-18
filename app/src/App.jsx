@@ -265,6 +265,14 @@ function App() {
   // POI's zonder tekst (alleen naam of korte Wikidata-omschrijving) toch
   // melden en exporteren (0.12.0)? Standaard niet.
   const [ookZonderTekst, setOokZonderTekst] = useState(false)
+  // Zelf gekozen POI's (0.19.4, S1a–S5a): POI's die vanzelf niet meedoen
+  // (buiten de corridor, eigen POI te ver, zonder tekst) en die de gebruiker
+  // bij stap 5 toch heeft aangevinkt. { [id]: true }; geldt tot een nieuwe
+  // route of zoekactie (resetResults).
+  const [gekozen, setGekozen] = useState({})
+  // Kader "Niet opgenomen" bij stap 5 open of dicht (standaard dicht).
+  const [toonNietOpgenomen, setToonNietOpgenomen] = useState(false)
+  const nietOpgenomenKop = useRef(null)
   // Zoekbron en wanneer eigen POI's meedoen (beide stap 2), 0.15.0:
   // bewaard en bij het starten teruggezet (zoekbron.js).
   const [bron, setBron] = useState(leesBron)
@@ -466,28 +474,56 @@ function App() {
             p.distanceToRoute === null
               ? true
               : p.distanceToRoute <= grensMeters(p.eigen, eigenMelden, corridorMeters),
+          // Zelf aangevinkt bij stap 5 (0.19.4): doet altijd mee.
+          zelfGekozen: Boolean(gekozen[p.id]),
         }
       }),
-    [routeMeasuredPois, corridorMeters, eigenMelden, summariesById]
+    [routeMeasuredPois, corridorMeters, eigenMelden, summariesById, gekozen]
   )
   const mapPoisSorted = useMemo(
     () => [...mapPois].sort((a, b) => (a.distanceToRoute ?? 0) - (b.distanceToRoute ?? 0)),
     [mapPois]
   )
-  const corridorPois = mapPoisSorted.filter((p) => p.inCorridor)
+  // POI's binnen de corridor, plus de zelf gekozen POI's (0.19.4): voor
+  // samenvattingen (stap 6) en export (stap 7).
+  const corridorPois = mapPoisSorted.filter((p) => p.inCorridor || p.zelfGekozen)
   // POI's binnen de corridor die ook gemeld worden (Onderweg) en meegaan in
-  // de export: zonder tekst alleen als dat bij stap 6 is aangezet.
-  const meldtMee = (p) => ookZonderTekst || heeftTekst(p, summariesById)
+  // de export: zonder tekst alleen als dat bij stap 6 is aangezet. Zelf
+  // gekozen POI's altijd (0.19.4, S3a).
+  const meldtMee = (p) => p.zelfGekozen || ookZonderTekst || heeftTekst(p, summariesById)
   const meldPois = corridorPois.filter(meldtMee)
   const zonderTekstCount = corridorPois.length - meldPois.length
-  // Kaart: POI's zonder tekst vervaagd, net als buiten de corridor.
+  // Doet vanzelf mee (zonder vinkje): binnen de corridor en met tekst (of
+  // 'ook zonder tekst'). De rest staat in het kader "Niet opgenomen".
+  const meldtVanzelf = (p) => p.inCorridor && (ookZonderTekst || heeftTekst(p, summariesById))
+  const nietOpgenomen = mapPoisSorted.filter((p) => !meldtVanzelf(p))
+  const gekozenCount = nietOpgenomen.filter((p) => p.zelfGekozen).length
+  // Kaart: POI's die niet meedoen vervaagd (buiten de corridor of zonder
+  // tekst); zelf gekozen POI's in volle kleur.
   const kaartPois = useMemo(
     () =>
-      mapPois.map((p) =>
-        p.inCorridor && !(ookZonderTekst || heeftTekst(p, summariesById)) ? { ...p, inCorridor: false } : p
-      ),
+      mapPois.map((p) => {
+        const doetMee = p.zelfGekozen || (p.inCorridor && (ookZonderTekst || heeftTekst(p, summariesById)))
+        return doetMee === p.inCorridor ? p : { ...p, inCorridor: doetMee }
+      }),
     [mapPois, ookZonderTekst, summariesById]
   )
+  function wisselGekozen(id) {
+    setGekozen((oud) => {
+      const nieuw = { ...oud }
+      if (nieuw[id]) delete nieuw[id]
+      else nieuw[id] = true
+      return nieuw
+    })
+  }
+  // Waarom een POI niet vanzelf meedoet (kader "Niet opgenomen").
+  function redenNietOpgenomen(p) {
+    if (!p.inCorridor) {
+      if (!p.eigen || eigenMelden === 'corridor') return 'buiten de corridor'
+      return `verder dan ${EIGEN_MAX_METERS / 1000} km`
+    }
+    return 'geen tekst'
+  }
   // Eigen POI's hebben hun eigen beschrijving en gaan niet naar Wikipedia.
   const summaryMissingPois = corridorPois.filter((p) => !p.eigen && !(p.id in summariesById))
   const eigenInCorridorCount = corridorPois.filter((p) => p.eigen).length
@@ -534,6 +570,7 @@ function App() {
     setSummaryError('')
     setExportMessage('')
     setExportError('')
+    setGekozen({})
   }
 
   function toggleCategory(key) {
@@ -1227,7 +1264,7 @@ function App() {
         }
       }
       // Zonder tekst alleen als dat bij stap 6 is aangezet (0.12.0).
-      const exportPois = corridorPois.filter((p) => ookZonderTekst || heeftTekst(p, summaries))
+      const exportPois = corridorPois.filter((p) => p.zelfGekozen || ookZonderTekst || heeftTekst(p, summaries))
       if (exportPois.length === 0) {
         setExportError(
           "Geen van de POI's binnen de corridor heeft een tekst. Zet bij stap 6 'Ook POI's zonder tekst melden' aan, of verbreed de corridor."
@@ -1808,42 +1845,93 @@ function App() {
           {searchDone && mapPois.length > 0 && (
             <>
               <p>
-                <strong>{corridorPois.length}</strong> van {mapPois.length} POI's binnen de corridor
-                {zonderTekstCount > 0
-                  ? `, waarvan ${zonderTekstCount} zonder tekst (${zonderTekstCount === 1 ? 'doet' : 'doen'} niet mee, zie stap 6).`
-                  : '.'}
+                <strong>{meldPois.length}</strong> van {mapPois.length} POI's doen mee
+                {gekozenCount > 0 ? ` (waarvan ${gekozenCount} zelf gekozen)` : ''}
+                {nietOpgenomen.length > 0 ? `; ${nietOpgenomen.length - gekozenCount} niet opgenomen.` : '.'}
               </p>
               <ul className="poi-list">
-                {mapPoisSorted.map((poi) => {
-                  const geenTekst = poi.inCorridor && !meldtMee(poi)
-                  return (
-                    <li key={poi.id} className={poi.inCorridor && !geenTekst ? '' : 'is-out'}>
-                      <CategoryDot categoryKey={poi.categoryKey} faded={!poi.inCorridor || geenTekst} />
-                      <span>
-                        {poi.label}{' '}
-                        <span className="muted">
-                          ({poi.categoryLabel},{' '}
-                          {Number.isFinite(poi.distanceToRoute)
-                            ? `${Math.round(poi.distanceToRoute)} m`
-                            : 'afstand onbekend'}
-                          {poi.eigen
-                            ? !poi.inCorridor
-                              ? eigenMelden === 'corridor'
-                                ? ', buiten de corridor: doet niet mee'
-                                : `, verder dan ${EIGEN_MAX_METERS / 1000} km: doet niet mee`
-                              : Number.isFinite(poi.distanceToRoute) && poi.distanceToRoute > corridorMeters
-                                ? ', buiten de corridor maar telt mee'
-                                : ''
-                            : geenTekst
-                              ? ', geen tekst: doet niet mee'
-                              : !poi.wikipediaUrl && ', geen artikel'}
-                          )
-                        </span>
+                {meldPois.map((poi) => (
+                  <li key={poi.id}>
+                    <CategoryDot categoryKey={poi.categoryKey} />
+                    <span>
+                      {poi.label}{' '}
+                      <span className="muted">
+                        ({poi.categoryLabel},{' '}
+                        {Number.isFinite(poi.distanceToRoute)
+                          ? `${Math.round(poi.distanceToRoute)} m`
+                          : 'afstand onbekend'}
+                        {poi.zelfGekozen
+                          ? ', zelf gekozen'
+                          : poi.eigen
+                            ? Number.isFinite(poi.distanceToRoute) && poi.distanceToRoute > corridorMeters
+                              ? ', buiten de corridor maar telt mee'
+                              : ''
+                            : !poi.wikipediaUrl && ', geen artikel'}
+                        )
                       </span>
-                    </li>
-                  )
-                })}
+                    </span>
+                  </li>
+                ))}
               </ul>
+              {nietOpgenomen.length > 0 && (
+                <div className="niet-opgenomen">
+                  <button
+                    type="button"
+                    ref={nietOpgenomenKop}
+                    className="niet-opgenomen-kop"
+                    aria-expanded={toonNietOpgenomen}
+                    onClick={() => setToonNietOpgenomen((v) => !v)}
+                  >
+                    <span aria-hidden="true">{toonNietOpgenomen ? '▾' : '▸'}</span> Niet opgenomen (
+                    {nietOpgenomen.length}
+                    {gekozenCount > 0 ? `, ${gekozenCount} aangevinkt` : ''})
+                  </button>
+                  {toonNietOpgenomen && (
+                    <>
+                      <p className="muted">
+                        Vink een POI aan om hem toch mee te nemen. Onderweg wordt hij voorgelezen bij het
+                        dichtstbijzijnde punt van de route; ligt hij verder dan 300 m weg, dan noemt de
+                        aankondiging de afstand.
+                      </p>
+                      <ul className="poi-list niet-opgenomen-lijst">
+                        {nietOpgenomen.map((poi) => (
+                          <li key={poi.id} className={poi.zelfGekozen ? '' : 'is-out'}>
+                            <label className="niet-opgenomen-regel">
+                              <input
+                                type="checkbox"
+                                checked={poi.zelfGekozen}
+                                onChange={() => wisselGekozen(poi.id)}
+                              />
+                              <CategoryDot categoryKey={poi.categoryKey} faded={!poi.zelfGekozen} />
+                              <span>
+                                {poi.label}{' '}
+                                <span className="muted">
+                                  ({poi.categoryLabel},{' '}
+                                  {Number.isFinite(poi.distanceToRoute)
+                                    ? `${Math.round(poi.distanceToRoute)} m`
+                                    : 'afstand onbekend'}
+                                  , {redenNietOpgenomen(poi)})
+                                </span>
+                              </span>
+                            </label>
+                          </li>
+                        ))}
+                      </ul>
+                      <button
+                        type="button"
+                        className="btn btn-indigo btn-small niet-opgenomen-inklappen"
+                        onClick={() => {
+                          setToonNietOpgenomen(false)
+                          const kop = nietOpgenomenKop.current
+                          if (kop && kop.scrollIntoView) kop.scrollIntoView({ block: 'nearest' })
+                        }}
+                      >
+                        Inklappen
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
             </>
           )}
         </Step>

@@ -64,5 +64,6 @@ export function triggerTekst(p, soort) {
   if (Number.isFinite(route)) delen.push(`POI ${m(route)} van de route`)
   delen.push(`straal ${m(p.straal)}${p.eigenStraal ? ' (CSV)' : ''}`)
   if (soort) delen.push(soort)
+  if (p.zelfGekozen) delen.push('zelf gekozen')
   return `${p.label} (${delen.join(', ')})`
 }

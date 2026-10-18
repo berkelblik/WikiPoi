@@ -556,3 +556,42 @@ body::before {
   border-bottom-width: 3px;
   font-size: 16px;
 }
+
+/* Stap 5: kader "Niet opgenomen" met vinkjes (0.19.4) */
+
+.niet-opgenomen {
+  margin-top: 14px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.niet-opgenomen-kop {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 6px 0;
+  font: inherit;
+  font-weight: 600;
+  color: inherit;
+  cursor: pointer;
+}
+
+.niet-opgenomen-regel {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.niet-opgenomen-regel input {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  align-self: center;
+}
+
+.niet-opgenomen-inklappen {
+  margin-top: 10px;
+}

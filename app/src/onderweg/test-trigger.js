@@ -67,4 +67,12 @@ test('T2: logboekregel met beide afstanden, POI–route en straal', () => {
   assert.strictEqual(triggerTekst(q, 'eco'), 'X (50 m tot POI, straal 200 m (CSV), eco)')
 })
 
+test('triggerTekst: zelf gekozen POI (0.19.4)', () => {
+  const p = { label: 'Hervormde kerk', afstandPoi: 915, afstandRoutepunt: 99, straal: 100, zelfGekozen: true }
+  assert.strictEqual(
+    triggerTekst(p, 'lijst'),
+    'Hervormde kerk (915 m tot POI, 99 m tot routepunt, straal 100 m, lijst, zelf gekozen)'
+  )
+})
+
 console.log(`\n${geslaagd} tests geslaagd.`)
