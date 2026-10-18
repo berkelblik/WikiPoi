@@ -15,9 +15,17 @@ Object.defineProperty(globalThis, 'navigator', {
   configurable: true,
 })
 
-const { naamInTekst, naamZin, tekstMetNaam, toelichtingVan, voorleesDelen } = await import(
-  './voorleestekst.js'
-)
+const {
+  AFSTAND_NOEMEN_M,
+  afstandNoemen,
+  audioOpening,
+  naamInTekst,
+  naamZin,
+  tekstMetNaam,
+  toelichtingVan,
+  voorleesDelen,
+} = await import('./voorleestekst.js')
+const { afstandAfgerond, afstandZin } = await import('../taal.js')
 
 let geslaagd = 0
 function test(naam, fn) {
@@ -128,6 +136,78 @@ test('voorleesDelen: eigen POI met beschrijving zonder naam', () => {
   assert.deepStrictEqual(voorleesDelen(eigen, {}, null), [
     { tekst: 'Picknickplaats. Bankjes aan de Berkel.', lang: 'nl-NL' },
   ])
+})
+
+// 0.19.3, T3b: afstand in de aankondiging.
+test('afstandAfgerond: onder 1 km op 50 m, daarboven op 0,1 km', () => {
+  assert.deepStrictEqual(afstandAfgerond(915), { eenheid: 'm', waarde: 900 })
+  assert.deepStrictEqual(afstandAfgerond(330), { eenheid: 'm', waarde: 350 })
+  assert.deepStrictEqual(afstandAfgerond(980), { eenheid: 'km', waarde: 1 })
+  assert.deepStrictEqual(afstandAfgerond(1234), { eenheid: 'km', waarde: 1.2 })
+  assert.strictEqual(afstandAfgerond(NaN), null)
+})
+
+test('afstandZin: vier talen, decimale komma, enkelvoud', () => {
+  assert.deepStrictEqual(afstandZin(915, 'nl-NL'), { tekst: 'Op 900 meter:', lang: 'nl-NL' })
+  assert.strictEqual(afstandZin(1234, 'nl').tekst, 'Op 1,2 kilometer:')
+  assert.strictEqual(afstandZin(2010, 'nl').tekst, 'Op 2 kilometer:')
+  assert.strictEqual(afstandZin(915, 'de-DE').tekst, 'In 900 Metern:')
+  assert.strictEqual(afstandZin(1000, 'de').tekst, 'In 1 Kilometer:')
+  assert.strictEqual(afstandZin(1530, 'de').tekst, 'In 1,5 Kilometern:')
+  assert.strictEqual(afstandZin(915, 'en-GB').tekst, '900 metres away:')
+  assert.strictEqual(afstandZin(1234, 'en').tekst, '1.2 kilometres away:')
+  assert.strictEqual(afstandZin(1000, 'en').tekst, '1 kilometre away:')
+  assert.strictEqual(afstandZin(915, 'fr').tekst, 'À 900 mètres :')
+  assert.strictEqual(afstandZin(1234, 'fr').tekst, 'À 1,2 kilomètre :')
+  assert.strictEqual(afstandZin(2500, 'fr').tekst, 'À 2,5 kilomètres :')
+  assert.strictEqual(afstandZin(915, 'it'), null)
+})
+
+test('afstandNoemen: pas boven 300 m', () => {
+  assert.strictEqual(AFSTAND_NOEMEN_M, 300)
+  assert.strictEqual(afstandNoemen(300), false)
+  assert.strictEqual(afstandNoemen(301), true)
+  assert.strictEqual(afstandNoemen(null), false)
+  assert.strictEqual(afstandNoemen(undefined), false)
+})
+
+const hervormd = { id: 'Q9', label: 'Hervormde kerk', labelLanguage: 'nl' }
+const kerkTekst = { Q9: { summary: { extractShort: 'De Hervormde kerk is een kerk in Almen.', lang: 'nl' } } }
+
+test('voorleesDelen ver weg: afstand i.p.v. klok, naam altijd (ook als die in de tekst staat)', () => {
+  assert.deepStrictEqual(voorleesDelen(hervormd, kerkTekst, 2, 915), [
+    { tekst: 'Op 900 meter: Hervormde kerk. De Hervormde kerk is een kerk in Almen.', lang: 'nl' },
+  ])
+  // dichtbij: zoals voorheen
+  assert.deepStrictEqual(voorleesDelen(hervormd, kerkTekst, 2, 120), [
+    { tekst: 'Op 2 uur. De Hervormde kerk is een kerk in Almen.', lang: 'nl' },
+  ])
+  // eco (klok null): afstand wordt ook genoemd
+  assert.deepStrictEqual(voorleesDelen(hervormd, kerkTekst, null, 915), [
+    { tekst: 'Op 900 meter: Hervormde kerk. De Hervormde kerk is een kerk in Almen.', lang: 'nl' },
+  ])
+  // zonder toelichting
+  assert.deepStrictEqual(voorleesDelen(hervormd, {}, 2, 1234), [
+    { tekst: 'Op 1,2 kilometer: Hervormde kerk.', lang: 'nl-NL' },
+  ])
+})
+
+test('voorleesDelen ver weg: naam in andere taal → eigen stem', () => {
+  const chateau = { id: 'Q3', label: 'Château de Chambord', labelLanguage: 'fr' }
+  const s = { Q3: { summary: { extractShort: 'Un château de la Loire.', lang: 'fr' } } }
+  assert.deepStrictEqual(voorleesDelen(chateau, s, 2, 650), [
+    { tekst: 'Op 650 meter:', lang: 'nl-NL' },
+    { tekst: 'Château de Chambord. Un château de la Loire.', lang: 'fr' },
+  ])
+})
+
+test('audioOpening: ver weg afstand + naam, anders klokzin', () => {
+  assert.deepStrictEqual(audioOpening(hervormd, 2, 915), [{ tekst: 'Op 900 meter: Hervormde kerk.', lang: 'nl-NL' }])
+  assert.deepStrictEqual(audioOpening(hervormd, null, 915), [
+    { tekst: 'Op 900 meter: Hervormde kerk.', lang: 'nl-NL' },
+  ])
+  assert.deepStrictEqual(audioOpening(hervormd, 2, 80), [{ tekst: 'Op 2 uur.', lang: 'nl-NL' }])
+  assert.deepStrictEqual(audioOpening(hervormd, null, 80), [])
 })
 
 console.log(`\nAlle ${geslaagd} controles geslaagd.`)

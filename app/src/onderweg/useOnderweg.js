@@ -88,8 +88,7 @@ import { spreek, bel, dubbeleBel, speelAudio, stopSpreken, zetDiagnose } from '.
 import { audioBronnen } from './mp3bron.js'
 import { startPositieBron } from './positieBron.js'
 import { logboek, koppelBrowser } from './logboek.js'
-import { klokZin } from '../taal.js'
-import { voorleesDelen } from './voorleestekst.js'
+import { afstandNoemen, audioOpening, voorleesDelen } from './voorleestekst.js'
 import { maakSimulatie, volgendeDoel, SIM_SNELHEID_KMU, SIM_VOORLOOP_M } from './simulatie.js'
 import { maakPositieFilter, MAX_SNELHEID_KMU, tellersTekst } from './positieFilter.js'
 import { track, segmentenVan } from './track.js'
@@ -139,15 +138,26 @@ export function triggerStraal(vervoer) {
 // Heeft de POI audio (eigen POI met mp3-link of gekoppeld bestand), dan
 // klinkt die in plaats van de toelichting, met de toelichting als terugval.
 // zonderBel (0.19.0): geen bel, bijv. na een keuze in het venster (de bel
-// klonk al bij de aankondiging). Geeft false als er niets voor te lezen is.
-function spreekPoi(poi, samenvattingen, klok, { soort = 'handmatig', zonderBel = false, onStart, onEinde } = {}) {
+// klonk al bij de aankondiging). afstand (0.19.3, T3b): afstand (m) tot de
+// POI op het moment van voorlezen; verder dan AFSTAND_NOEMEN_M wordt die
+// genoemd in plaats van de klokrichting (ook bij eco). Geeft false als er
+// niets voor te lezen is.
+function spreekPoi(
+  poi,
+  samenvattingen,
+  klok,
+  { soort = 'handmatig', zonderBel = false, afstand = null, onStart, onEinde } = {}
+) {
+  if (afstandNoemen(afstand)) {
+    logboek.noteer('voorlezen', `${poi.label}: afstand genoemd (${Math.round(afstand)} m)`)
+  }
   const online = typeof navigator === 'undefined' || navigator.onLine !== false
   const audio = audioBronnen(poi, online)
   if (audio.bronnen.length > 0) {
-    speelPoiAudio(poi, samenvattingen, klok, audio, { soort, zonderBel, onStart, onEinde })
+    speelPoiAudio(poi, samenvattingen, klok, audio, { soort, zonderBel, afstand, onStart, onEinde })
     return true
   }
-  const delen = voorleesDelen(poi, samenvattingen, soort === 'eco' ? null : klok)
+  const delen = voorleesDelen(poi, samenvattingen, soort === 'eco' ? null : klok, afstand)
   if (delen.length === 0) return false
   let startGebruikt = false
   if (soort === 'lijst' && !zonderBel) {
@@ -168,8 +178,9 @@ function spreekPoi(poi, samenvattingen, klok, { soort = 'handmatig', zonderBel =
 }
 
 // Variant van spreekPoi voor een POI met audio: bel (lijst/eco), klokzin
-// (niet bij eco), dan de audio met de toelichting zonder klokzin als terugval.
-function speelPoiAudio(poi, samenvattingen, klok, audio, { soort, zonderBel, onStart, onEinde }) {
+// (niet bij eco) of, ver weg, afstand en naam (0.19.3), dan de audio met de
+// toelichting zonder klokzin als terugval.
+function speelPoiAudio(poi, samenvattingen, klok, audio, { soort, zonderBel, afstand, onStart, onEinde }) {
   let startGebruikt = false
   if (soort === 'lijst' && !zonderBel) {
     bel({ onStart })
@@ -178,11 +189,10 @@ function speelPoiAudio(poi, samenvattingen, klok, audio, { soort, zonderBel, onS
     dubbeleBel({ onStart })
     startGebruikt = true
   }
-  const richting = soort === 'eco' ? null : klokZin(klok)
-  if (richting) {
-    spreek(richting.tekst, { lang: richting.lang, onStart: startGebruikt ? undefined : onStart })
+  audioOpening(poi, soort === 'eco' ? null : klok, afstand).forEach((deel) => {
+    spreek(deel.tekst, { lang: deel.lang, onStart: startGebruikt ? undefined : onStart })
     startGebruikt = true
-  }
+  })
   speelAudio({
     bronnen: audio.bronnen,
     overgeslagen: audio.overgeslagen,
@@ -602,6 +612,7 @@ export function useOnderweg(
   // "voorgelezen" voor de automatische trigger.
   const leesVoor = useCallback((poi) => {
     spreekPoi(poi, samenvattingenRef.current, poi.klok, {
+      afstand: poi.afstandPoi,
       onStart: () => setNuAanHetVoorlezen(poi.label),
       onEinde: () => setNuAanHetVoorlezen(null),
     })
@@ -686,6 +697,7 @@ export function useOnderweg(
       const gestart = spreekPoi(p, samenvattingenRef.current, Number.isFinite(p.klok) ? p.klok : null, {
         soort,
         zonderBel,
+        afstand: p.afstandPoi,
         onStart: () => {
           setNuAanHetVoorlezen(p.label)
           setLaatstePoiId(p.id)
@@ -863,6 +875,7 @@ export function useOnderweg(
       uitLater(poi.id)
       const p = zoekPoi(poi.id) || poi
       spreekPoi(p, samenvattingenRef.current, Number.isFinite(p.klok) ? p.klok : null, {
+        afstand: p.afstandPoi,
         onStart: () => setNuAanHetVoorlezen(p.label),
         onEinde: () => setNuAanHetVoorlezen(null),
       })

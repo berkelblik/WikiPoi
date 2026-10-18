@@ -11,6 +11,8 @@
  *   klokrichting onderweg.
  * - klokZin(): korte zin met de klokrichting ("Auf 3 Uhr.") in de taal van
  *   het toestel, voor de aankondiging onderweg.
+ * - afstandZin(): begin van de aankondiging van een POI die ver weg ligt
+ *   ("Op 900 meter:"), in de taal van het toestel (0.19.3, T3b).
  * - toelichtingTaal(): in welke taal de toelichting van een POI is, zodat
  *   die met een passende stem wordt voorgelezen.
  * - labelTaal(): in welke taal de naam van een POI is, voor het uitspreken
@@ -108,4 +110,59 @@ export function klokZin(uur, taal = telefoonTaal()) {
   if (!Number.isInteger(uur) || uur < 1 || uur > 12) return null
   const maak = KLOK_ZINNEN[basisTaal(taal)]
   return maak ? { tekst: maak(uur), lang: taal } : null
+}
+
+/**
+ * Afstand afgerond voor het uitspreken (0.19.3, T3b, keuze B1): onder 1 km
+ * op 50 m, vanaf 1 km op 0,1 km.
+ *
+ * @param {number} meters
+ * @returns {{eenheid:'m'|'km', waarde:number}|null} null bij een ongeldige afstand
+ */
+export function afstandAfgerond(meters) {
+  if (!Number.isFinite(meters) || meters < 0) return null
+  const m = Math.round(meters / 50) * 50
+  if (m < 1000) return { eenheid: 'm', waarde: m }
+  return { eenheid: 'km', waarde: Math.round(meters / 100) / 10 }
+}
+
+// Getal met decimale komma (behalve Engels); hele kilometers zonder ",0".
+function getal(waarde, komma) {
+  const t = Number.isInteger(waarde) ? String(waarde) : waarde.toFixed(1)
+  return komma ? t.replace('.', ',') : t
+}
+
+// Afstandszin per taal (zelfde talen als KLOK_ZINNEN); eindigt op een
+// dubbele punt, daarna volgt de naam.
+const AFSTAND_ZINNEN = {
+  nl: ({ eenheid, waarde }) =>
+    eenheid === 'm' ? `Op ${waarde} meter:` : `Op ${getal(waarde, true)} kilometer:`,
+  de: ({ eenheid, waarde }) =>
+    eenheid === 'm'
+      ? `In ${waarde} Metern:`
+      : `In ${getal(waarde, true)} ${waarde === 1 ? 'Kilometer' : 'Kilometern'}:`,
+  en: ({ eenheid, waarde }) =>
+    eenheid === 'm'
+      ? `${waarde} metres away:`
+      : `${getal(waarde, false)} ${waarde === 1 ? 'kilometre' : 'kilometres'} away:`,
+  fr: ({ eenheid, waarde }) =>
+    eenheid === 'm'
+      ? `À ${waarde} mètres :`
+      : `À ${getal(waarde, true)} ${waarde < 2 ? 'kilomètre' : 'kilomètres'} :`,
+}
+
+/**
+ * Afstand tot de POI als begin van de aankondiging ("Op 900 meter:"), in de
+ * taal van het toestel. Of de afstand genoemd wordt (drempel) beslist
+ * voorleestekst.js.
+ *
+ * @param {number} meters
+ * @param {string} [taal] - taalcode; standaard telefoonTaal()
+ * @returns {{tekst:string, lang:string}|null} null bij een ongeldige afstand
+ *   of een taal zonder vertaling
+ */
+export function afstandZin(meters, taal = telefoonTaal()) {
+  const a = afstandAfgerond(meters)
+  const maak = AFSTAND_ZINNEN[basisTaal(taal)]
+  return a && maak ? { tekst: maak(a), lang: taal } : null
 }
