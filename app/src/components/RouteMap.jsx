@@ -389,7 +389,9 @@ function RouteMap({
       if (!Number.isFinite(p.lat) || !Number.isFinite(p.lng)) return
       const style = getCategoryStyle(p.categoryKey)
 
-      if (p.inCorridor && p.snapPoint) {
+      // Geen lijn naar het routepunt bij POI's die alleen bij de POI zelf
+      // triggeren (0.19.5).
+      if (p.inCorridor && p.snapPoint && !p.alleenBijPoi) {
         L.polyline(
           [
             [p.lat, p.lng],

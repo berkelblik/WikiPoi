@@ -13,6 +13,12 @@
  * Straal per POI: eigen POI's met een radius > 0 in de CSV gebruiken die
  *    straal; radius 0 (of leeg) = de straal van de vervoerwijze (zoals in
  *    EuroPoi).
+ *
+ * Alleen bij de POI zelf (0.19.5): een eigen POI buiten de corridor triggert
+ *    niet bij het routepunt, alleen als je er werkelijk langs komt (zoals in
+ *    EuroPoi). Zelf aangevinkt bij stap 5 (0.19.4) of binnen de corridor:
+ *    ook bij het routepunt (testrit 19-10: Cammock en Twentekanaal, 860–910 m
+ *    van de route, kondigden zich aan bij het routepunt).
  */
 import { afstand } from './geo.js'
 
@@ -20,6 +26,24 @@ import { afstand } from './geo.js'
 export function poiStraal(poi, vervoerStraal) {
   const r = poi && Number(poi.radius)
   return Number.isFinite(r) && r > 0 ? r : vervoerStraal
+}
+
+/**
+ * Triggert deze POI alleen bij de POI zelf? Eigen POI, niet zelf gekozen en
+ * verder dan de corridor van de route.
+ *
+ * @param {object} poi - met eigen, zelfGekozen, distanceToRoute
+ * @param {number} corridorMeters
+ * @returns {boolean}
+ */
+export function alleenBijPoi(poi, corridorMeters) {
+  return Boolean(
+    poi &&
+      poi.eigen &&
+      !poi.zelfGekozen &&
+      Number.isFinite(poi.distanceToRoute) &&
+      poi.distanceToRoute > corridorMeters
+  )
 }
 
 /**
@@ -32,6 +56,10 @@ export function triggerAfstand(positie, poi) {
   const totPoi = afstand(positie, poi)
   const sp = poi && poi.snapPoint
   const totRoutepunt = sp && Number.isFinite(sp.lat) && Number.isFinite(sp.lng) ? afstand(positie, sp) : null
+  // Alleen bij de POI zelf (0.19.5): routepunt wel noemen (logboek), niet gebruiken.
+  if (poi && poi.alleenBijPoi) {
+    return { afstand: totPoi, totPoi, totRoutepunt, via: 'poi' }
+  }
   if (totRoutepunt === null || !Number.isFinite(totRoutepunt)) {
     return { afstand: totPoi, totPoi, totRoutepunt: null, via: 'poi' }
   }
@@ -65,5 +93,6 @@ export function triggerTekst(p, soort) {
   delen.push(`straal ${m(p.straal)}${p.eigenStraal ? ' (CSV)' : ''}`)
   if (soort) delen.push(soort)
   if (p.zelfGekozen) delen.push('zelf gekozen')
+  if (p.alleenBijPoi) delen.push('alleen bij POI')
   return `${p.label} (${delen.join(', ')})`
 }

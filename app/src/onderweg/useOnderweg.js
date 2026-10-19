@@ -600,7 +600,7 @@ export function useOnderweg(
     const sim = simRef.current
     if (!sim) return false
     const posities = poisRef.current
-      .filter((p) => !voorgelezenRef.current[p.id])
+      .filter((p) => !voorgelezenRef.current[p.id] && !p.alleenBijPoi)
       .map((p) => sim.afstandVan(p.snapPoint || p))
     const doel = volgendeDoel(posities, sim.status().meters, SIM_VOORLOOP_M)
     if (doel === null) return false

@@ -220,14 +220,15 @@ function Onderweg({ pois, summariesById, routePunten }) {
 
   // Triggerstraal per POI voor de kaart: rond het triggerpunt op de route
   // en (T1, 0.19.1) ook rond de POI zelf als die er niet vlakbij ligt.
+  // Alleen bij de POI zelf (0.19.5): alleen de cirkel om de POI.
   const straalCirkels = useMemo(() => {
     const cirkels = []
     pois.forEach((p) => {
       const straal = poiStraal(p, triggerStraal(vervoer))
       const klaar = !!voorgelezen[p.id]
-      const t = p.snapPoint || p
+      const t = p.alleenBijPoi ? p : p.snapPoint || p
       cirkels.push({ id: p.id, lat: t.lat, lng: t.lng, straal, voorgelezen: klaar })
-      if (p.snapPoint && afstand(p, p.snapPoint) > 10) {
+      if (!p.alleenBijPoi && p.snapPoint && afstand(p, p.snapPoint) > 10) {
         cirkels.push({ id: `${p.id}-poi`, lat: p.lat, lng: p.lng, straal, voorgelezen: klaar })
       }
     })

@@ -28,6 +28,7 @@ import * as AudioOpslag from './onderweg/audioOpslag.js'
 import './App.css'
 import { version as APP_VERSION } from '../package.json'
 import { tekstMetNaam, toelichtingVan } from './onderweg/voorleestekst.js'
+import { alleenBijPoi } from './onderweg/trigger.js'
 import {
   EIGEN_MAX_METERS,
   effectieveBron,
@@ -476,6 +477,8 @@ function App() {
               : p.distanceToRoute <= grensMeters(p.eigen, eigenMelden, corridorMeters),
           // Zelf aangevinkt bij stap 5 (0.19.4): doet altijd mee.
           zelfGekozen: Boolean(gekozen[p.id]),
+          // Eigen POI buiten de corridor: alleen bij de POI zelf (0.19.5).
+          alleenBijPoi: alleenBijPoi({ ...p, zelfGekozen: Boolean(gekozen[p.id]) }, corridorMeters),
         }
       }),
     [routeMeasuredPois, corridorMeters, eigenMelden, summariesById, gekozen]
@@ -1862,11 +1865,9 @@ function App() {
                           : 'afstand onbekend'}
                         {poi.zelfGekozen
                           ? ', zelf gekozen'
-                          : poi.eigen
-                            ? Number.isFinite(poi.distanceToRoute) && poi.distanceToRoute > corridorMeters
-                              ? ', buiten de corridor maar telt mee'
-                              : ''
-                            : !poi.wikipediaUrl && ', geen artikel'}
+                          : poi.alleenBijPoi
+                            ? ', buiten de corridor: alleen bij de POI zelf'
+                            : !poi.eigen && !poi.wikipediaUrl && ', geen artikel'}
                         )
                       </span>
                     </span>

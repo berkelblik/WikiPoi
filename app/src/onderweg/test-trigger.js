@@ -8,7 +8,7 @@
  * Uitvoeren vanuit app/:  node src/onderweg/test-trigger.js
  */
 import assert from 'node:assert'
-import { poiStraal, triggerAfstand, poiTotRoute, triggerTekst } from './trigger.js'
+import { alleenBijPoi, poiStraal, triggerAfstand, poiTotRoute, triggerTekst } from './trigger.js'
 
 let geslaagd = 0
 function test(naam, fn) {
@@ -72,6 +72,31 @@ test('triggerTekst: zelf gekozen POI (0.19.4)', () => {
   assert.strictEqual(
     triggerTekst(p, 'lijst'),
     'Hervormde kerk (915 m tot POI, 99 m tot routepunt, straal 100 m, lijst, zelf gekozen)'
+  )
+})
+
+test('alleenBijPoi: eigen POI buiten de corridor, niet zelf gekozen (0.19.5)', () => {
+  assert.strictEqual(alleenBijPoi({ eigen: true, distanceToRoute: 859 }, 150), true)
+  assert.strictEqual(alleenBijPoi({ eigen: true, distanceToRoute: 122 }, 150), false) // Bertus
+  assert.strictEqual(alleenBijPoi({ eigen: true, distanceToRoute: 122 }, 100), true)
+  assert.strictEqual(alleenBijPoi({ eigen: true, distanceToRoute: 859, zelfGekozen: true }, 150), false)
+  assert.strictEqual(alleenBijPoi({ eigen: false, distanceToRoute: 859 }, 150), false)
+  assert.strictEqual(alleenBijPoi({ eigen: true, distanceToRoute: null }, 150), false)
+})
+
+test('triggerAfstand: alleen bij de POI → routepunt telt niet mee', () => {
+  // Op het routepunt (0,008° ≈ 890 m van de POI).
+  const opRoute = { lat: 52.168, lng: 6.29 }
+  const gewoon = triggerAfstand(opRoute, POI)
+  assert.strictEqual(gewoon.via, 'route')
+  const alleen = triggerAfstand(opRoute, { ...POI, alleenBijPoi: true })
+  assert.strictEqual(alleen.via, 'poi')
+  assert.ok(dichtbij(alleen.afstand, 890, 5), alleen.afstand)
+  assert.ok(dichtbij(alleen.totRoutepunt, 0))
+  const p = { label: 'Twentekanaal', afstandPoi: 4, afstandRoutepunt: 857, straal: 100, alleenBijPoi: true }
+  assert.strictEqual(
+    triggerTekst(p, 'lijst'),
+    'Twentekanaal (4 m tot POI, 857 m tot routepunt, straal 100 m, lijst, alleen bij POI)'
   )
 })
 
