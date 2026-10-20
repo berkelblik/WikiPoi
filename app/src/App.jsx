@@ -273,6 +273,10 @@ function App() {
   const [gekozen, setGekozen] = useState({})
   // Kader "Niet opgenomen" bij stap 5 open of dicht (standaard dicht).
   const [toonNietOpgenomen, setToonNietOpgenomen] = useState(false)
+  // POI's waarmee de lopende rit is gestart (0.20.0, R4a): die blijven
+  // meedoen, ook als na het ophalen blijkt dat ze geen tekst hebben. null =
+  // geen rit.
+  const [ritIds, setRitIds] = useState(null)
   const nietOpgenomenKop = useRef(null)
   // Zoekbron en wanneer eigen POI's meedoen (beide stap 2), 0.15.0:
   // bewaard en bij het starten teruggezet (zoekbron.js).
@@ -494,7 +498,7 @@ function App() {
   // de export: zonder tekst alleen als dat bij stap 6 is aangezet. Zelf
   // gekozen POI's altijd (0.19.4, S3a).
   const meldtMee = (p) => p.zelfGekozen || ookZonderTekst || heeftTekst(p, summariesById)
-  const meldPois = corridorPois.filter(meldtMee)
+  const meldPois = corridorPois.filter((p) => meldtMee(p) || (ritIds && ritIds.has(p.id)))
   const zonderTekstCount = corridorPois.length - meldPois.length
   // Doet vanzelf mee (zonder vinkje): binnen de corridor en met tekst (of
   // 'ook zonder tekst'). De rest staat in het kader "Niet opgenomen".
@@ -1158,6 +1162,22 @@ function App() {
     await voegFotosToe(candidates, added, fotoBestanden)
     setSummariesById((prev) => ({ ...prev, ...added }))
     return { ...summariesById, ...added }
+  }
+
+  // Ontbrekende samenvattingen ophalen bij "Route starten" (0.20.0, R1a):
+  // dezelfde stap als bij stap 6/7. Geeft { opgehaald, zonder } terug.
+  async function haalSamenvattingenVoorRit() {
+    const ids = summaryMissingPois.map((p) => p.id)
+    if (ids.length === 0) return { opgehaald: 0, zonder: 0 }
+    setSummaryError('')
+    setSummaryLoading(true)
+    try {
+      const s = await fetchMissingSummaries()
+      const opgehaald = ids.filter((id) => s[id] && s[id].summary).length
+      return { opgehaald, zonder: ids.length - opgehaald }
+    } finally {
+      setSummaryLoading(false)
+    }
   }
 
   // Artikel via de ligging (0.17.0): voor POI's zonder artikel in de eerste
@@ -2126,7 +2146,13 @@ function App() {
           disabled={corridorPois.length === 0}
           hint="Zoek eerst POI's bij stap 4; er moet minstens één POI binnen de corridor liggen."
         >
-          <Onderweg pois={meldPois} summariesById={summariesById} routePunten={routeInfo ? routeInfo.points : null} />
+          <Onderweg
+            pois={meldPois}
+            summariesById={summariesById}
+            routePunten={routeInfo ? routeInfo.points : null}
+            haalSamenvattingen={haalSamenvattingenVoorRit}
+            onRit={setRitIds}
+          />
         </Step>
       </main>
     </>

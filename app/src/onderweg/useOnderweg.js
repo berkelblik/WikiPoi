@@ -611,6 +611,7 @@ export function useOnderweg(
   // Handmatig voorlezen (tik op een POI in de lijst); telt niet als
   // "voorgelezen" voor de automatische trigger.
   const leesVoor = useCallback((poi) => {
+    logboek.noteer('handmatig', poi.label)
     spreekPoi(poi, samenvattingenRef.current, poi.klok, {
       afstand: poi.afstandPoi,
       onStart: () => setNuAanHetVoorlezen(poi.label),
@@ -625,6 +626,7 @@ export function useOnderweg(
   // bent).
   const herhaal = useCallback(async (poi) => {
     if (!poi) return
+    logboek.noteer('herhaal', poi.label)
     await stopSpreken()
     setNuAanHetVoorlezen(null)
     spreekPoi(poi, samenvattingenRef.current, null, {

@@ -51,7 +51,7 @@
  * een cirkel om de POI. Eigen POI's met een radius > 0 in de CSV hebben die
  * straal (trigger.js).
  */
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef } from 'react'
 import { Capacitor } from '@capacitor/core'
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem'
 import { Share } from '@capacitor/share'
@@ -69,6 +69,7 @@ import { achtergrondMogelijk } from './positieBron.js'
 import { logboek, analyseer, alsTekst, duurTekst, tijdTekst } from './logboek.js'
 import EcoScherm from './EcoScherm.jsx'
 import KeuzeVenster from './KeuzeVenster.jsx'
+import { ophalenVoorStart, ophaalMelding, ophaalLogregel } from './samenvattingVoorStart.js'
 import { SIM_SNELHEID_KMU, SIM_VERSNELLINGEN } from './simulatie.js'
 import { formatAfstand, afstand } from './geo.js'
 import CategoryDot from '../components/CategoryDot.jsx'
@@ -164,8 +165,12 @@ function logboekSamenvatting(data) {
   )
 }
 
-function Onderweg({ pois, summariesById, routePunten }) {
+function Onderweg({ pois, summariesById, routePunten, haalSamenvattingen, onRit }) {
   const [vervoer, setVervoer] = useState(STANDAARD_VERVOER)
+  // Samenvattingen ophalen vóór de start (0.20.0): { aantal } of null.
+  const [ophalen, setOphalen] = useState(null)
+  const [ophaalTekst, setOphaalTekst] = useState('')
+  const overslaanRef = useRef(null)
   const [ecoOpen, setEcoOpen] = useState(false)
   const [simAan, setSimAan] = useState(false)
   const [simMelding, setSimMelding] = useState('')
@@ -313,18 +318,47 @@ function Onderweg({ pois, summariesById, routePunten }) {
     }
   }
 
-  const routeStarten = () => {
+  // "Route starten" (0.20.0, R1a): eerst de ontbrekende samenvattingen
+  // ophalen (hoogstens 30 s, knop "Nu starten zonder"), dan pas starten.
+  // Bij simulatie niet wachten.
+  const routeStarten = async () => {
+    if (ophalen) return
     setSimMelding('')
     setTrackMelding('')
     setWeggooienVragen(false)
     setWeggegooid(false)
+    setOphaalTekst('')
+    if (onRit) onRit(new Set(pois.map((p) => p.id)))
+    let uitkomst = null
+    if (!simulatieGekozen && haalSamenvattingen && zonderSamenvatting > 0) {
+      setOphalen({ aantal: zonderSamenvatting })
+      uitkomst = await ophalenVoorStart({
+        aantal: zonderSamenvatting,
+        haal: haalSamenvattingen,
+        online: typeof navigator === 'undefined' || navigator.onLine !== false,
+        overslaan: new Promise((ok) => {
+          overslaanRef.current = ok
+        }),
+      })
+      overslaanRef.current = null
+      setOphalen(null)
+      setOphaalTekst(ophaalMelding(uitkomst) || '')
+    }
     start()
+    const regel = ophaalLogregel(uitkomst)
+    if (regel) logboek.noteer('info', regel)
     if (ECO_BIJ_START) setEcoOpen(true)
+  }
+
+  const nuStartenZonder = () => {
+    if (overslaanRef.current) overslaanRef.current()
   }
 
   const routeStoppen = () => {
     setEcoOpen(false)
+    setOphaalTekst('')
     stop()
+    if (onRit) onRit(null)
   }
 
   const naarVolgendePoi = () => {
@@ -342,10 +376,10 @@ function Onderweg({ pois, summariesById, routePunten }) {
         Volgt je GPS-positie langs de route en leest elke POI één keer voor zodra je in de buurt
         bent.
       </p>
-      {zonderSamenvatting > 0 && (
+      {zonderSamenvatting > 0 && !actief && !ophalen && (
         <p className="muted">
-          Tip: voor {zonderSamenvatting} POI's is nog geen samenvatting opgehaald (stap 6); die
-          krijgen alleen de korte Wikidata-omschrijving.
+          Voor {zonderSamenvatting === 1 ? '1 POI' : `${zonderSamenvatting} POI's`} wordt bij het starten eerst
+          de samenvatting opgehaald (internet nodig).
         </p>
       )}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' }}>
@@ -378,11 +412,29 @@ function Onderweg({ pois, summariesById, routePunten }) {
         type="button"
         className={actief ? 'btn btn-pink btn-wide' : 'btn btn-green btn-wide'}
         onClick={actief ? routeStoppen : routeStarten}
+        disabled={!!ophalen}
       >
         {actief
           ? 'Route stoppen'
-          : `${simulatieGekozen ? 'Simulatie' : 'Route'} starten (${pois.length} POI's)`}
+          : ophalen
+            ? `Samenvattingen ophalen (${ophalen.aantal})…`
+            : `${simulatieGekozen ? 'Simulatie' : 'Route'} starten (${pois.length} POI's)`}
       </button>
+      {ophalen && (
+        <button
+          type="button"
+          className="btn btn-indigo btn-small"
+          style={{ marginTop: '8px' }}
+          onClick={nuStartenZonder}
+        >
+          Nu starten zonder
+        </button>
+      )}
+      {ophaalTekst && (
+        <p className="muted" style={{ marginTop: '8px' }}>
+          {ophaalTekst}
+        </p>
+      )}
       {actief && achtergrondGekozen && (
         <p className="muted" style={{ marginTop: '8px' }}>
           Achtergrond-GPS actief: de melding "WikiPoi volgt uw route" blijft staan tot u de
