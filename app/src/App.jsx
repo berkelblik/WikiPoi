@@ -29,6 +29,9 @@ import './App.css'
 import { version as APP_VERSION } from '../package.json'
 import { tekstMetNaam, toelichtingVan } from './onderweg/voorleestekst.js'
 import { alleenBijPoi } from './onderweg/trigger.js'
+import Welkom from './over/Welkom.jsx'
+import OverWikiPoi from './over/OverWikiPoi.jsx'
+import { welkomTonen, welkomBegrepen, welkomVergeten } from './over/welkom.js'
 import {
   EIGEN_MAX_METERS,
   effectieveBron,
@@ -277,6 +280,9 @@ function App() {
   // meedoen, ook als na het ophalen blijkt dat ze geen tekst hebben. null =
   // geen rit.
   const [ritIds, setRitIds] = useState(null)
+  // Melding bij eerste gebruik en scherm "Over WikiPoi" (0.21.0).
+  const [toonWelkom, setToonWelkom] = useState(() => welkomTonen(APP_VERSION))
+  const [toonOver, setToonOver] = useState(false)
   const nietOpgenomenKop = useRef(null)
   // Zoekbron en wanneer eigen POI's meedoen (beide stap 2), 0.15.0:
   // bewaard en bij het starten teruggezet (zoekbron.js).
@@ -1402,8 +1408,40 @@ function App() {
         <div>
           <div className="app-title">WikiPoi</div>
           <div className="app-subtitle">Bezienswaardigheden langs je route</div>
+          <div className="app-versieregel">versie {APP_VERSION} · bèta</div>
         </div>
+        <button
+          type="button"
+          className="app-info"
+          onClick={() => setToonOver(true)}
+          aria-label="Over WikiPoi"
+          title="Over WikiPoi"
+        >
+          <span className="app-info-icoon" aria-hidden="true">
+            i
+          </span>
+          <span className="app-info-versie">Over</span>
+        </button>
       </header>
+      {toonWelkom && (
+        <Welkom
+          onBegrepen={() => {
+            welkomBegrepen(APP_VERSION)
+            setToonWelkom(false)
+          }}
+        />
+      )}
+      {toonOver && (
+        <OverWikiPoi
+          versie={APP_VERSION}
+          onSluiten={() => setToonOver(false)}
+          onWelkomOpnieuw={() => {
+            welkomVergeten()
+            setToonOver(false)
+            setToonWelkom(true)
+          }}
+        />
+      )}
 
       <main className="app-main">
         <Step number={1} title="Route">
@@ -1428,7 +1466,6 @@ function App() {
             <p className="muted">Kies het GPX-bestand van je fiets- of wandelroute.</p>
           )}
           {routeError && <p className="error">{routeError}</p>}
-          <p className="muted app-versie">WikiPoi {APP_VERSION}</p>
         </Step>
 
         <Step number={2} title="Bronnen">

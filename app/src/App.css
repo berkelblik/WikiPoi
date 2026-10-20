@@ -98,6 +98,12 @@ body::before {
   color: #7aa2f7;
 }
 
+/* Versieregel onder de ondertitel (0.21.0, C1) */
+.app-versieregel {
+  font-size: 11px;
+  color: var(--wp-muted);
+}
+
 /* Stappen */
 
 .app-main {
@@ -483,12 +489,6 @@ body::before {
 }
 
 /* Versienummer onderaan stap 1 */
-
-.step p.app-versie {
-  margin-bottom: 0;
-  font-size: 12px;
-  text-align: right;
-}
 
 /* Taal van de teksten, eigen volgorde (0.17.0, stap 2) */
 

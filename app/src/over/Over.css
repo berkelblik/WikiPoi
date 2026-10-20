@@ -1,0 +1,111 @@
+/* Welkomstmelding en "Over WikiPoi" (0.21.0): venster midden op het scherm,
+ * boven app, kaart en eco-scherm (z-index 2200, keuzevenster 2100). */
+
+.over-achtergrond {
+  position: fixed;
+  inset: 0;
+  z-index: 2200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: calc(16px + env(safe-area-inset-top, 0px)) 16px calc(16px + env(safe-area-inset-bottom, 0px));
+  background: rgba(5, 10, 25, 0.75);
+  box-sizing: border-box;
+}
+
+.over-venster {
+  width: 100%;
+  max-width: 480px;
+  max-height: 100%;
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: 18px;
+  border-radius: 18px;
+  background: var(--wp-navy, #13204a);
+  border: 2px solid var(--wp-gold, #facc15);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  color: var(--wp-text, #e2e8f0);
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.over-venster p {
+  margin: 0 0 10px;
+}
+
+.over-venster a {
+  color: #7aa2f7;
+}
+
+.over-titel {
+  margin: 0 0 8px;
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--wp-gold, #facc15);
+}
+
+.over-kop {
+  margin: 14px 0 6px;
+  font-size: 16px;
+  color: #ffffff;
+}
+
+.over-lijst {
+  margin: 0 0 10px;
+  padding-left: 20px;
+}
+
+.over-lijst li {
+  margin-bottom: 6px;
+}
+
+.over-bronnen li {
+  font-size: 14px;
+}
+
+.over-klein {
+  font-size: 13px;
+  color: var(--wp-muted, #94a3b8);
+}
+
+.over-knoppen {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: space-between;
+  margin-top: 14px;
+}
+
+/* ⓘ-knop in de kopregel */
+.app-info {
+  margin-left: auto;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  background: none;
+  border: none;
+  color: #7aa2f7;
+  font: inherit;
+  cursor: pointer;
+}
+
+.app-info-icoon {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 2px solid #7aa2f7;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  font-weight: 700;
+  font-style: italic;
+  font-family: Georgia, serif;
+}
+
+.app-info-versie {
+  font-size: 11px;
+}
