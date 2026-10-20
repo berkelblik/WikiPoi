@@ -120,7 +120,9 @@ body::after {
 .app-subtitle {
   font-size: 14px;
   color: #7aa2f7;
-  hyphens: auto;
+  /* Alleen afbreken op de vaste punten (&shy;) in de tekst: beziens- of
+   * bezienswaardig- (0.22.2), niet volgens de afbreekregels van Android. */
+  hyphens: manual;
   overflow-wrap: break-word;
 }
 

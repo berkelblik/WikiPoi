@@ -1466,9 +1466,9 @@ function App() {
         <div className="app-logo" aria-hidden="true">
           W
         </div>
-        <div className="app-kopteksten" lang="nl">
+        <div className="app-kopteksten">
           <div className="app-title">WikiPoi</div>
-          <div className="app-subtitle">Beziens&shy;waardigheden langs je route</div>
+          <div className="app-subtitle">Beziens&shy;waardig&shy;heden langs je route</div>
           <div className="app-versieregel">versie {APP_VERSION} · bèta</div>
         </div>
         <div className="app-kopknoppen">
