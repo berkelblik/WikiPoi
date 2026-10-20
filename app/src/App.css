@@ -47,6 +47,22 @@ body::before {
   pointer-events: none;
 }
 
+/* Vaste donkere strook achter de Android-navigatiebalk (0.22.1, N1): de
+ * knoppen zijn wit (SystemBars style DARK in capacitor.config.json) en
+ * blijven zo zichtbaar, ook als er een donker kader onder schuift. Zonder
+ * navigatiebalk of in de browser is de hoogte 0. */
+body::after {
+  content: '';
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: env(safe-area-inset-bottom, 0px);
+  background: var(--wp-navy-dark);
+  z-index: 1500;
+  pointer-events: none;
+}
+
 /* display: block overschrijft het flex-kolomrooster uit index.css
  * (Vite-sjabloon). Met flex nam de hoofdkolom de breedte van zijn breedste
  * inhoud aan in plaats van de schermbreedte (0.12.1). */
@@ -63,8 +79,8 @@ body::before {
 .app-header {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: calc(12px + env(safe-area-inset-top, 0px)) 18px 12px;
+  gap: 10px;
+  padding: calc(12px + env(safe-area-inset-top, 0px)) 12px 12px 14px;
   background: var(--wp-navy-dark);
   border-bottom: 1px solid #1e2b55;
 }
@@ -93,9 +109,19 @@ body::before {
   color: #ffffff;
 }
 
+/* Tekstblok in de kop mag krimpen en afbreken, zodat ⚙ en ⓘ altijd binnen
+ * het scherm blijven, ook bij een grotere lettergrootte op de telefoon
+ * (0.22.1, K1). */
+.app-kopteksten {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .app-subtitle {
   font-size: 14px;
   color: #7aa2f7;
+  hyphens: auto;
+  overflow-wrap: break-word;
 }
 
 /* Versieregel onder de ondertitel (0.21.0, C1) */

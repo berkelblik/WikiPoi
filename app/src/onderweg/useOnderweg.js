@@ -276,6 +276,7 @@ export function useOnderweg(
     simulatie = null,
     achtergrond = false,
     trackOpnemen = true,
+    keuzeMs = KEUZE_MS,
   } = {}
 ) {
   const [actief, setActief] = useState(false)
@@ -526,11 +527,18 @@ export function useOnderweg(
 
   // Venster openen of bijwerken; een meegegeven tot (M3: POI's erbij in een
   // open venster) blijft staan, anders begint het aftellen.
+  // Afteltijd: instelling (0.22.0, B5), standaard KEUZE_MS.
+  const keuzeMsRef = useRef(KEUZE_MS)
+  useEffect(() => {
+    keuzeMsRef.current = Number.isFinite(keuzeMs) && keuzeMs > 0 ? keuzeMs : KEUZE_MS
+  }, [keuzeMs])
   const zetKeuze = useCallback((k) => {
     keuzeRef.current = k
       ? {
           ...k,
-          tot: Number.isFinite(k.tot) ? k.tot : Date.now() + (k.soort === 'pauze' ? PAUZE_KEUZE_MS : KEUZE_MS),
+          tot: Number.isFinite(k.tot)
+            ? k.tot
+            : Date.now() + (k.soort === 'pauze' ? PAUZE_KEUZE_MS : keuzeMsRef.current),
         }
       : null
     setKeuze(keuzeRef.current)

@@ -79,4 +79,6 @@ export const PRIVACY_KORT =
   'Je locatie, track en logboek blijven op je telefoon. Er gaat alleen iets weg als jij zelf op ' +
   '"Delen" tikt. Voor het zoeken en de samenvattingen vraagt WikiPoi gegevens op bij Wikidata, ' +
   'Wikipedia en OpenStreetMap voor het gebied van je route; de kaart haalt tegels op bij ' +
-  'OpenStreetMap of Esri voor het stuk kaart dat je bekijkt.'
+  'OpenStreetMap of Esri voor het stuk kaart dat je bekijkt. Bij de updatecontrole vraagt WikiPoi ' +
+  'bij GitHub welke versies er zijn; daarbij gaat geen persoonlijke informatie mee (GitHub ziet wel ' +
+  'je IP-adres). Die controle kun je uitzetten bij Instellingen.'

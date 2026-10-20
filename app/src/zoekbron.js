@@ -57,9 +57,10 @@ export function gebruiktEigen(bron) {
  * @param {boolean} eigen - eigen POI?
  * @param {string} eigenMelden - 'altijd' of 'corridor'
  * @param {number} corridorMeters - breedte corridor (slider stap 5)
+ * @param {number} [eigenMaxMeters] - grens eigen POI's (instelling, 0.22.0)
  */
-export function grensMeters(eigen, eigenMelden, corridorMeters) {
-  if (eigen && eigenMelden !== 'corridor') return EIGEN_MAX_METERS
+export function grensMeters(eigen, eigenMelden, corridorMeters, eigenMaxMeters = EIGEN_MAX_METERS) {
+  if (eigen && eigenMelden !== 'corridor') return eigenMaxMeters
   return corridorMeters
 }
 

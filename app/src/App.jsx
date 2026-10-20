@@ -32,8 +32,18 @@ import { alleenBijPoi } from './onderweg/trigger.js'
 import Welkom from './over/Welkom.jsx'
 import OverWikiPoi from './over/OverWikiPoi.jsx'
 import { welkomTonen, welkomBegrepen, welkomVergeten } from './over/welkom.js'
+import Instellingen from './over/Instellingen.jsx'
+import { controleer, autoControleNodig, leesLaatste, bewaarLaatste } from './over/update.js'
 import {
-  EIGEN_MAX_METERS,
+  CORRIDOR_MAX_METERS,
+  CORRIDOR_MIN_METERS,
+  CORRIDOR_STEP_METERS,
+  leesInstellingen,
+  bewaarInstellingen,
+  standaardTerug,
+  kmTekst,
+} from './instellingen.js'
+import {
   effectieveBron,
   zoektWiki,
   gebruiktEigen,
@@ -78,10 +88,8 @@ import {
 // weerszijden van de route is waarbinnen POI's meegaan. De bounding box van
 // de zoekopdracht krijgt aan alle kanten een marge van de MAXIMALE
 // corridorbreedte, zodat schuiven daarna alleen nog lokaal filtert.
-const CORRIDOR_MAX_METERS = 500
-const CORRIDOR_MIN_METERS = 50
-const CORRIDOR_STEP_METERS = 25
-const CORRIDOR_DEFAULT_METERS = 250
+// Grenzen en stapgrootte: instellingen.js; de beginwaarde is een instelling
+// (0.22.0, B3).
 
 // Wikidata-items met verschillende QID's binnen deze afstand van elkaar
 // worden als één POI behandeld (één gebouw, meerdere items).
@@ -94,7 +102,7 @@ const OSM_TIMEOUT_MS = 30000
 // Eigen POI's uit een CSV (EuroPoi-formaat): eigen categorie en kleur, geen
 // Wikipedia. Een gevonden POI met dezelfde naam (hoofdletters/spaties
 // genegeerd) binnen deze afstand van een eigen POI vervalt: de eigen POI wint.
-// Of ze meedoen tot EIGEN_MAX_METERS (2 km) of alleen binnen de corridor, en
+// Of ze meedoen tot de grens eigen POI's (instelling, standaard 2 km) of alleen binnen de corridor, en
 // of er ook (of alleen) in Wikidata wordt gezocht: zie zoekbron.js (0.15.0).
 const EIGEN_CATEGORY_KEY = 'eigen'
 const EIGEN_CATEGORY_LABEL = 'Eigen POI'
@@ -238,7 +246,15 @@ function App() {
   // Melding als OpenStreetMap faalde; de Wikidata-resultaten blijven dan staan.
   const [osmWarning, setOsmWarning] = useState('')
   const [showMap, setShowMap] = useState(true)
-  const [corridorMeters, setCorridorMeters] = useState(CORRIDOR_DEFAULT_METERS)
+  // Instellingen (0.22.0, onderwerp 5): standaardwaarden, ⚙ in de kopregel.
+  const [instellingen, setInstellingen] = useState(leesInstellingen)
+  const [toonInstellingen, setToonInstellingen] = useState(false)
+  // Updatecontrole (D3): { bezig, uitkomst, laatsteMs }; melding = nieuwe
+  // versie gevonden bij de automatische of handmatige controle.
+  const [update, setUpdate] = useState(() => ({ bezig: false, uitkomst: null, laatsteMs: leesLaatste() }))
+  const [updateMelding, setUpdateMelding] = useState(null)
+  const eigenMaxM = instellingen.eigenMaxM
+  const [corridorMeters, setCorridorMeters] = useState(() => instellingen.corridorM)
   // Samenvattingen per POI-id: { summary, summaryError }. Een id dat hier
   // (nog) niet in staat, is nog niet opgehaald.
   const [summariesById, setSummariesById] = useState({})
@@ -268,7 +284,7 @@ function App() {
   const downloadRonde = useRef(0)
   // POI's zonder tekst (alleen naam of korte Wikidata-omschrijving) toch
   // melden en exporteren (0.12.0)? Standaard niet.
-  const [ookZonderTekst, setOokZonderTekst] = useState(false)
+  const [ookZonderTekst, setOokZonderTekst] = useState(() => instellingen.ookZonderTekst)
   // Zelf gekozen POI's (0.19.4, S1a–S5a): POI's die vanzelf niet meedoen
   // (buiten de corridor, eigen POI te ver, zonder tekst) en die de gebruiker
   // bij stap 5 toch heeft aangevinkt. { [id]: true }; geldt tot een nieuwe
@@ -295,6 +311,51 @@ function App() {
   const [taalInfo, setTaalInfo] = useState(null)
 
   const isNative = Capacitor.isNativePlatform()
+
+  // Instellingen wijzigen (0.22.0): bewaren; corridor en "ook zonder tekst"
+  // gaan meteen over op de nieuwe standaardwaarde als die gewijzigd is.
+  function wijzigInstellingen(wijziging) {
+    const nieuw = bewaarInstellingen({ ...instellingen, ...wijziging })
+    setInstellingen(nieuw)
+    if ('corridorM' in wijziging) setCorridorMeters(nieuw.corridorM)
+    if ('ookZonderTekst' in wijziging) setOokZonderTekst(nieuw.ookZonderTekst)
+  }
+  // "Standaardwaarden terugzetten" (B6).
+  function pasInstellingenToe(nieuw) {
+    setInstellingen(nieuw)
+    setCorridorMeters(nieuw.corridorM)
+    setOokZonderTekst(nieuw.ookZonderTekst)
+  }
+
+  // Updatecontrole (D3/E1): handmatig vanuit Instellingen of automatisch bij
+  // het opstarten. Een nieuwe versie geeft de melding onder de kopregel.
+  const updateBezig = useRef(false)
+  async function controleerOpUpdate(automatisch) {
+    if (updateBezig.current) return
+    updateBezig.current = true
+    setUpdate((u) => ({ ...u, bezig: true }))
+    const uitkomst = await controleer(APP_VERSION)
+    const nu = Date.now()
+    bewaarLaatste(nu)
+    updateBezig.current = false
+    // Automatisch: een fout blijft stil (ook niet in Instellingen).
+    setUpdate((u) => ({
+      bezig: false,
+      uitkomst: automatisch && uitkomst.soort === 'fout' ? u.uitkomst : uitkomst,
+      laatsteMs: nu,
+    }))
+    if (uitkomst.soort === 'nieuw') setUpdateMelding(uitkomst)
+  }
+  // Automatisch: hoogstens één keer per dag, alleen met internet, even na de
+  // start zodat het opstarten er geen last van heeft.
+  useEffect(() => {
+    if (!instellingen.updateAuto) return undefined
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return undefined
+    if (!autoControleNodig(leesLaatste(), Date.now())) return undefined
+    const t = setTimeout(() => controleerOpUpdate(true), 3000)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // De standaard-aangevinkte categorieën komen uit poi-categories.js zelf;
   // dat kan pas ná de module-import ingelezen worden, dus in een effect.
@@ -449,13 +510,13 @@ function App() {
     })
   }, [allPois, routeInfo, categoryLabelByKey])
   const eigenCount = routeMeasuredPois.filter((p) => p.eigen).length
-  // Eigen POI's verder dan EIGEN_MAX_METERS (bij 'altijd melden'): wel
+  // Eigen POI's verder dan de grens (instelling, standaard 2 km; bij 'altijd melden'): wel
   // zichtbaar, doen niet mee. Bij 'alleen binnen de corridor' toont stap 5 dat
   // per POI.
   const eigenTeVer =
     eigenMelden === 'altijd'
       ? routeMeasuredPois.filter(
-          (p) => p.eigen && Number.isFinite(p.distanceToRoute) && p.distanceToRoute > EIGEN_MAX_METERS
+          (p) => p.eigen && Number.isFinite(p.distanceToRoute) && p.distanceToRoute > eigenMaxM
         ).length
       : 0
 
@@ -479,19 +540,19 @@ function App() {
                 naamWikidata: p.label,
               }
             : null),
-          // Eigen POI's doen mee tot EIGEN_MAX_METERS, ook buiten de corridor,
+          // Eigen POI's doen mee tot de grens (eigenMaxM), ook buiten de corridor,
           // of (keuze 'corridor') alleen binnen de corridor.
           inCorridor:
             p.distanceToRoute === null
               ? true
-              : p.distanceToRoute <= grensMeters(p.eigen, eigenMelden, corridorMeters),
+              : p.distanceToRoute <= grensMeters(p.eigen, eigenMelden, corridorMeters, eigenMaxM),
           // Zelf aangevinkt bij stap 5 (0.19.4): doet altijd mee.
           zelfGekozen: Boolean(gekozen[p.id]),
           // Eigen POI buiten de corridor: alleen bij de POI zelf (0.19.5).
           alleenBijPoi: alleenBijPoi({ ...p, zelfGekozen: Boolean(gekozen[p.id]) }, corridorMeters),
         }
       }),
-    [routeMeasuredPois, corridorMeters, eigenMelden, summariesById, gekozen]
+    [routeMeasuredPois, corridorMeters, eigenMelden, eigenMaxM, summariesById, gekozen]
   )
   const mapPoisSorted = useMemo(
     () => [...mapPois].sort((a, b) => (a.distanceToRoute ?? 0) - (b.distanceToRoute ?? 0)),
@@ -533,7 +594,7 @@ function App() {
   function redenNietOpgenomen(p) {
     if (!p.inCorridor) {
       if (!p.eigen || eigenMelden === 'corridor') return 'buiten de corridor'
-      return `verder dan ${EIGEN_MAX_METERS / 1000} km`
+      return `verder dan ${kmTekst(eigenMaxM)}`
     }
     return 'geen tekst'
   }
@@ -1405,24 +1466,68 @@ function App() {
         <div className="app-logo" aria-hidden="true">
           W
         </div>
-        <div>
+        <div className="app-kopteksten" lang="nl">
           <div className="app-title">WikiPoi</div>
-          <div className="app-subtitle">Bezienswaardigheden langs je route</div>
+          <div className="app-subtitle">Beziens&shy;waardigheden langs je route</div>
           <div className="app-versieregel">versie {APP_VERSION} · bèta</div>
         </div>
-        <button
-          type="button"
-          className="app-info"
-          onClick={() => setToonOver(true)}
-          aria-label="Over WikiPoi"
-          title="Over WikiPoi"
-        >
-          <span className="app-info-icoon" aria-hidden="true">
-            i
-          </span>
-          <span className="app-info-versie">Over</span>
-        </button>
+        <div className="app-kopknoppen">
+          <button
+            type="button"
+            className="app-info"
+            onClick={() => setToonInstellingen(true)}
+            aria-label="Instellingen"
+            title="Instellingen"
+          >
+            <span className="app-info-icoon app-tandwiel" aria-hidden="true">
+              ⚙
+            </span>
+            <span className="app-info-versie">Instellingen</span>
+          </button>
+          <button
+            type="button"
+            className="app-info"
+            onClick={() => setToonOver(true)}
+            aria-label="Over WikiPoi"
+            title="Over WikiPoi"
+          >
+            <span className="app-info-icoon" aria-hidden="true">
+              i
+            </span>
+            <span className="app-info-versie">Over</span>
+          </button>
+        </div>
       </header>
+      {updateMelding && (
+        <div className="update-melding" role="status">
+          <span>
+            Versie {updateMelding.versie} van WikiPoi is beschikbaar{updateMelding.prerelease ? ' (bèta)' : ''}.
+          </span>
+          <a
+            className="btn btn-yellow btn-small"
+            href={updateMelding.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={() => setUpdateMelding(null)}
+          >
+            Bekijken
+          </a>
+          <button type="button" className="btn btn-indigo btn-small" onClick={() => setUpdateMelding(null)}>
+            Later
+          </button>
+        </div>
+      )}
+      {toonInstellingen && (
+        <Instellingen
+          instellingen={instellingen}
+          versie={APP_VERSION}
+          update={update}
+          onWijzig={wijzigInstellingen}
+          onStandaard={() => pasInstellingenToe(standaardTerug())}
+          onControleer={() => controleerOpUpdate(false)}
+          onSluiten={() => setToonInstellingen(false)}
+        />
+      )}
       {toonWelkom && (
         <Welkom
           onBegrepen={() => {
@@ -1606,7 +1711,7 @@ function App() {
                 Optioneel: een CSV in EuroPoi-formaat (lat;lng;pluscode;name;desc;category;radius;mp3). Een
                 volledige pluscode bepaalt de plek; lat/lng is de reserve. Eigen
                 POI's verschijnen na het zoeken. Daarna kun je kiezen of ze altijd meedoen (tot{' '}
-                {EIGEN_MAX_METERS / 1000} km van de route) of alleen binnen de corridor.
+                {kmTekst(eigenMaxM)} van de route) of alleen binnen de corridor.
               </p>
             )}
             {eigenImport && (
@@ -1628,8 +1733,8 @@ function App() {
                       Altijd
                       <br />
                       <span className="muted">
-                        Tot {EIGEN_MAX_METERS / 1000} km van de route, ook buiten de corridor; gemeld op het
-                        dichtstbijzijnde punt van de route.
+                        Tot {kmTekst(eigenMaxM)} van de route, ook buiten de corridor; daar alleen gemeld
+                        bij de POI zelf.
                       </span>
                     </span>
                   </label>
@@ -1861,7 +1966,7 @@ function App() {
           {searchDone && eigenTeVer > 0 && (
             <p className="muted">
               {eigenTeVer === 1 ? "1 eigen POI ligt" : `${eigenTeVer} eigen POI's liggen`} verder dan{' '}
-              {EIGEN_MAX_METERS / 1000} km van de route: zichtbaar op de kaart, maar {eigenTeVer === 1 ? 'doet' : 'doen'} niet mee.
+              {kmTekst(eigenMaxM)} van de route: zichtbaar op de kaart, maar {eigenTeVer === 1 ? 'doet' : 'doen'} niet mee.
             </p>
           )}
           {osmWarning && <p className="error">{osmWarning}</p>}
@@ -2189,6 +2294,8 @@ function App() {
             routePunten={routeInfo ? routeInfo.points : null}
             haalSamenvattingen={haalSamenvattingenVoorRit}
             onRit={setRitIds}
+            standaardVervoer={instellingen.vervoer}
+            keuzeMs={instellingen.keuzeS * 1000}
           />
         </Step>
       </main>

@@ -51,7 +51,7 @@
  * een cirkel om de POI. Eigen POI's met een radius > 0 in de CSV hebben die
  * straal (trigger.js).
  */
-import { useState, useMemo, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { Capacitor } from '@capacitor/core'
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem'
 import { Share } from '@capacitor/share'
@@ -165,8 +165,8 @@ function logboekSamenvatting(data) {
   )
 }
 
-function Onderweg({ pois, summariesById, routePunten, haalSamenvattingen, onRit }) {
-  const [vervoer, setVervoer] = useState(STANDAARD_VERVOER)
+function Onderweg({ pois, summariesById, routePunten, haalSamenvattingen, onRit, standaardVervoer, keuzeMs }) {
+  const [vervoer, setVervoer] = useState(() => (VERVOER[standaardVervoer] ? standaardVervoer : STANDAARD_VERVOER))
   // Samenvattingen ophalen vóór de start (0.20.0): { aantal } of null.
   const [ophalen, setOphalen] = useState(null)
   const [ophaalTekst, setOphaalTekst] = useState('')
@@ -221,7 +221,14 @@ function Onderweg({ pois, summariesById, routePunten, haalSamenvattingen, onRit 
     simulatie: simulatieGekozen ? routePunten : null,
     achtergrond: achtergrondGekozen,
     trackOpnemen,
+    keuzeMs,
   })
+  // Andere standaard-vervoerwijze in Instellingen (0.22.0): meteen overnemen,
+  // behalve tijdens een rit.
+  useEffect(() => {
+    if (!actief && VERVOER[standaardVervoer]) setVervoer(standaardVervoer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [standaardVervoer])
 
   // Triggerstraal per POI voor de kaart: rond het triggerpunt op de route
   // en (T1, 0.19.1) ook rond de POI zelf als die er niet vlakbij ligt.
