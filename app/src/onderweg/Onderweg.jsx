@@ -616,6 +616,9 @@ function Onderweg({ pois, summariesById, routePunten, haalSamenvattingen, onRit,
             Testen
           </summary>
           <div style={{ marginTop: '8px' }}>
+            {actief && (simulatieMogelijk || achtergrondKeuze) && (
+              <p className="muted">Stop eerst de rit om simulatie of achtergrond-GPS te kiezen.</p>
+            )}
             {simulatieMogelijk && !actief && (
               <label
                 className="muted"

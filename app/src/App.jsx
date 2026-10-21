@@ -2026,12 +2026,29 @@ function App() {
                           ? `${Math.round(poi.distanceToRoute)} m`
                           : 'afstand onbekend'}
                         {poi.zelfGekozen
-                          ? ', zelf gekozen'
+                          ? poi.inCorridor && poi.eigen && poi.distanceToRoute > corridorMeters
+                            ? ', buiten de corridor: bij de POI zelf en bij de route'
+                            : ', zelf gekozen'
                           : poi.alleenBijPoi
                             ? ', buiten de corridor: alleen bij de POI zelf'
                             : !poi.eigen && !poi.wikipediaUrl && ', geen artikel'}
                         )
                       </span>
+                      {/* Eigen POI buiten de corridor (0.22.3, V1): ook bij de
+                          route laten melden, zonder omweg via de grens. */}
+                      {poi.inCorridor &&
+                        poi.eigen &&
+                        Number.isFinite(poi.distanceToRoute) &&
+                        poi.distanceToRoute > corridorMeters && (
+                          <label className="ook-bij-route">
+                            <input
+                              type="checkbox"
+                              checked={poi.zelfGekozen}
+                              onChange={() => wisselGekozen(poi.id)}
+                            />{' '}
+                            ook bij de route melden
+                          </label>
+                        )}
                     </span>
                   </li>
                 ))}

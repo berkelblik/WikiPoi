@@ -623,3 +623,14 @@ body::after {
 .niet-opgenomen-inklappen {
   margin-top: 10px;
 }
+
+/* Vinkje "ook bij de route melden" bij eigen POI's buiten de corridor in de
+ * hoofdlijst van stap 5 (0.22.3, V1). */
+.ook-bij-route {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 0 4px;
+  font-size: 0.9em;
+  color: var(--wp-text);
+}
