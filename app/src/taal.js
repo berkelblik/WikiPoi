@@ -3,30 +3,42 @@
  *
  * Taalhulpjes voor WikiPoi.
  *
- * - APP_TAAL: taal van de bediening. De app is (nog) alleen Nederlandstalig;
- *   bij een latere vertaling van de bediening verandert dit mee. Ook de
- *   terugvaltaal als voorlezen in een andere taal niet lukt.
+ * - appTaal(): stem van de bedieningstaal (0.23.0, vertaal.js), bijv. 'nl-NL'
+ *   of 'en-GB'. Ook de terugvaltaal als voorlezen in een andere taal niet
+ *   lukt, en de taal van de aankondigingen van het keuzevenster.
  * - telefoonTaal(): taal van het toestel (navigator.language), gebruikt als
  *   voorkeurstaal voor Wikipedia-artikelen en Wikidata-namen en voor de
  *   klokrichting onderweg.
- * - klokZin(): korte zin met de klokrichting ("Auf 3 Uhr.") in de taal van
- *   het toestel, voor de aankondiging onderweg.
+ * - klokZin(): korte zin met de klokrichting ("Auf 3 Uhr.") voor de
+ *   aankondiging onderweg.
  * - afstandZin(): begin van de aankondiging van een POI die ver weg ligt
- *   ("Op 900 meter:"), in de taal van het toestel (0.19.3, T3b).
+ *   ("Op 900 meter:"), 0.19.3, T3b.
+ *   Beide (0.23.0, E1): bij taal 'Automatisch' in de taal van het toestel,
+ *   bij een gekozen bedieningstaal in die taal (spreekTaal()).
  * - toelichtingTaal(): in welke taal de toelichting van een POI is, zodat
  *   die met een passende stem wordt voorgelezen.
  * - labelTaal(): in welke taal de naam van een POI is, voor het uitspreken
  *   van de naam bij POI's zonder toelichting.
  */
 
-export const APP_TAAL = 'nl-NL'
+import { stemTaal, spreekTaal } from './vertaal.js'
+
+/** Stem van de bedieningstaal (0.23.0, E1); vóór 0.23.0 altijd 'nl-NL'. */
+export function appTaal() {
+  return stemTaal()
+}
+
+/** Taal van klokzin en afstandszin: gekozen bedieningstaal, of de telefoon. */
+function zinTaal() {
+  return spreekTaal() || telefoonTaal()
+}
 
 const TAALCODE_RE = /^[a-z]{2,3}(-[a-z0-9]+)*$/i
 
 /** Volledige taalcode van het toestel, bijv. 'nl-NL' of 'it-IT'. */
 export function telefoonTaal() {
   const t = typeof navigator !== 'undefined' && navigator.language
-  return t && TAALCODE_RE.test(t) ? t : APP_TAAL
+  return t && TAALCODE_RE.test(t) ? t : appTaal()
 }
 
 /** Alleen de taal, zonder regio: 'fr-BE' → 'fr'. */
@@ -99,14 +111,14 @@ const KLOK_ZINNEN = {
 }
 
 /**
- * Klokrichting als korte zin in de taal van het toestel.
+ * Klokrichting als korte zin (taal: zie zinTaal).
  *
  * @param {number|null} uur - 1–12, of null/onbekend
- * @param {string} [taal] - taalcode; standaard telefoonTaal()
+ * @param {string} [taal] - taalcode; standaard zinTaal()
  * @returns {{tekst:string, lang:string}|null} null bij onbekende richting of
  *   een taal zonder vertaling
  */
-export function klokZin(uur, taal = telefoonTaal()) {
+export function klokZin(uur, taal = zinTaal()) {
   if (!Number.isInteger(uur) || uur < 1 || uur > 12) return null
   const maak = KLOK_ZINNEN[basisTaal(taal)]
   return maak ? { tekst: maak(uur), lang: taal } : null
@@ -157,11 +169,11 @@ const AFSTAND_ZINNEN = {
  * voorleestekst.js.
  *
  * @param {number} meters
- * @param {string} [taal] - taalcode; standaard telefoonTaal()
+ * @param {string} [taal] - taalcode; standaard zinTaal()
  * @returns {{tekst:string, lang:string}|null} null bij een ongeldige afstand
  *   of een taal zonder vertaling
  */
-export function afstandZin(meters, taal = telefoonTaal()) {
+export function afstandZin(meters, taal = zinTaal()) {
   const a = afstandAfgerond(meters)
   const maak = AFSTAND_ZINNEN[basisTaal(taal)]
   return a && maak ? { tekst: maak(a), lang: taal } : null

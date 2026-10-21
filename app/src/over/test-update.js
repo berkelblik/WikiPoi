@@ -95,13 +95,15 @@ await test('controleer: juiste URL, uitkomst en fouten', async () => {
   const leeg = await controleer('0.22.0', { fetchFn: async () => ({ ok: true, json: async () => [] }) })
   assert.deepStrictEqual(leeg, { soort: 'geen' })
   const limiet = await controleer('0.22.0', { fetchFn: async () => ({ ok: false, status: 403 }) })
-  assert.deepStrictEqual(limiet, { soort: 'fout', tekst: 'GitHub vraagt even te wachten' })
+  assert.deepStrictEqual(limiet, { soort: 'fout', tekst: 'GitHub vraagt even te wachten', code: 'wachten', status: 403 })
   const offline = await controleer('0.22.0', {
     fetchFn: async () => {
       throw new TypeError('Failed to fetch')
     },
   })
-  assert.deepStrictEqual(offline, { soort: 'fout', tekst: 'geen verbinding met GitHub' })
+  assert.deepStrictEqual(offline, { soort: 'fout', tekst: 'geen verbinding met GitHub', code: 'verbinding' })
+  const kapot = await controleer('0.22.0', { fetchFn: async () => ({ ok: false, status: 500 }) })
+  assert.deepStrictEqual(kapot, { soort: 'fout', tekst: 'GitHub gaf fout 500', code: 'status', status: 500 })
 })
 
 await test('laatste controle bewaren en lezen', () => {

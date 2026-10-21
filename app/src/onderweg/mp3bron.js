@@ -20,6 +20,7 @@
  *
  * Alleen pure functies: netwerkloos te testen (test-mp3bron.js).
  */
+import { getal } from '../vertaal.js'
 
 /** Is de tekst een internetlink (http of https)? */
 export function isLink(tekst) {
@@ -175,5 +176,5 @@ export function lijktAudio(contentType, base64) {
 export function grootteTekst(bytes) {
   const n = Number(bytes) || 0
   if (n < 1000 * 1000) return `${Math.max(0, Math.round(n / 1000))} kB`
-  return `${(n / (1000 * 1000)).toFixed(1).replace('.', ',')} MB`
+  return `${getal(n / (1000 * 1000), 1)} MB`
 }

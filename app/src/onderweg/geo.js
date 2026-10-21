@@ -6,6 +6,7 @@
  * rijrichting. Punten zijn objecten { lat, lng } in graden.
  * Zelfde formules als EuroPoi (src/geoUtils.js: hav, bear, clockDir).
  */
+import { getal } from '../vertaal.js'
 
 const AARDSTRAAL_M = 6371e3
 
@@ -55,5 +56,5 @@ export function klokRichting(rijrichting, doelPeiling) {
 export function formatAfstand(meters) {
   if (!Number.isFinite(meters)) return '?'
   if (meters < 1000) return `${Math.round(meters)} m`
-  return `${(meters / 1000).toFixed(1).replace('.', ',')} km`
+  return `${getal(meters / 1000, 1)} km`
 }

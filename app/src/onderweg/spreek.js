@@ -9,7 +9,7 @@
  *
  * Elke tekst heeft een eigen taal (lang). Lukt uitspreken in die taal niet
  * (bijv. geen stem voor die taal op het toestel), dan volgt één nieuwe
- * poging in APP_TAAL.
+ * poging in appTaal() (stem van de bedieningstaal, 0.23.0).
  *
  * Naast tekst kan de wachtrij een fietsbel bevatten: een kort geluid dat de
  * gebruiker voorbereidt op het bericht dat volgt, in plaats van een
@@ -33,7 +33,7 @@
  * (logboek.js).
  */
 import { TextToSpeech } from '@capacitor-community/text-to-speech'
-import { APP_TAAL } from '../taal.js'
+import { appTaal } from '../taal.js'
 import belUrl from './fietsbel.mp3'
 
 const TEMPO = 1.0
@@ -88,17 +88,19 @@ async function spreekUit(tekst, lang, gen) {
   } catch (err) {
     if (gen !== generatie) return
     meld('spreek-fout', `${lang}: ${foutBericht(err)}`)
-    if (lang === APP_TAAL) {
+    const terug = appTaal()
+    if (lang === terug) {
       console.warn('WikiPoi voorlezen mislukt:', err)
       return
     }
-    console.warn('WikiPoi voorlezen in ' + lang + ' mislukt, terugval ' + APP_TAAL + ':', err)
+    console.warn('WikiPoi voorlezen in ' + lang + ' mislukt, terugval ' + terug + ':', err)
   }
+  const terug = appTaal()
   try {
-    await TextToSpeech.speak({ text: tekst, lang: APP_TAAL, rate: TEMPO })
-    meld('spreek-einde', APP_TAAL)
+    await TextToSpeech.speak({ text: tekst, lang: terug, rate: TEMPO })
+    meld('spreek-einde', terug)
   } catch (err) {
-    meld('spreek-fout', `${APP_TAAL}: ${foutBericht(err)}`)
+    meld('spreek-fout', `${terug}: ${foutBericht(err)}`)
     console.warn('WikiPoi voorlezen mislukt:', err)
   }
 }
@@ -277,12 +279,12 @@ async function verwerk() {
 
 /**
  * Tekst achteraan de wachtrij zetten.
- * lang (standaard APP_TAAL), onStart en onEinde zijn optioneel.
+ * lang (standaard appTaal()), onStart en onEinde zijn optioneel.
  */
-export function spreek(tekst, { lang = APP_TAAL, onStart, onEinde } = {}) {
+export function spreek(tekst, { lang = appTaal(), onStart, onEinde } = {}) {
   const schoon = String(tekst || '').trim()
   if (!schoon) return
-  wachtrij.push({ soort: 'tekst', tekst: schoon, lang: lang || APP_TAAL, onStart, onEinde })
+  wachtrij.push({ soort: 'tekst', tekst: schoon, lang: lang || appTaal(), onStart, onEinde })
   verwerk()
 }
 
@@ -315,7 +317,7 @@ export function dubbeleBel({ tussenpozeMs = DUBBELE_BEL_TUSSENPOZE_MS, onStart, 
  */
 export function speelAudio({ bronnen = [], terugval = [], overgeslagen = '', onStart, onEinde } = {}) {
   const tekst = terugval
-    .map((d) => ({ tekst: String(d.tekst || '').trim(), lang: d.lang || APP_TAAL }))
+    .map((d) => ({ tekst: String(d.tekst || '').trim(), lang: d.lang || appTaal() }))
     .filter((d) => d.tekst)
   if (bronnen.length === 0 && tekst.length === 0) return
   wachtrij.push({ soort: 'audio', bronnen, terugval: tekst, overgeslagen, onStart, onEinde })

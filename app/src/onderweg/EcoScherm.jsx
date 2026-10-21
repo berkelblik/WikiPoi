@@ -41,6 +41,7 @@ import { KeepAwake } from '@capacitor-community/keep-awake'
 import { afstand, peiling, relatieveHoek, klokRichting } from './geo.js'
 import { pluscode } from './pluscode.js'
 import { belNu } from './spreek.js'
+import { t, getal } from '../vertaal.js'
 import './EcoScherm.css'
 
 // Tijd waarbinnen tikken als één reeks telt (zelfde als EuroPoi).
@@ -52,15 +53,15 @@ const TIK_VENSTER_MS = 400
 // licentie staan bij stap 5; hier blijft het een korte vermelding.
 function fotoBron(url) {
   return /\/wikipedia\/commons\/|\/\/commons\.wikimedia\.org\//.test(url)
-    ? 'Foto: Wikimedia Commons'
-    : 'Foto: Wikipedia'
+    ? t('stap6.foto', { bron: 'Wikimedia Commons' })
+    : t('stap6.foto', { bron: 'Wikipedia' })
 }
 
 // Afstand als getal en eenheid, zoals in EuroPoi ("12" "M", "1,4" "KM").
 function afstandDelen(meters) {
   if (!Number.isFinite(meters)) return { getal: '?', eenheid: '' }
   if (meters < 1000) return { getal: String(Math.round(meters)), eenheid: 'M' }
-  return { getal: (meters / 1000).toFixed(1).replace('.', ','), eenheid: 'KM' }
+  return { getal: getal(meters / 1000, 1), eenheid: 'KM' }
 }
 
 const STREEPJES = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330]
@@ -179,7 +180,7 @@ function EcoScherm({
         <div className="eco-richting">
           <div className="eco-uur">
             <span className="eco-uur-getal">{klok === null ? '?' : klok}</span>
-            <span className="eco-uur-label">uur</span>
+            <span className="eco-uur-label">{t('eco.uur')}</span>
           </div>
         </div>
 
@@ -202,11 +203,11 @@ function EcoScherm({
 
         {onHerhaal && (
           <button type="button" className="eco-herhaal" onClick={herhaalKlik(poi)}>
-            ↻ Opnieuw beluisteren
+            ↻ {t('eco.opnieuw')}
           </button>
         )}
 
-        <p className="eco-hint">1× tikken = bel · 3× snel tikken = sluiten</p>
+        <p className="eco-hint">{t('eco.hint')}</p>
       </div>
     )
   } else if ((laatstePoi && onHerhaal) || (later.length > 0 && onLater)) {

@@ -5,6 +5,7 @@
  * kopregel, venster zoals "Over WikiPoi" (z-index 2200). Standaardwaarden
  * (B1–B5), "Standaardwaarden terugzetten" (B6) en de updatecontrole (D3).
  * Waarden en opslag: instellingen.js; updatecontrole: update.js.
+ * 0.23.0: taal van de bediening (onderwerp 6, B1) bovenaan.
  */
 import { createPortal } from 'react-dom'
 import {
@@ -16,9 +17,8 @@ import {
   VERVOER_KEUZES,
   kmTekst,
 } from '../instellingen.js'
+import { t, BEDIENINGS_TALEN, EIGEN_NAAM } from '../vertaal.js'
 import './Over.css'
-
-const VERVOER_LABEL = { wandelaar: 'Wandelaar', fietser: 'Fietser', motorrijder: 'Motorrijder' }
 
 // "20-10 14:05"
 function momentTekst(ms) {
@@ -29,11 +29,14 @@ function momentTekst(ms) {
 
 function uitkomstTekst(u, versie) {
   if (!u) return ''
-  if (u.soort === 'nieuw') return `Versie ${u.versie} is beschikbaar${u.prerelease ? ' (bèta)' : ''}.`
-  if (u.soort === 'actueel') return `Je hebt de nieuwste versie (${versie}).`
-  if (u.soort === 'geen') return 'Nog geen release gepubliceerd.'
-  return `Controleren lukte niet: ${u.tekst}.`
+  if (u.soort === 'nieuw') return t('inst.update.nieuw', { versie: u.versie, beta: u.prerelease ? t('update.beta') : '' })
+  if (u.soort === 'actueel') return t('inst.update.actueel', { versie })
+  if (u.soort === 'geen') return t('inst.update.geen')
+  return t('inst.update.fout', { reden: u.code ? t(`inst.update.reden.${u.code}`, { status: u.status }) : u.tekst })
 }
+
+// Keuzes voor de taal: Automatisch en de talen waarin de bediening er is.
+const TAAL_KNOPPEN = ['auto', ...BEDIENINGS_TALEN]
 
 function Keuzeknoppen({ waarden, waarde, tekst, onKies }) {
   return (
@@ -65,14 +68,19 @@ function Instellingen({ instellingen, versie, update, onWijzig, onStandaard, onC
     >
       <div className="over-venster over-venster-lang" onClick={(e) => e.stopPropagation()}>
         <h2 id="inst-titel" className="over-titel">
-          Instellingen
+          {t('kop.instellingen')}
         </h2>
 
-        <h3 className="over-kop">Grens eigen POI's</h3>
-        <p className="over-klein">
-          Eigen POI's doen mee tot deze afstand van de route (bij "altijd melden"). Buiten de corridor worden
-          ze alleen bij de POI zelf gemeld.
-        </p>
+        <h3 className="over-kop">{t('inst.taal')}</h3>
+        <Keuzeknoppen
+          waarden={TAAL_KNOPPEN}
+          waarde={TAAL_KNOPPEN.includes(i.taal) ? i.taal : 'auto'}
+          tekst={(w) => (w === 'auto' ? t('inst.taalAuto') : EIGEN_NAAM[w])}
+          onKies={(w) => onWijzig({ taal: w })}
+        />
+
+        <h3 className="over-kop">{t('inst.grens')}</h3>
+        <p className="over-klein">{t('inst.grensUitleg')}</p>
         <Keuzeknoppen
           waarden={EIGEN_MAX_KEUZES}
           waarde={i.eigenMaxM}
@@ -80,9 +88,9 @@ function Instellingen({ instellingen, versie, update, onWijzig, onStandaard, onC
           onKies={(w) => onWijzig({ eigenMaxM: w })}
         />
 
-        <h3 className="over-kop">Corridor bij de start</h3>
+        <h3 className="over-kop">{t('inst.corridor')}</h3>
         <label className="inst-schuif">
-          <span>{i.corridorM} m aan weerszijden van de route</span>
+          <span>{t('inst.corridorWaarde', { meters: i.corridorM })}</span>
           <input
             type="range"
             min={CORRIDOR_MIN_METERS}
@@ -99,19 +107,19 @@ function Instellingen({ instellingen, versie, update, onWijzig, onStandaard, onC
             checked={i.ookZonderTekst}
             onChange={() => onWijzig({ ookZonderTekst: !i.ookZonderTekst })}
           />{' '}
-          Ook POI's zonder tekst standaard meenemen
+          {t('inst.zonderTekst')}
         </label>
 
-        <h3 className="over-kop">Vervoerwijze bij de start</h3>
+        <h3 className="over-kop">{t('inst.vervoer')}</h3>
         <Keuzeknoppen
           waarden={VERVOER_KEUZES}
           waarde={i.vervoer}
-          tekst={(w) => VERVOER_LABEL[w]}
+          tekst={(w) => t(`vervoer.${w}`)}
           onKies={(w) => onWijzig({ vervoer: w })}
         />
 
-        <h3 className="over-kop">Afteltijd keuzevenster</h3>
-        <p className="over-klein">Zo lang blijft het venster staan als er meer POI's tegelijk zijn.</p>
+        <h3 className="over-kop">{t('inst.afteltijd')}</h3>
+        <p className="over-klein">{t('inst.afteltijdUitleg')}</p>
         <Keuzeknoppen
           waarden={KEUZE_S_KEUZES}
           waarde={i.keuzeS}
@@ -119,14 +127,14 @@ function Instellingen({ instellingen, versie, update, onWijzig, onStandaard, onC
           onKies={(w) => onWijzig({ keuzeS: w })}
         />
 
-        <h3 className="over-kop">Updates</h3>
+        <h3 className="over-kop">{t('inst.updates')}</h3>
         <label className="inst-vinkje">
           <input
             type="checkbox"
             checked={i.updateAuto}
             onChange={() => onWijzig({ updateAuto: !i.updateAuto })}
           />{' '}
-          Bij het opstarten op updates controleren (hoogstens één keer per dag)
+          {t('inst.updateAuto')}
         </label>
         <div className="inst-knoppen">
           <button
@@ -135,7 +143,7 @@ function Instellingen({ instellingen, versie, update, onWijzig, onStandaard, onC
             disabled={update.bezig}
             onClick={onControleer}
           >
-            {update.bezig ? 'Bezig met controleren…' : 'Controleren op update'}
+            {update.bezig ? t('inst.update.bezig') : t('inst.update.knop')}
           </button>
         </div>
         {update.uitkomst && (
@@ -143,22 +151,22 @@ function Instellingen({ instellingen, versie, update, onWijzig, onStandaard, onC
             {uitkomstTekst(update.uitkomst, versie)}{' '}
             {update.uitkomst.soort === 'nieuw' && (
               <a href={update.uitkomst.url} target="_blank" rel="noopener noreferrer">
-                Bekijken
+                {t('alg.bekijken')}
               </a>
             )}
           </p>
         )}
         <p className="over-klein">
-          Deze versie: {versie}
-          {update.laatsteMs ? ` · laatst gecontroleerd ${momentTekst(update.laatsteMs)}` : ''}
+          {t('inst.dezeVersie', { versie })}
+          {update.laatsteMs ? t('inst.laatst', { moment: momentTekst(update.laatsteMs) }) : ''}
         </p>
 
         <div className="over-knoppen">
           <button type="button" className="btn btn-indigo btn-small" onClick={onStandaard}>
-            Standaardwaarden terugzetten
+            {t('inst.standaard')}
           </button>
           <button type="button" className="btn btn-green btn-small" onClick={onSluiten}>
-            Sluiten
+            {t('alg.sluiten')}
           </button>
         </div>
       </div>

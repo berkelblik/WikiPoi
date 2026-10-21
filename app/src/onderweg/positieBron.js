@@ -30,6 +30,7 @@
 import { Capacitor, registerPlugin } from '@capacitor/core'
 import { Geolocation } from '@capacitor/geolocation'
 import { LocalNotifications } from '@capacitor/local-notifications'
+import { t } from '../vertaal.js'
 
 const BackgroundGeolocation = registerPlugin('BackgroundGeolocation')
 
@@ -37,14 +38,16 @@ export const OPVRAAG_MS = 2000
 const OPVRAAG_TIMEOUT_MS = 4000
 
 export const MELDING_TITEL = 'WikiPoi'
-export const MELDING_TEKST = 'WikiPoi volgt uw route'
+
+// Fouten gaan als { sleutel, params } naar useOnderweg (0.23.0): op het
+// scherm in de taal van de bediening, in het logboek in het Nederlands.
 
 export function achtergrondMogelijk() {
   return Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android'
 }
 
-function foutTekst(err) {
-  return 'GPS-fout: ' + (err && err.message ? err.message : String(err))
+function gpsFout(err) {
+  return { sleutel: 'gps.fout', params: { bericht: err && err.message ? err.message : String(err) } }
 }
 
 async function startVoorgrond({ onPositie, onFout, onInfo }) {
@@ -52,14 +55,16 @@ async function startVoorgrond({ onPositie, onFout, onInfo }) {
   if (Capacitor.isNativePlatform()) {
     const perm = await Geolocation.requestPermissions()
     if (perm.location !== 'granted') {
-      throw new Error('Geen toestemming voor nauwkeurige locatie. Sta dit toe in de Android-instellingen.')
+      const fout = new Error('geen toestemming voor nauwkeurige locatie')
+      fout.sleutel = 'gps.geenToestemmingNauwkeurig'
+      throw fout
     }
   }
   const id = await Geolocation.watchPosition(
     { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 },
     (pos, err) => {
       if (err) {
-        onFout(foutTekst(err))
+        onFout(gpsFout(err))
         return
       }
       onPositie(pos)
@@ -115,7 +120,7 @@ async function startAchtergrond({ onPositie, onFout, onInfo }) {
   const id = await BackgroundGeolocation.addWatcher(
     {
       backgroundTitle: MELDING_TITEL,
-      backgroundMessage: MELDING_TEKST,
+      backgroundMessage: t('gps.melding'),
       requestPermissions: true,
       stale: false,
       distanceFilter: 0,
@@ -123,9 +128,9 @@ async function startAchtergrond({ onPositie, onFout, onInfo }) {
     (locatie, err) => {
       if (err) {
         if (err.code === 'NOT_AUTHORIZED') {
-          onFout('Geen toestemming voor locatie. Sta dit toe in de Android-instellingen.')
+          onFout({ sleutel: 'gps.geenToestemming' })
         } else {
-          onFout(foutTekst(err))
+          onFout(gpsFout(err))
         }
         return
       }

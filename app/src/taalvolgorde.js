@@ -19,6 +19,8 @@
  * Lukt bewaren of lezen niet, dan geldt de standaardkeuze.
  */
 
+import { t, heeft } from './vertaal.js'
+
 export const MAX_TALEN = 6
 
 // Talen in de lijst bij "Eigen volgorde".
@@ -27,41 +29,8 @@ export const TAAL_KEUZES = ['nl', 'en', 'de', 'fr', 'es', 'it', 'pt', 'da', 'sv'
 // Terugvaltalen na telefoontaal en landtaal (zoals vóór 0.17.0).
 export const TERUGVAL_TALEN = ['en', 'fr', 'de']
 
-// Namen voor de bediening (Nederlands). Onbekende codes: de code zelf.
-const TAAL_NAMEN = {
-  nl: 'Nederlands',
-  en: 'Engels',
-  de: 'Duits',
-  fr: 'Frans',
-  es: 'Spaans',
-  it: 'Italiaans',
-  pt: 'Portugees',
-  da: 'Deens',
-  sv: 'Zweeds',
-  pl: 'Pools',
-  no: 'Noors',
-  nb: 'Noors',
-  fi: 'Fins',
-  cs: 'Tsjechisch',
-  sk: 'Slowaaks',
-  sl: 'Sloveens',
-  hr: 'Kroatisch',
-  hu: 'Hongaars',
-  ro: 'Roemeens',
-  bg: 'Bulgaars',
-  el: 'Grieks',
-  et: 'Estisch',
-  lv: 'Lets',
-  lt: 'Litouws',
-  lb: 'Luxemburgs',
-  ga: 'Iers',
-  ca: 'Catalaans',
-  eu: 'Baskisch',
-  fy: 'Fries',
-  ru: 'Russisch',
-  uk: 'Oekraïens',
-  tr: 'Turks',
-}
+// Namen van de talen voor de bediening: taal.<code> in talen/*.js (0.23.0).
+// Onbekende codes: de code zelf.
 
 const TAALCODE_RE = /^[a-z]{2,3}$/
 const SLEUTEL = 'wikipoi.taalkeuze'
@@ -73,10 +42,10 @@ export function basis(code) {
   return String(code || '').trim().toLowerCase().replace(/_/g, '-').split('-')[0]
 }
 
-/** Naam van een taal voor de bediening: 'de' → 'Duits'. */
+/** Naam van een taal in de taal van de bediening: 'de' → 'Duits' (nl). */
 export function taalNaam(code) {
   const b = basis(code)
-  return TAAL_NAMEN[b] || b
+  return heeft(`taal.${b}`) ? t(`taal.${b}`) : b
 }
 
 /** Unieke, geldige basistalen, hoogstens MAX_TALEN, in volgorde. */

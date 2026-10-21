@@ -74,6 +74,7 @@ import { SIM_SNELHEID_KMU, SIM_VERSNELLINGEN } from './simulatie.js'
 import { formatAfstand, afstand } from './geo.js'
 import CategoryDot from '../components/CategoryDot.jsx'
 import RouteMap from '../components/RouteMap.jsx'
+import { t, getal } from '../vertaal.js'
 
 // Productie: true = eco-scherm meteen bij "Route starten". Testfase: false,
 // dan blijft de lijst zichtbaar en open je het eco-scherm met de knop.
@@ -114,7 +115,7 @@ function ritDuur(ms) {
   if (ms < 59500) return `${Math.round(ms / 1000)} s`
   const min = Math.round(ms / 60000)
   if (min < 60) return `${min} min`
-  return `${Math.floor(min / 60)} u ${min % 60} min`
+  return t('onderweg.duurUren', { uur: Math.floor(min / 60), min: min % 60 })
 }
 
 // "16-10 14:05" (lokale tijd).
@@ -140,17 +141,17 @@ function lengteLijnen(lijnen) {
 function trackSamenvatting(data) {
   const p = pauzesVan(data)
   const delen = [formatAfstand(lengteVan(data, afstand))]
-  if (p.onderwegMs !== null) delen.push(`${ritDuur(p.onderwegMs)} onderweg`)
-  else delen.push('niet afgesloten')
-  if (p.aantal === 0) delen.push('geen pauzes')
-  else delen.push(`${p.aantal} ${p.aantal === 1 ? 'pauze' : 'pauzes'} (${ritDuur(p.pauzeMs)})`)
-  return `Track laatste rit (${ritMoment(data.start)}): ${delen.join(' · ')}`
+  if (p.onderwegMs !== null) delen.push(t('onderweg.track.onderweg', { duur: ritDuur(p.onderwegMs) }))
+  else delen.push(t('onderweg.track.nietAfgesloten'))
+  if (p.aantal === 0) delen.push(t('onderweg.track.geenPauzes'))
+  else delen.push(t('onderweg.track.pauzes', { aantal: p.aantal, duur: ritDuur(p.pauzeMs) }))
+  return t('onderweg.track.samenvatting', { moment: ritMoment(data.start), delen: delen.join(' · ') })
 }
 
 // "3,2" (km, één decimaal, komma).
-const km = (meters) => (meters / 1000).toFixed(1).replace('.', ',')
+const km = (meters) => getal(meters / 1000, 1)
 
-// Eén regel samenvatting van een logboek.
+// Eén regel samenvatting van een logboek (zoals het logboek: Nederlands).
 function logboekSamenvatting(data) {
   const a = analyseer(data)
   if (!a) return ''
@@ -264,7 +265,7 @@ function Onderweg({ pois, summariesById, routePunten, haalSamenvattingen, onRit,
   const gooiTrackWeg = () => {
     trackOpslag.wis()
     setWeggooienVragen(false)
-    setTrackMelding('Track weggegooid.')
+    setTrackMelding(t('onderweg.track.weggegooid'))
     setWeggegooid(true)
   }
 
@@ -280,8 +281,8 @@ function Onderweg({ pois, summariesById, routePunten, haalSamenvattingen, onRit,
           directory: Directory.Cache,
           encoding: Encoding.UTF8,
         })
-        await Share.share({ title: naam, files: [geschreven.uri], dialogTitle: 'Track opslaan' })
-        setTrackMelding(`"${naam}" aangeboden; kies bijv. "Opslaan in Bestanden" of Drive.`)
+        await Share.share({ title: naam, files: [geschreven.uri], dialogTitle: t('onderweg.track.opslaanTitel') })
+        setTrackMelding(t('onderweg.track.aangeboden', { naam }))
       } else {
         const url = URL.createObjectURL(new Blob([gpx], { type: 'application/gpx+xml' }))
         const link = document.createElement('a')
@@ -291,15 +292,15 @@ function Onderweg({ pois, summariesById, routePunten, haalSamenvattingen, onRit,
         link.click()
         link.remove()
         setTimeout(() => URL.revokeObjectURL(url), 1000)
-        setTrackMelding(`"${naam}" opgeslagen.`)
+        setTrackMelding(t('onderweg.track.opgeslagen', { naam }))
       }
     } catch (err) {
       const bericht = err && err.message ? err.message : String(err)
       if (/cancel/i.test(bericht)) {
-        setTrackMelding('Opslaan geannuleerd.')
+        setTrackMelding(t('onderweg.track.geannuleerd'))
         return
       }
-      setTrackMelding('Track opslaan mislukt: ' + bericht)
+      setTrackMelding(t('onderweg.track.mislukt', { bericht }))
     }
   }
 
@@ -311,15 +312,15 @@ function Onderweg({ pois, summariesById, routePunten, haalSamenvattingen, onRit,
     const tekst = alsTekst(vorigLogboek)
     setLogboekMelding('')
     try {
-      await Share.share({ title: 'WikiPoi-logboek', text: tekst, dialogTitle: 'Logboek delen' })
+      await Share.share({ title: 'WikiPoi-logboek', text: tekst, dialogTitle: t('onderweg.logboek.delen') })
     } catch (err) {
       const bericht = err && err.message ? err.message : String(err)
       if (/cancel/i.test(bericht)) return
       try {
         await navigator.clipboard.writeText(tekst)
-        setLogboekMelding('Delen niet beschikbaar; het logboek staat op het klembord.')
+        setLogboekMelding(t('onderweg.logboek.klembord'))
       } catch {
-        setLogboekMelding('Delen niet beschikbaar. Kies "Logboek tonen" en kopieer de tekst.')
+        setLogboekMelding(t('onderweg.logboek.nietBeschikbaar'))
         setLogboekTonen(true)
       }
     }
@@ -369,7 +370,7 @@ function Onderweg({ pois, summariesById, routePunten, haalSamenvattingen, onRit,
   }
 
   const naarVolgendePoi = () => {
-    setSimMelding(simVolgendePoi() ? '' : 'Geen volgende POI meer verderop langs de route.')
+    setSimMelding(simVolgendePoi() ? '' : t('onderweg.sim.geenVolgende'))
   }
 
   // Eigen POI's (CSV) hebben geen samenvatting nodig.
@@ -379,15 +380,9 @@ function Onderweg({ pois, summariesById, routePunten, haalSamenvattingen, onRit,
 
   return (
     <>
-      <p className="muted">
-        Volgt je GPS-positie langs de route en leest elke POI één keer voor zodra je in de buurt
-        bent.
-      </p>
+      <p className="muted">{t('onderweg.uitleg')}</p>
       {zonderSamenvatting > 0 && !actief && !ophalen && (
-        <p className="muted">
-          Voor {zonderSamenvatting === 1 ? '1 POI' : `${zonderSamenvatting} POI's`} wordt bij het starten eerst
-          de samenvatting opgehaald (internet nodig).
-        </p>
+        <p className="muted">{t('onderweg.eerstOphalen', { aantal: zonderSamenvatting })}</p>
       )}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' }}>
         {Object.entries(VERVOER).map(([key, v]) => (
@@ -398,7 +393,7 @@ function Onderweg({ pois, summariesById, routePunten, haalSamenvattingen, onRit,
             aria-pressed={key === vervoer}
             onClick={() => setVervoer(key)}
           >
-            {v.label} — meldt een POI {v.straal} m vooraf
+            {t('onderweg.vervoerKnop', { vervoer: t(`vervoer.${key}`), straal: v.straal })}
           </button>
         ))}
       </div>
@@ -412,7 +407,7 @@ function Onderweg({ pois, summariesById, routePunten, haalSamenvattingen, onRit,
             checked={trackOpnemen}
             onChange={(e) => kiesTrackOpnemen(e.target.checked)}
           />
-          Track opnemen (je afgelegde weg; pauzeert vanzelf als je stilstaat)
+          {t('onderweg.trackOpnemen')}
         </label>
       )}
       <button
@@ -422,10 +417,10 @@ function Onderweg({ pois, summariesById, routePunten, haalSamenvattingen, onRit,
         disabled={!!ophalen}
       >
         {actief
-          ? 'Route stoppen'
+          ? t('onderweg.stoppen')
           : ophalen
-            ? `Samenvattingen ophalen (${ophalen.aantal})…`
-            : `${simulatieGekozen ? 'Simulatie' : 'Route'} starten (${pois.length} POI's)`}
+            ? t('onderweg.ophalen', { aantal: ophalen.aantal })
+            : t(simulatieGekozen ? 'onderweg.simulatieStarten' : 'onderweg.routeStarten', { aantal: pois.length })}
       </button>
       {ophalen && (
         <button
@@ -434,7 +429,7 @@ function Onderweg({ pois, summariesById, routePunten, haalSamenvattingen, onRit,
           style={{ marginTop: '8px' }}
           onClick={nuStartenZonder}
         >
-          Nu starten zonder
+          {t('onderweg.nuZonder')}
         </button>
       )}
       {ophaalTekst && (
@@ -444,8 +439,7 @@ function Onderweg({ pois, summariesById, routePunten, haalSamenvattingen, onRit,
       )}
       {actief && achtergrondGekozen && (
         <p className="muted" style={{ marginTop: '8px' }}>
-          Achtergrond-GPS actief: de melding "WikiPoi volgt uw route" blijft staan tot u de
-          route stopt.
+          {t('onderweg.achtergrondActief', { melding: t('gps.melding') })}
         </p>
       )}
       {actief && (
@@ -455,16 +449,20 @@ function Onderweg({ pois, summariesById, routePunten, haalSamenvattingen, onRit,
           style={{ marginTop: '8px' }}
           onClick={() => setEcoOpen(true)}
         >
-          Eco-scherm
+          {t('onderweg.ecoScherm')}
         </button>
       )}
       {actief && simStatus && (
         <>
           <p className="muted" style={{ marginTop: '8px' }}>
-            Simulatie: km {km(simStatus.meters)} van {km(simStatus.lengte)} ·{' '}
-            {SIM_SNELHEID_KMU[vervoer]} km/u × {simStatus.versnelling}
-            {simStatus.gepauzeerd ? ' · gepauzeerd' : ''}
-            {simStatus.klaar ? ' · einde route' : ''}
+            {t('onderweg.sim.status', {
+              km: km(simStatus.meters),
+              lengte: km(simStatus.lengte),
+              snelheid: SIM_SNELHEID_KMU[vervoer],
+              versnelling: simStatus.versnelling,
+            })}
+            {simStatus.gepauzeerd ? t('onderweg.sim.gepauzeerd') : ''}
+            {simStatus.klaar ? t('onderweg.sim.einde') : ''}
           </p>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '8px' }}>
             <button
@@ -473,7 +471,7 @@ function Onderweg({ pois, summariesById, routePunten, haalSamenvattingen, onRit,
               disabled={simStatus.klaar}
               onClick={simPauze}
             >
-              {simStatus.gepauzeerd ? 'Verder' : 'Pauze'}
+              {simStatus.gepauzeerd ? t('onderweg.sim.verder') : t('onderweg.sim.pauze')}
             </button>
             <button
               type="button"
@@ -481,7 +479,7 @@ function Onderweg({ pois, summariesById, routePunten, haalSamenvattingen, onRit,
               disabled={simStatus.klaar}
               onClick={naarVolgendePoi}
             >
-              Naar volgende POI
+              {t('onderweg.sim.volgende')}
             </button>
             {SIM_VERSNELLINGEN.map((v) => (
               <button
@@ -500,22 +498,23 @@ function Onderweg({ pois, summariesById, routePunten, haalSamenvattingen, onRit,
           {simMelding && <p className="muted">{simMelding}</p>}
         </>
       )}
-      {fout && <p className="error">{fout}</p>}
-      {actief && !positie && !fout && <p className="muted">Wachten op GPS-positie…</p>}
+      {fout && <p className="error">{t(fout.sleutel, fout.params)}</p>}
+      {actief && !positie && !fout && <p className="muted">{t('onderweg.wachtGps')}</p>}
       {actief && positie && (
         <p className="muted">
-          GPS: nauwkeurigheid ±{' '}
-          {Number.isFinite(positie.nauwkeurigheid) ? Math.round(positie.nauwkeurigheid) : '?'} m ·
-          rijrichting:{' '}
-          {rijrichting === null ? 'nog onbekend (eerst ± 10 m verplaatsen)' : `${Math.round(rijrichting)}°`}{' '}
-          · voorgelezen: {aantalVoorgelezen} van {pois.length}
+          {t('onderweg.gpsStatus', {
+            nauwkeurigheid: Number.isFinite(positie.nauwkeurigheid) ? Math.round(positie.nauwkeurigheid) : '?',
+            richting: rijrichting === null ? t('onderweg.richtingOnbekend') : `${Math.round(rijrichting)}°`,
+            voorgelezen: aantalVoorgelezen,
+            aantal: pois.length,
+          })}
         </p>
       )}
       {actief && trackOpnemen && (
         <p className="muted">
           {trackGepauzeerd
-            ? 'Track gepauzeerd (stilstand) — gaat verder zodra je weer beweegt.'
-            : `Track: ${formatAfstand(lengteLijnen(trackLijn))} opgenomen.`}
+            ? t('onderweg.track.gepauzeerd')
+            : t('onderweg.track.opgenomen', { afstand: formatAfstand(lengteLijnen(trackLijn)) })}
         </p>
       )}
       {actief && (
@@ -533,9 +532,9 @@ function Onderweg({ pois, summariesById, routePunten, haalSamenvattingen, onRit,
       )}
       {nuAanHetVoorlezen && (
         <p className="success">
-          Voorlezen: {nuAanHetVoorlezen}{' '}
+          {t('onderweg.voorlezen', { naam: nuAanHetVoorlezen })}{' '}
           <button type="button" className="btn btn-indigo btn-small" onClick={stopVoorlezen}>
-            Stil
+            {t('onderweg.stil')}
           </button>
         </p>
       )}
@@ -549,7 +548,7 @@ function Onderweg({ pois, summariesById, routePunten, haalSamenvattingen, onRit,
                 {poi.label}{' '}
                 <span className="muted">
                   ({formatAfstand(poi.afstandTriggerpunt)}
-                  {poi.klok !== null ? `, op ${poi.klok} uur` : ''})
+                  {poi.klok !== null ? t('onderweg.opUur', { uur: poi.klok }) : ''})
                 </span>
               </span>
             </li>
@@ -558,7 +557,7 @@ function Onderweg({ pois, summariesById, routePunten, haalSamenvattingen, onRit,
       )}
       {later.length > 0 && (
         <div style={{ marginTop: '12px' }}>
-          <p className="muted">Later beluisteren ({later.length}):</p>
+          <p className="muted">{t('onderweg.later', { aantal: later.length })}</p>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
             {later.map((poi) => (
               <button
@@ -578,22 +577,22 @@ function Onderweg({ pois, summariesById, routePunten, haalSamenvattingen, onRit,
           <p className="muted">{trackSamenvatting(vorigeTrack)}</p>
           {weggooienVragen ? (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center' }}>
-              <span className="muted">Track definitief weggooien?</span>
+              <span className="muted">{t('onderweg.track.weggooienVraag')}</span>
               <button type="button" className="btn btn-pink btn-small" onClick={gooiTrackWeg}>
-                Ja, weggooien
+                {t('onderweg.track.weggooienJa')}
               </button>
               <button
                 type="button"
                 className="btn btn-indigo btn-small"
                 onClick={() => setWeggooienVragen(false)}
               >
-                Nee, bewaren
+                {t('onderweg.track.weggooienNee')}
               </button>
             </div>
           ) : (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
               <button type="button" className="btn btn-green btn-small" onClick={deelTrack}>
-                Track opslaan (GPX)
+                {t('onderweg.track.opslaan')}
               </button>
               <button
                 type="button"
@@ -603,7 +602,7 @@ function Onderweg({ pois, summariesById, routePunten, haalSamenvattingen, onRit,
                   setWeggooienVragen(true)
                 }}
               >
-                Track weggooien
+                {t('onderweg.track.weggooien')}
               </button>
             </div>
           )}
@@ -613,11 +612,11 @@ function Onderweg({ pois, summariesById, routePunten, haalSamenvattingen, onRit,
       {testenZichtbaar && (
         <details style={{ marginTop: '16px' }}>
           <summary className="muted" style={{ cursor: 'pointer' }}>
-            Testen
+            {t('onderweg.test.titel')}
           </summary>
           <div style={{ marginTop: '8px' }}>
             {actief && (simulatieMogelijk || achtergrondKeuze) && (
-              <p className="muted">Stop eerst de rit om simulatie of achtergrond-GPS te kiezen.</p>
+              <p className="muted">{t('onderweg.test.eerstStoppen')}</p>
             )}
             {simulatieMogelijk && !actief && (
               <label
@@ -625,7 +624,7 @@ function Onderweg({ pois, summariesById, routePunten, haalSamenvattingen, onRit,
                 style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}
               >
                 <input type="checkbox" checked={simAan} onChange={(e) => setSimAan(e.target.checked)} />
-                Simulatie: rit langs de route zonder GPS
+                {t('onderweg.test.simulatie')}
               </label>
             )}
             {achtergrondKeuze && !actief && !simulatieGekozen && (
@@ -638,22 +637,27 @@ function Onderweg({ pois, summariesById, routePunten, haalSamenvattingen, onRit,
                   checked={achtergrondAan}
                   onChange={(e) => setAchtergrondAan(e.target.checked)}
                 />
-                Achtergrond-GPS: blijft werken met het scherm uit (proef, met vaste melding)
+                {t('onderweg.test.achtergrond')}
               </label>
             )}
             {TEST_ACHTERGROND && vorigeTrack && vorigeTrack.ruw && vorigeTrack.ruw.length > 0 && (
               <p className="muted">
-                Filter laatste rit: {vorigeTrack.gefilterd.length} posities; metingen{' '}
-                {vorigeTrack.ruw.length}, waarvan weggegooid {vorigeTrackTelling.nauwkeurigheid}{' '}
-                (nauwkeurigheid) en {vorigeTrackTelling.sprong} (sprong).
+                {t('onderweg.test.filter', {
+                  posities: vorigeTrack.gefilterd.length,
+                  metingen: vorigeTrack.ruw.length,
+                  nauwkeurigheid: vorigeTrackTelling.nauwkeurigheid,
+                  sprong: vorigeTrackTelling.sprong,
+                })}
               </p>
             )}
             {vorigLogboek && (
               <>
-                <p className="muted">Logboek laatste rit: {logboekSamenvatting(vorigLogboek)}</p>
+                <p className="muted">
+                  {t('onderweg.test.logboek', { samenvatting: logboekSamenvatting(vorigLogboek) })}
+                </p>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '8px' }}>
                   <button type="button" className="btn btn-indigo btn-small" onClick={deelLogboek}>
-                    Logboek delen
+                    {t('onderweg.logboek.delen')}
                   </button>
                   <button
                     type="button"
@@ -661,7 +665,7 @@ function Onderweg({ pois, summariesById, routePunten, haalSamenvattingen, onRit,
                     aria-pressed={logboekTonen}
                     onClick={() => setLogboekTonen((v) => !v)}
                   >
-                    {logboekTonen ? 'Logboek verbergen' : 'Logboek tonen'}
+                    {logboekTonen ? t('onderweg.logboek.verbergen') : t('onderweg.logboek.tonen')}
                   </button>
                 </div>
                 {logboekMelding && <p className="muted">{logboekMelding}</p>}

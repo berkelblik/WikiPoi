@@ -16,15 +16,13 @@
  */
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { t, telwoord } from '../vertaal.js'
 import './KeuzeVenster.css'
 
-const TELWOORD = ['', 'Eén', 'Twee', 'Drie', 'Vier', 'Vijf', 'Zes', 'Zeven', 'Acht', 'Negen', 'Tien']
-
 function titel(soort, aantal) {
-  if (soort === 'ook')
-    return aantal === 1 ? 'Ook hier een bezienswaardigheid' : `Ook hier ${aantal} bezienswaardigheden`
-  if (soort === 'pauze') return 'Pauze — nog te beluisteren'
-  return `${TELWOORD[aantal] || aantal} bezienswaardigheden hier`
+  if (soort === 'ook') return t('keuze.titel.ook', { aantal })
+  if (soort === 'pauze') return t('keuze.titel.pauze')
+  return t('keuze.titel.overlap', { telwoord: telwoord(aantal, true) })
 }
 
 function KeuzeVenster({ keuze, onKies, onLater }) {
@@ -40,10 +38,9 @@ function KeuzeVenster({ keuze, onKies, onLater }) {
   const seconden = Math.max(0, Math.ceil((tot - nu) / 1000))
 
   let hint = ''
-  if (soort === 'overlap') hint = `Kies wat je wilt horen. Geen keuze? Over ${seconden} s de bovenste.`
-  else if (soort === 'ook')
-    hint = 'Tik om nu te luisteren (onderbreekt het huidige verhaal). Anders volgt hij daarna.'
-  else hint = 'Tik om te luisteren.'
+  if (soort === 'overlap') hint = t('keuze.hint.overlap', { s: seconden })
+  else if (soort === 'ook') hint = t('keuze.hint.ook')
+  else hint = t('keuze.hint.pauze')
 
   const stop = (fn) => (e) => {
     e.stopPropagation()
@@ -72,7 +69,7 @@ function KeuzeVenster({ keuze, onKies, onLater }) {
         ))}
       </div>
       <button type="button" className="keuze-later" onClick={stop(onLater)}>
-        {soort === 'pauze' ? 'Sluiten' : soort === 'overlap' ? 'Allemaal later' : 'Later'}
+        {soort === 'pauze' ? t('alg.sluiten') : soort === 'overlap' ? t('keuze.allemaalLater') : t('alg.later')}
       </button>
     </div>,
     document.body

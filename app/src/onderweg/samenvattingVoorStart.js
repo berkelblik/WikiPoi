@@ -10,6 +10,7 @@
  * Puur (zonder React), zodat het in Node te testen is:
  * test-samenvattingVoorStart.js.
  */
+import { t } from '../vertaal.js'
 
 /** Zo lang (ms) wacht "Route starten" hoogstens op de samenvattingen (R2). */
 export const MAX_WACHT_MS = 30000
@@ -55,7 +56,6 @@ export async function ophalenVoorStart({
   return r
 }
 
-const poisTekst = (n) => (n === 1 ? "1 POI" : `${n} POI's`)
 
 /**
  * Melding op het scherm na het ophalen (null = geen melding nodig).
@@ -67,17 +67,15 @@ export function ophaalMelding(r) {
   if (!r) return null
   switch (r.status) {
     case 'klaar':
-      return r.zonder > 0
-        ? `${poisTekst(r.zonder)} zonder samenvatting: korte omschrijving.`
-        : null
+      return r.zonder > 0 ? t('ophalen.zonder', { aantal: r.zonder }) : null
     case 'offline':
-      return `Geen verbinding: ${poisTekst(r.aantal)} met korte omschrijving.`
+      return t('ophalen.offline', { aantal: r.aantal })
     case 'fout':
-      return `Samenvattingen ophalen lukte niet: ${poisTekst(r.aantal)} met korte omschrijving.`
+      return t('ophalen.fout', { aantal: r.aantal })
     case 'te-lang':
-      return `Samenvattingen nog niet binnen na ${Math.round(MAX_WACHT_MS / 1000)} s; ze worden onderweg nog gebruikt zodra ze er zijn.`
+      return t('ophalen.teLang', { s: Math.round(MAX_WACHT_MS / 1000) })
     case 'overgeslagen':
-      return 'Gestart zonder te wachten; samenvattingen worden onderweg nog gebruikt zodra ze er zijn.'
+      return t('ophalen.overgeslagen')
     default:
       return null
   }

@@ -39,6 +39,7 @@
  * PAUZE_HERHAAL_MS, tenzij er iets nieuws in "Later" staat
  * (magPauzeAanbieden).
  */
+import { t, telwoord } from '../vertaal.js'
 
 export const KEUZE_MS = 10000
 export const PAUZE_KEUZE_MS = 30000
@@ -166,14 +167,13 @@ export function pauzeKeuze({ gepauzeerd, later, bezig = false, keuze = null }) {
   return { soort: 'pauze', ids: [...later] }
 }
 
-const TELWOORD = ['nul', 'één', 'twee', 'drie', 'vier', 'vijf', 'zes', 'zeven', 'acht', 'negen', 'tien']
-const telwoord = (n) => TELWOORD[n] || String(n)
+// Teksten (ook gesproken) in de taal van de bediening (0.23.0, E1).
 
 /** "A", "A en B", "A, B en C". */
 export function opsomming(namen) {
   const n = (namen || []).filter(Boolean)
   if (n.length <= 1) return n[0] || ''
-  return `${n.slice(0, -1).join(', ')} en ${n[n.length - 1]}`
+  return t('keuze.opsomming', { lijst: n.slice(0, -1).join(', '), laatste: n[n.length - 1] })
 }
 
 /**
@@ -182,17 +182,19 @@ export function opsomming(namen) {
  */
 export function aankondigingTekst(namen) {
   const n = (namen || []).filter(Boolean)
-  const kop = `Hier ${telwoord(n.length)} bezienswaardigheden: `
-  if (n.length <= AANKONDIGING_MAX) return `${kop}${opsomming(n)}.`
-  const rest = n.length - AANKONDIGING_MAX
-  return `${kop}${n.slice(0, AANKONDIGING_MAX).join(', ')} en nog ${telwoord(rest)}.`
+  const namenTekst =
+    n.length <= AANKONDIGING_MAX
+      ? opsomming(n)
+      : t('keuze.enNog', {
+          lijst: n.slice(0, AANKONDIGING_MAX).join(', '),
+          telwoord: telwoord(n.length - AANKONDIGING_MAX),
+        })
+  return t('keuze.aankondiging', { telwoord: telwoord(n.length), namen: namenTekst })
 }
 
 /** "Je hebt één bezienswaardigheid om te beluisteren." */
 export function pauzeTekst(aantal) {
-  return aantal === 1
-    ? 'Je hebt één bezienswaardigheid om te beluisteren.'
-    : `Je hebt ${telwoord(aantal)} bezienswaardigheden om te beluisteren.`
+  return t('keuze.pauzeTekst', { aantal, telwoord: telwoord(aantal) })
 }
 
 /** Ids zonder dubbelen toevoegen aan een lijst (volgorde blijft). */

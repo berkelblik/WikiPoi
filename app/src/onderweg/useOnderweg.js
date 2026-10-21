@@ -93,6 +93,7 @@ import { maakSimulatie, volgendeDoel, SIM_SNELHEID_KMU, SIM_VOORLOOP_M } from '.
 import { maakPositieFilter, MAX_SNELHEID_KMU, tellersTekst } from './positieFilter.js'
 import { track, segmentenVan } from './track.js'
 import { poiStraal, triggerAfstand, triggerTekst } from './trigger.js'
+import { tIn } from '../vertaal.js'
 import {
   besluitBinnen,
   keuzeVerlopen,
@@ -115,10 +116,11 @@ const MIN_VERPLAATSING_VOOR_RICHTING_M = 10
 const AANTAL_DICHTSTBIJ = 3
 
 // Straal per vervoerwijze, gelijk aan EuroPoi (src/config.js, TRANSPORT).
+// Naam op het scherm: vervoer.<sleutel> in talen/*.js (0.23.0).
 export const VERVOER = {
-  wandelaar: { label: 'Wandelaar', straal: 30 },
-  fietser: { label: 'Fietser', straal: 100 },
-  motorrijder: { label: 'Motorrijder', straal: 160 },
+  wandelaar: { straal: 30 },
+  fietser: { straal: 100 },
+  motorrijder: { straal: 160 },
 }
 export const STANDAARD_VERVOER = 'fietser'
 
@@ -241,8 +243,11 @@ function schermZichtbaar() {
   return typeof document === 'undefined' || document.visibilityState !== 'hidden'
 }
 
-function foutTekst(err) {
-  return 'GPS-fout: ' + (err && err.message ? err.message : String(err))
+// Fout als { sleutel, params } (0.23.0): Onderweg toont hem vertaald, het
+// logboek krijgt de Nederlandse tekst.
+function gpsFout(err) {
+  if (err && err.sleutel) return { sleutel: err.sleutel }
+  return { sleutel: 'gps.fout', params: { bericht: err && err.message ? err.message : String(err) } }
 }
 
 // Korte toestelomschrijving voor het logboek: het deel tussen haakjes van
@@ -282,7 +287,7 @@ export function useOnderweg(
   const [actief, setActief] = useState(false)
   const [positie, setPositie] = useState(null) // { lat, lng, nauwkeurigheid, tijd }
   const [rijrichting, setRijrichting] = useState(null) // graden, of null = onbekend
-  const [fout, setFout] = useState('')
+  const [fout, setFout] = useState(null) // { sleutel, params } of null
   const [voorgelezen, setVoorgelezen] = useState({}) // { [poi.id]: true } deze rit
   const [nuAanHetVoorlezen, setNuAanHetVoorlezen] = useState(null) // label of null
   // POI voor het eco-scherm: { id, klaar } (klaar = uitgesproken), of null.
@@ -443,7 +448,7 @@ export function useOnderweg(
   }, [])
 
   const start = useCallback(async () => {
-    setFout('')
+    setFout(null)
     setPositie(null)
     setRijrichting(null)
     richtingPuntRef.current = null
@@ -491,12 +496,12 @@ export function useOnderweg(
     try {
       const bron = await startPositieBron(soort, {
         onPositie: (pos) => {
-          setFout('')
+          setFout(null)
           verwerkGps(pos)
         },
-        onFout: (tekst) => {
-          logboek.noteer('gps-fout', tekst)
-          setFout(tekst)
+        onFout: (f) => {
+          logboek.noteer('gps-fout', tIn('nl', f.sleutel, f.params))
+          setFout(f)
         },
         onInfo: (tekst) => logboek.noteer('info', tekst),
       })
@@ -504,10 +509,10 @@ export function useOnderweg(
       logboek.noteer('info', `bron actief: ${bron.bron}`)
       setActief(true)
     } catch (err) {
-      const tekst = err && err.message && /toestemming/i.test(err.message) ? err.message : foutTekst(err)
-      logboek.noteer('gps-fout', tekst)
+      const f = gpsFout(err)
+      logboek.noteer('gps-fout', tIn('nl', f.sleutel, f.params))
       stopLogboek()
-      setFout(tekst)
+      setFout(f)
       setActief(false)
     }
   }, [simulatie, achtergrond, trackOpnemen, stopBron, stopSim, stopLogboek, verwerkPositie, verwerkGps])

@@ -15,6 +15,8 @@ import RouteMap from './components/RouteMap.jsx'
 import Onderweg from './onderweg/Onderweg.jsx'
 import CategoryDot from './components/CategoryDot.jsx'
 import { telefoonTaal } from './taal.js'
+import { t, getal, zetTaal, bedieningsTaal } from './vertaal.js'
+import { tr } from './rijk.jsx'
 import { pluscode } from './onderweg/pluscode.js'
 import {
   isLink,
@@ -105,14 +107,10 @@ const OSM_TIMEOUT_MS = 30000
 // Of ze meedoen tot de grens eigen POI's (instelling, standaard 2 km) of alleen binnen de corridor, en
 // of er ook (of alleen) in Wikidata wordt gezocht: zie zoekbron.js (0.15.0).
 const EIGEN_CATEGORY_KEY = 'eigen'
-const EIGEN_CATEGORY_LABEL = 'Eigen POI'
 const EIGEN_DUBBEL_METERS = 100
-// Keuzerondjes "Zoeken in" bovenaan stap 2 (0.15.0/0.16.0, zoekbron.js).
-const ZOEKBRON_KEUZES = [
-  { key: 'wiki', label: 'Wikidata/Wikipedia', uitleg: "De categorieën van stap 3; eigen POI's doen niet mee." },
-  { key: 'eigen', label: "Alleen eigen POI's", uitleg: 'Uit je eigen CSV (hieronder); geen internet nodig.' },
-  { key: 'beide', label: 'Beide', uitleg: "Wikidata/Wikipedia én de eigen POI's." },
-]
+// Keuzerondjes "Zoeken in" bovenaan stap 2 (0.15.0/0.16.0, zoekbron.js);
+// teksten: stap2.bron.<key> en stap2.bron.<key>.uitleg.
+const ZOEKBRON_KEUZES = ['wiki', 'eigen', 'beide']
 // Zoveel overgeslagen regels worden met regelnummer en reden getoond.
 const EIGEN_MAX_REDENEN = 5
 // Zoveel niet-gekoppelde audiobestanden worden bij naam genoemd.
@@ -161,7 +159,32 @@ const DEFAULT_TRIGGER_RADIUS_METERS = 0
 
 // "40 m" of "1,5 km" (melding afwijkende pluscode, 0.19.2).
 function afstandTekst(meters) {
-  return meters < 1000 ? `${Math.round(meters)} m` : `${(meters / 1000).toFixed(1).replace('.', ',')} km`
+  return meters < 1000 ? `${Math.round(meters)} m` : `${getal(meters / 1000, 1)} km`
+}
+
+// Melding na het inlezen van eigen POI's (stap 2), in de taal van de
+// bediening (0.23.0). Een bewaarde import van vóór 0.23.0 heeft alleen de
+// Nederlandse tekst (imp.melding).
+function eigenMelding(imp) {
+  const d = imp && imp.meldingData
+  if (!d) return imp ? imp.melding || '' : ''
+  let tekst = t('stap2.csv.ingelezen', { bestand: d.bestand, aantal: d.aantal })
+  if (d.metLink > 0) tekst += t('stap2.csv.metLink', { aantal: d.metLink })
+  tekst += '.'
+  if (d.samengevoegd.length > 0) {
+    const lijst = d.samengevoegd.map((m) => t('stap2.csv.regelMet', m)).join(', ')
+    tekst += t('stap2.csv.samengevoegd', { aantal: d.samengevoegd.length, lijst })
+  }
+  if (d.geenLink > 0) tekst += t('stap2.csv.geenLink', { aantal: d.geenLink })
+  if (d.afwijkend.length > 0) {
+    const lijst = d.afwijkend
+      .slice(0, 5)
+      .map((w) => t('stap2.csv.afwijkendRegel', { regel: w.regel, naam: w.naam, afstand: afstandTekst(w.meters) }))
+      .join(', ')
+    const meer = d.afwijkend.length > 5 ? t('stap2.csv.enNog', { aantal: d.afwijkend.length - 5 }) : ''
+    tekst += t('stap2.csv.afwijkend', { lijst, meer })
+  }
+  return tekst
 }
 
 const MAP_HEIGHT = '320px'
@@ -202,7 +225,7 @@ function linkNaam(link) {
 }
 
 function errorText(err) {
-  return 'Fout: ' + (err && err.message ? err.message : String(err))
+  return t('alg.fout', { bericht: err && err.message ? err.message : String(err) })
 }
 
 // Routenaam = bestandsnaam van de GPX zonder extensie.
@@ -247,7 +270,13 @@ function App() {
   const [osmWarning, setOsmWarning] = useState('')
   const [showMap, setShowMap] = useState(true)
   // Instellingen (0.22.0, onderwerp 5): standaardwaarden, ⚙ in de kopregel.
-  const [instellingen, setInstellingen] = useState(leesInstellingen)
+  // Taal van de bediening (0.23.0, B1): vóór de eerste weergave instellen.
+  const [instellingen, setInstellingen] = useState(() => {
+    const i = leesInstellingen()
+    zetTaal(i.taal)
+    return i
+  })
+  const taal = bedieningsTaal()
   const [toonInstellingen, setToonInstellingen] = useState(false)
   // Updatecontrole (D3): { bezig, uitkomst, laatsteMs }; melding = nieuwe
   // versie gevonden bij de automatische of handmatige controle.
@@ -316,12 +345,14 @@ function App() {
   // gaan meteen over op de nieuwe standaardwaarde als die gewijzigd is.
   function wijzigInstellingen(wijziging) {
     const nieuw = bewaarInstellingen({ ...instellingen, ...wijziging })
+    if ('taal' in wijziging) zetTaal(nieuw.taal)
     setInstellingen(nieuw)
     if ('corridorM' in wijziging) setCorridorMeters(nieuw.corridorM)
     if ('ookZonderTekst' in wijziging) setOokZonderTekst(nieuw.ookZonderTekst)
   }
   // "Standaardwaarden terugzetten" (B6).
   function pasInstellingenToe(nieuw) {
+    zetTaal(nieuw.taal)
     setInstellingen(nieuw)
     setCorridorMeters(nieuw.corridorM)
     setOokZonderTekst(nieuw.ookZonderTekst)
@@ -357,6 +388,11 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Taal van de pagina (schermlezer, afbreken) volgt de bediening.
+  useEffect(() => {
+    if (typeof document !== 'undefined') document.documentElement.lang = taal
+  }, [taal])
+
   // De standaard-aangevinkte categorieën komen uit poi-categories.js zelf;
   // dat kan pas ná de module-import ingelezen worden, dus in een effect.
   useEffect(() => {
@@ -381,8 +417,8 @@ function App() {
   const categoriesAvailable =
     !!window.WikiPoiCategories && typeof window.WikiPoiCategories.getCategories === 'function'
   const categoryList = useMemo(
-    () => (categoriesAvailable ? window.WikiPoiCategories.getCategories('nl') : []),
-    [categoriesAvailable]
+    () => (categoriesAvailable ? window.WikiPoiCategories.getCategories(taal) : []),
+    [categoriesAvailable, taal]
   )
   const coreCategories = categoryList.filter((c) => !c.group)
   const extraCategories = categoryList.filter((c) => c.group === 'nieuw')
@@ -397,7 +433,7 @@ function App() {
     categoryList.forEach((c) => {
       labels[c.key] = c.label
     })
-    labels[EIGEN_CATEGORY_KEY] = EIGEN_CATEGORY_LABEL
+    labels[EIGEN_CATEGORY_KEY] = t('alg.eigenPoi')
     return labels
   }, [categoryList])
 
@@ -501,7 +537,7 @@ function App() {
       !!window.WikiPoiRouteBuffer &&
       typeof window.WikiPoiRouteBuffer.closestPointOnRoute === 'function'
     return allPois.map((c) => {
-      const categoryLabel = categoryLabelByKey[c.categoryKey] || 'Onbekende categorie'
+      const categoryLabel = categoryLabelByKey[c.categoryKey] || t('alg.onbekendeCategorie')
       if (!canMeasure) {
         return { ...c, categoryLabel, distanceToRoute: null, snapPoint: null }
       }
@@ -593,10 +629,10 @@ function App() {
   // Waarom een POI niet vanzelf meedoet (kader "Niet opgenomen").
   function redenNietOpgenomen(p) {
     if (!p.inCorridor) {
-      if (!p.eigen || eigenMelden === 'corridor') return 'buiten de corridor'
-      return `verder dan ${kmTekst(eigenMaxM)}`
+      if (!p.eigen || eigenMelden === 'corridor') return t('stap5.reden.buiten')
+      return t('stap5.reden.verder', { km: kmTekst(eigenMaxM) })
     }
-    return 'geen tekst'
+    return t('stap5.reden.geenTekst')
   }
   // Eigen POI's hebben hun eigen beschrijving en gaan niet naar Wikipedia.
   const summaryMissingPois = corridorPois.filter((p) => !p.eigen && !(p.id in summariesById))
@@ -717,7 +753,7 @@ function App() {
       !window.WikiPoiRouteBuffer ||
       typeof window.WikiPoiRouteBuffer.parseGpxLineString !== 'function'
     ) {
-      setRouteError('Fout: route-buffer.js is niet correct geladen.')
+      setRouteError(t('alg.nietGeladen', { bestand: 'route-buffer.js' }))
       return
     }
 
@@ -726,7 +762,7 @@ function App() {
       try {
         const parsed = window.WikiPoiRouteBuffer.parseGpxLineString(String(reader.result))
         if (!parsed.points || parsed.points.length === 0) {
-          setRouteError('Geen track- of routepunten gevonden in dit GPX-bestand.')
+          setRouteError(t('stap1.geenPunten'))
           return
         }
         setRouteInfo({
@@ -742,7 +778,7 @@ function App() {
       }
     }
     reader.onerror = () => {
-      setRouteError('Fout: kon het bestand niet lezen.')
+      setRouteError(t('alg.bestandNietLezen'))
     }
     reader.readAsText(file)
   }
@@ -755,7 +791,7 @@ function App() {
     if (!file) return
     setEigenFout('')
     if (!window.EuroPoiCsv || typeof window.EuroPoiCsv.fromEuroPoiCsv !== 'function') {
-      setEigenFout('Fout: europoi-csv.js is niet correct geladen.')
+      setEigenFout(t('alg.nietGeladen', { bestand: 'europoi-csv.js' }))
       return
     }
     const reader = new FileReader()
@@ -767,8 +803,11 @@ function App() {
           return
         }
         if (r.pois.length === 0) {
-          const reden = r.skipped.length > 0 ? ` (bijv. regel ${r.skipped[0].line}: ${r.skipped[0].reason})` : ''
-          setEigenFout(`${file.name}: geen bruikbare POI's gevonden${reden}.`)
+          const reden =
+            r.skipped.length > 0
+              ? t('stap2.csv.bijvRegel', { regel: r.skipped[0].line, reden: r.skipped[0].reason })
+              : ''
+          setEigenFout(t('stap2.csv.geenBruikbaar', { bestand: file.name, reden }))
           return
         }
         // mp3-kolom: internetlink, zoals in EuroPoi. Iets anders (bijv. een
@@ -796,25 +835,17 @@ function App() {
             categoryKey: EIGEN_CATEGORY_KEY,
             eigen: true,
           })),
-          melding:
-            `${file.name}: ${r.pois.length} POI's ingelezen` +
-            (metLink > 0 ? `, waarvan ${metLink} met mp3-link` : '') +
-            '.' +
-            (r.merged && r.merged.length > 0
-              ? ` ${r.merged.length === 1 ? '1 dubbele regel' : `${r.merged.length} dubbele regels`} samengevoegd` +
-                ` (${r.merged.map((m) => `regel ${m.line} met ${m.metLine}`).join(', ')}).`
-              : '') +
-            (geenLink > 0
-              ? ` ${geenLink === 1 ? '1 mp3-verwijzing is' : `${geenLink} mp3-verwijzingen zijn`} geen` +
-                " internetlink en wordt niet afgespeeld (lokale bestanden: via 'Audiobestanden koppelen')."
-              : '') +
+          // Melding na het inlezen (0.23.0): de gegevens worden bewaard en
+          // de tekst pas bij het tonen gemaakt, in de taal van de bediening.
+          meldingData: {
+            bestand: file.name,
+            aantal: r.pois.length,
+            metLink,
+            geenLink,
+            samengevoegd: (r.merged || []).map((m) => ({ regel: m.line, met: m.metLine })),
             // PC3 (0.19.2): pluscode en lat/lng verschillen; de pluscode is gebruikt.
-            (r.warnings && r.warnings.length > 0
-              ? ` Pluscode en lat/lng wijken af (pluscode gebruikt): ${r.warnings
-                  .slice(0, 5)
-                  .map((w) => `regel ${w.line} (${w.name}) ${afstandTekst(w.meters)}`)
-                  .join(', ')}${r.warnings.length > 5 ? ` en nog ${r.warnings.length - 5}` : ''}.`
-              : ''),
+            afwijkend: (r.warnings || []).map((w) => ({ regel: w.line, naam: w.name, meters: w.meters })),
+          },
           overgeslagen: r.skipped,
         }
         setEigenImport(nieuw)
@@ -829,7 +860,7 @@ function App() {
       }
     }
     reader.onerror = () => {
-      setEigenFout('Fout: kon het bestand niet lezen.')
+      setEigenFout(t('alg.bestandNietLezen'))
     }
     reader.readAsText(file)
   }
@@ -905,7 +936,8 @@ function App() {
             gelukt: totaalLinks - ontbrekend.length,
             totaal: totaalLinks,
             fouten: [],
-            melding: 'Geen internet: de mp3-links worden gedownload zodra WikiPoi met internet opnieuw start.',
+            // Tekst bij het tonen (stap2.kopie.offline).
+            melding: 'offline',
           },
         }))
       }
@@ -961,7 +993,7 @@ function App() {
       const bewaard = await AudioOpslag.bewaarLokaal(bestanden)
       setEigenAudio({ bestanden: bewaard, geenAudio, nietBewaard: bestanden.length - bewaard.length })
     } catch (err) {
-      setEigenFout(`Audiobestanden bewaren mislukt: ${errorText(err)}`)
+      setEigenFout(t('stap2.audio.bewarenMislukt', { fout: errorText(err) }))
     } finally {
       setAudioOpslaan(false)
       verversTotaal()
@@ -994,18 +1026,18 @@ function App() {
         !window.WikiPoiWikidataSearch ||
         typeof window.WikiPoiWikidataSearch.searchWikidataBox !== 'function'
       ) {
-        setSearchError('Fout: wikidata-search.js is niet correct geladen.')
+        setSearchError(t('alg.nietGeladen', { bestand: 'wikidata-search.js' }))
         return
       }
       if (!categoriesAvailable) {
-        setSearchError('Fout: poi-categories.js is niet correct geladen.')
+        setSearchError(t('alg.nietGeladen', { bestand: 'poi-categories.js' }))
         return
       }
       if (
         useOsm &&
         (!window.WikiPoiOsmFallback || typeof window.WikiPoiOsmFallback.searchOverpass !== 'function')
       ) {
-        setSearchError('Fout: osm-fallback.js is niet correct geladen.')
+        setSearchError(t('alg.nietGeladen', { bestand: 'osm-fallback.js' }))
         return
       }
 
@@ -1015,7 +1047,7 @@ function App() {
       // ("Gebouwd erfgoed"), zie dedupeFirstWins().
       const selected = categoryList.filter((c) => selectedCategoryKeys.includes(c.key))
       if (selected.length === 0) {
-        setSearchError('Kies minimaal één categorie bij stap 3.')
+        setSearchError(t('stap4.kiesCategorie'))
         return
       }
 
@@ -1025,7 +1057,7 @@ function App() {
       let landTaal = null
       let landFout = false
       if (taalKeuze.modus !== 'eigen' && routeInfo.points && routeInfo.points.length > 0) {
-        setSearchProgress('Taal van het land bepalen')
+        setSearchProgress(t('stap4.landTaal'))
         try {
           landTaal = await window.WikiPoiWikidataSearch.fetchLandTaal(routeInfo.points[0])
           if (!landTaal) landFout = true
@@ -1041,7 +1073,7 @@ function App() {
       const wikidataJobs = []
       if (qidCategories.length > 0) {
         wikidataJobs.push({
-          label: qidCategories.length === 1 ? qidCategories[0].label : 'alle categorieën',
+          label: qidCategories.length === 1 ? qidCategories[0].label : t('stap4.alleCategorieen'),
           query: {
             // Artikel en naam in de taalvolgorde van stap 2 (0.17.0).
             languages: talen,
@@ -1062,7 +1094,7 @@ function App() {
           })
         })
       if (wikidataJobs.length === 0) {
-        setSearchError('Kies minimaal één categorie bij stap 3.')
+        setSearchError(t('stap4.kiesCategorie'))
         return
       }
       const osmCategories = useOsm ? selected.filter((c) => c.osmTags && c.osmTags.length > 0) : []
@@ -1072,7 +1104,7 @@ function App() {
       let results = []
       for (const job of wikidataJobs) {
         done += 1
-        setSearchProgress(`Wikidata: ${job.label} (${done} van ${total})`)
+        setSearchProgress(t('stap4.voortgang', { bron: 'Wikidata', wat: job.label, nr: done, totaal: total }))
         const found = await window.WikiPoiWikidataSearch.searchWikidataBox(routeInfo.bbox, job.query)
         results = results.concat(found.map((item) => ({ ...item, categoryKey: job.categoryKeyFor(item) })))
       }
@@ -1111,7 +1143,9 @@ function App() {
           osmSkipped.push(category.label)
           continue
         }
-        setSearchProgress(`OpenStreetMap: ${category.label} (${done} van ${total})`)
+        setSearchProgress(
+          t('stap4.voortgang', { bron: 'OpenStreetMap', wat: category.label, nr: done, totaal: total })
+        )
         try {
           const tagFilterGroups = window.WikiPoiCategories.osmTagFiltersForKeys([category.key])
           const found = await window.WikiPoiOsmFallback.searchOverpass(routeInfo.bbox, tagFilterGroups, {
@@ -1128,18 +1162,15 @@ function App() {
       }
       if (osmFailure) {
         if (osmSucceeded === 0) {
-          setOsmWarning(
-            'Let op: OpenStreetMap niet beschikbaar (' + osmFailure.message + '). Resultaten zonder OpenStreetMap.'
-          )
+          setOsmWarning(t('stap4.osmNiet', { bericht: osmFailure.message }))
         } else {
           setOsmWarning(
-            'Let op: OpenStreetMap gedeeltelijk: ' +
-              osmFailure.label +
-              ' niet gelukt (' +
-              osmFailure.message +
-              ').' +
-              (osmSkipped.length > 0 ? ' ' + osmSkipped.join(', ') + ' overgeslagen.' : '') +
-              ' Resultaten van de overige OpenStreetMap-categorieën zijn wel meegenomen.'
+            t('stap4.osmDeels', {
+              categorie: osmFailure.label,
+              bericht: osmFailure.message,
+              overgeslagen:
+                osmSkipped.length > 0 ? t('stap4.osmOvergeslagen', { lijst: osmSkipped.join(', ') }) : '',
+            })
           )
         }
       }
@@ -1176,7 +1207,7 @@ function App() {
       !window.WikiPoiWikipediaSummary ||
       typeof window.WikiPoiWikipediaSummary.fetchSummariesForCandidates !== 'function'
     ) {
-      throw new Error('wikipedia-summary.js is niet correct geladen.')
+      throw new Error(t('alg.nietGeladenKort', { bestand: 'wikipedia-summary.js' }))
     }
     const vondsten = await zoekViaLigging(candidates)
     const enriched = await window.WikiPoiWikipediaSummary.fetchSummariesForCandidates(
@@ -1326,16 +1357,16 @@ function App() {
     setExportMessage('')
     try {
       if (!window.EuroPoiCsv || typeof window.EuroPoiCsv.toEuroPoiCsv !== 'function') {
-        setExportError('Fout: europoi-csv.js is niet correct geladen.')
+        setExportError(t('alg.nietGeladen', { bestand: 'europoi-csv.js' }))
         return
       }
       const category = routeName.trim()
       if (!category) {
-        setExportError('Vul een routenaam in; die wordt de categorie in EuroPoi.')
+        setExportError(t('stap7.geenNaam'))
         return
       }
       if (corridorPois.length === 0) {
-        setExportError('Er liggen geen POI\'s binnen de corridor. Verbreed de strook bij stap 5.')
+        setExportError(t('stap7.geenPois'))
         return
       }
       // Eerst de ontbrekende samenvattingen ophalen, zodat de CSV nooit per
@@ -1347,7 +1378,7 @@ function App() {
         try {
           summaries = await fetchMissingSummaries()
         } catch (err) {
-          setExportError('Samenvattingen ophalen mislukt (' + errorText(err) + '). Probeer het opnieuw.')
+          setExportError(t('stap7.samenvattingMislukt', { fout: errorText(err) }))
           return
         } finally {
           setSummaryLoading(false)
@@ -1356,9 +1387,7 @@ function App() {
       // Zonder tekst alleen als dat bij stap 6 is aangezet (0.12.0).
       const exportPois = corridorPois.filter((p) => p.zelfGekozen || ookZonderTekst || heeftTekst(p, summaries))
       if (exportPois.length === 0) {
-        setExportError(
-          "Geen van de POI's binnen de corridor heeft een tekst. Zet bij stap 6 'Ook POI's zonder tekst melden' aan, of verbreed de corridor."
-        )
+        setExportError(t('stap7.geenTekst'))
         return
       }
       // Tekst: alleen de Wikipedia-samenvatting (of de zin uit Wikidata),
@@ -1399,7 +1428,7 @@ function App() {
       link.click()
       link.remove()
       setTimeout(() => URL.revokeObjectURL(url), 1000)
-      setExportMessage(`${rows.length} POI's opgeslagen in "${fileName}".`)
+      setExportMessage(t('stap7.opgeslagen', { aantal: rows.length, bestand: fileName }))
     } catch (err) {
       setExportError(errorText(err))
     }
@@ -1420,13 +1449,13 @@ function App() {
       await Share.share({
         title: fileName,
         files: [written.uri],
-        dialogTitle: 'CSV delen of opslaan',
+        dialogTitle: t('stap7.delenTitel'),
       })
-      setExportMessage(`"${fileName}" (${count} POI's) is aangeboden om te delen of op te slaan.`)
+      setExportMessage(t('stap7.aangeboden', { bestand: fileName, aantal: count }))
     } catch (err) {
       const text = err && err.message ? err.message : String(err)
       if (/cancel/i.test(text)) {
-        setExportMessage('Delen geannuleerd. Druk opnieuw op de knop om het bestand alsnog te delen.')
+        setExportMessage(t('stap7.geannuleerd'))
         return
       }
       throw err
@@ -1468,40 +1497,43 @@ function App() {
         </div>
         <div className="app-kopteksten">
           <div className="app-title">WikiPoi</div>
-          <div className="app-subtitle">Beziens&shy;waardig&shy;heden langs je route</div>
-          <div className="app-versieregel">versie {APP_VERSION} · bèta</div>
+          <div className="app-subtitle">{t('kop.ondertitel')}</div>
+          <div className="app-versieregel">{t('kop.versie', { versie: APP_VERSION })}</div>
         </div>
         <div className="app-kopknoppen">
           <button
             type="button"
             className="app-info"
             onClick={() => setToonInstellingen(true)}
-            aria-label="Instellingen"
-            title="Instellingen"
+            aria-label={t('kop.instellingen')}
+            title={t('kop.instellingen')}
           >
             <span className="app-info-icoon app-tandwiel" aria-hidden="true">
               ⚙
             </span>
-            <span className="app-info-versie">Instellingen</span>
+            <span className="app-info-versie">{t('kop.instellingen')}</span>
           </button>
           <button
             type="button"
             className="app-info"
             onClick={() => setToonOver(true)}
-            aria-label="Over WikiPoi"
-            title="Over WikiPoi"
+            aria-label={t('kop.over')}
+            title={t('kop.over')}
           >
             <span className="app-info-icoon" aria-hidden="true">
               i
             </span>
-            <span className="app-info-versie">Over</span>
+            <span className="app-info-versie">{t('kop.overKort')}</span>
           </button>
         </div>
       </header>
       {updateMelding && (
         <div className="update-melding" role="status">
           <span>
-            Versie {updateMelding.versie} van WikiPoi is beschikbaar{updateMelding.prerelease ? ' (bèta)' : ''}.
+            {t('update.beschikbaar', {
+              versie: updateMelding.versie,
+              beta: updateMelding.prerelease ? t('update.beta') : '',
+            })}
           </span>
           <a
             className="btn btn-yellow btn-small"
@@ -1510,10 +1542,10 @@ function App() {
             rel="noopener noreferrer"
             onClick={() => setUpdateMelding(null)}
           >
-            Bekijken
+            {t('alg.bekijken')}
           </a>
           <button type="button" className="btn btn-indigo btn-small" onClick={() => setUpdateMelding(null)}>
-            Later
+            {t('alg.later')}
           </button>
         </div>
       )}
@@ -1549,7 +1581,7 @@ function App() {
       )}
 
       <main className="app-main">
-        <Step number={1} title="Route">
+        <Step number={1} title={t('stap1.titel')}>
           <label className={searchLoading ? 'btn btn-blue is-disabled' : 'btn btn-blue'}>
             <input
               type="file"
@@ -1558,50 +1590,50 @@ function App() {
               disabled={searchLoading}
               hidden
             />
-            {routeInfo ? 'Andere route' : 'GPX kiezen'}
+            {routeInfo ? t('stap1.ander') : t('stap1.kiezen')}
           </label>
           {routeInfo && (
             <p>
               <strong>{routeInfo.fileName}</strong>
               <br />
-              <span className="muted">{routeInfo.pointCount} routepunten</span>
+              <span className="muted">{t('stap1.punten', { aantal: routeInfo.pointCount })}</span>
             </p>
           )}
           {!routeInfo && !routeError && (
-            <p className="muted">Kies het GPX-bestand van je fiets- of wandelroute.</p>
+            <p className="muted">{t('stap1.uitleg')}</p>
           )}
           {routeError && <p className="error">{routeError}</p>}
         </Step>
 
-        <Step number={2} title="Bronnen">
+        <Step number={2} title={t('stap2.titel')}>
           <fieldset className="keuze-groep keuze-groep-boven">
-            <legend>Zoeken in</legend>
+            <legend>{t('stap2.zoekenIn')}</legend>
             {ZOEKBRON_KEUZES.map((k) => {
-              const uit = searchLoading || (k.key !== 'wiki' && !eigenImport)
+              const uit = searchLoading || (k !== 'wiki' && !eigenImport)
               return (
-                <label key={k.key} className={uit ? 'toggle-row is-disabled' : 'toggle-row'}>
+                <label key={k} className={uit ? 'toggle-row is-disabled' : 'toggle-row'}>
                   <input
                     type="radio"
                     name="zoekbron"
-                    checked={bronEffectief === k.key}
+                    checked={bronEffectief === k}
                     disabled={uit}
-                    onChange={() => kiesBron(k.key)}
+                    onChange={() => kiesBron(k)}
                   />
                   <span>
-                    {k.label}
+                    {t(`stap2.bron.${k}`)}
                     <br />
-                    <span className="muted">{k.uitleg}</span>
+                    <span className="muted">{t(`stap2.bron.${k}.uitleg`)}</span>
                   </span>
                 </label>
               )
             })}
             {!eigenImport && (
-              <p className="muted">Voeg hieronder een CSV toe voor eigen POI's.</p>
+              <p className="muted">{t('stap2.voegCsvToe')}</p>
             )}
           </fieldset>
           {!alleenEigen && (
             <fieldset className="keuze-groep keuze-groep-boven">
-              <legend>Taal van de teksten</legend>
+              <legend>{t('stap2.taalTitel')}</legend>
               <label className={searchLoading ? 'toggle-row is-disabled' : 'toggle-row'}>
                 <input
                   type="radio"
@@ -1611,12 +1643,9 @@ function App() {
                   onChange={() => kiesTaalModus('auto')}
                 />
                 <span>
-                  Automatisch
+                  {t('stap2.automatisch')}
                   <br />
-                  <span className="muted">
-                    {taalNaam(telefoonTaal())} (taal van je telefoon), dan de taal van het land van de route, dan
-                    Engels, Frans en Duits.
-                  </span>
+                  <span className="muted">{t('stap2.automatischUitleg', { taal: taalNaam(telefoonTaal()) })}</span>
                 </span>
               </label>
               <label className={searchLoading ? 'toggle-row is-disabled' : 'toggle-row'}>
@@ -1628,9 +1657,9 @@ function App() {
                   onChange={() => kiesTaalModus('eigen')}
                 />
                 <span>
-                  Eigen volgorde
+                  {t('stap2.eigenVolgorde')}
                   <br />
-                  <span className="muted">Kies zelf de talen (hoogstens {MAX_TALEN}) en hun volgorde.</span>
+                  <span className="muted">{t('stap2.eigenVolgordeUitleg', { max: MAX_TALEN })}</span>
                 </span>
               </label>
               {taalKeuze.modus === 'eigen' && (
@@ -1657,7 +1686,7 @@ function App() {
                             <button
                               type="button"
                               className="btn btn-indigo btn-klein"
-                              aria-label={`${r.naam} omhoog`}
+                              aria-label={t('stap2.omhoog', { taal: r.naam })}
                               disabled={searchLoading || i === 0}
                               onClick={() => wijzigEigenTalen(verplaatsTaal(taalKeuze.talen, r.code, -1))}
                             >
@@ -1666,7 +1695,7 @@ function App() {
                             <button
                               type="button"
                               className="btn btn-indigo btn-klein"
-                              aria-label={`${r.naam} omlaag`}
+                              aria-label={t('stap2.omlaag', { taal: r.naam })}
                               disabled={searchLoading || i === taalKeuze.talen.length - 1}
                               onClick={() => wijzigEigenTalen(verplaatsTaal(taalKeuze.talen, r.code, 1))}
                             >
@@ -1679,10 +1708,7 @@ function App() {
                   })}
                 </ol>
               )}
-              <p className="muted">
-                Heeft een POI geen artikel in de eerste taal, dan zoekt stap 6 op dezelfde plek naar een artikel in
-                een taal die hoger in de lijst staat. Een andere keuze wist de zoekresultaten.
-              </p>
+              <p className="muted">{t('stap2.taalUitleg')}</p>
             </fieldset>
           )}
           <div className="eigen-pois">
@@ -1694,7 +1720,7 @@ function App() {
                 disabled={searchLoading}
                 hidden
               />
-              {eigenImport ? "Andere eigen POI's (CSV)" : "Eigen POI's toevoegen (CSV)"}
+              {eigenImport ? t('stap2.csvAnder') : t('stap2.csvToevoegen')}
             </label>
             {eigenImport && (
               <button
@@ -1703,24 +1729,19 @@ function App() {
                 onClick={verwijderEigenPois}
                 disabled={searchLoading}
               >
-                Verwijderen
+                {t('stap2.verwijderen')}
               </button>
             )}
             {!eigenImport && !eigenFout && (
-              <p className="muted">
-                Optioneel: een CSV in EuroPoi-formaat (lat;lng;pluscode;name;desc;category;radius;mp3). Een
-                volledige pluscode bepaalt de plek; lat/lng is de reserve. Eigen
-                POI's verschijnen na het zoeken. Daarna kun je kiezen of ze altijd meedoen (tot{' '}
-                {kmTekst(eigenMaxM)} van de route) of alleen binnen de corridor.
-              </p>
+              <p className="muted">{t('stap2.csvUitleg', { km: kmTekst(eigenMaxM) })}</p>
             )}
             {eigenImport && (
               <>
                 <p className="success">
-                  <CategoryDot categoryKey={EIGEN_CATEGORY_KEY} /> {eigenImport.melding}
+                  <CategoryDot categoryKey={EIGEN_CATEGORY_KEY} /> {eigenMelding(eigenImport)}
                 </p>
                 <fieldset className="keuze-groep">
-                  <legend>Eigen POI's melden</legend>
+                  <legend>{t('stap2.meldenTitel')}</legend>
                   <label className={searchLoading ? 'toggle-row is-disabled' : 'toggle-row'}>
                     <input
                       type="radio"
@@ -1730,12 +1751,9 @@ function App() {
                       onChange={() => kiesEigenMelden('altijd')}
                     />
                     <span>
-                      Altijd
+                      {t('stap2.altijd')}
                       <br />
-                      <span className="muted">
-                        Tot {kmTekst(eigenMaxM)} van de route, ook buiten de corridor; daar alleen gemeld
-                        bij de POI zelf.
-                      </span>
+                      <span className="muted">{t('stap2.altijdUitleg', { km: kmTekst(eigenMaxM) })}</span>
                     </span>
                   </label>
                   <label className={searchLoading ? 'toggle-row is-disabled' : 'toggle-row'}>
@@ -1747,25 +1765,21 @@ function App() {
                       onChange={() => kiesEigenMelden('corridor')}
                     />
                     <span>
-                      Alleen binnen de corridor
+                      {t('stap2.corridor')}
                       <br />
-                      <span className="muted">Net als de gevonden POI's (breedte instellen bij stap 5).</span>
+                      <span className="muted">{t('stap2.corridorUitleg')}</span>
                     </span>
                   </label>
                 </fieldset>
                 {eigenImport.overgeslagen.length > 0 && (
                   <div className="muted">
-                    {eigenImport.overgeslagen.length === 1
-                      ? '1 regel overgeslagen:'
-                      : `${eigenImport.overgeslagen.length} regels overgeslagen:`}
+                    {t('stap2.overgeslagen', { aantal: eigenImport.overgeslagen.length })}
                     <ul className="eigen-redenen">
                       {eigenImport.overgeslagen.slice(0, EIGEN_MAX_REDENEN).map((s) => (
-                        <li key={s.line}>
-                          regel {s.line}: {s.reason}
-                        </li>
+                        <li key={s.line}>{t('stap2.regel', { regel: s.line, reden: s.reason })}</li>
                       ))}
                       {eigenImport.overgeslagen.length > EIGEN_MAX_REDENEN && (
-                        <li>en nog {eigenImport.overgeslagen.length - EIGEN_MAX_REDENEN} andere</li>
+                        <li>{t('alg.enNogAndere', { aantal: eigenImport.overgeslagen.length - EIGEN_MAX_REDENEN })}</li>
                       )}
                     </ul>
                   </div>
@@ -1787,7 +1801,7 @@ function App() {
                     disabled={searchLoading || audioOpslaan}
                     hidden
                   />
-                  {eigenAudio ? 'Andere audiobestanden' : 'Audiobestanden koppelen'}
+                  {eigenAudio ? t('stap2.audio.ander') : t('stap2.audio.koppelen')}
                 </label>
                 {eigenAudio && (
                   <button
@@ -1796,58 +1810,49 @@ function App() {
                     onClick={verwijderAudio}
                     disabled={searchLoading || audioOpslaan}
                   >
-                    Ontkoppelen
+                    {t('stap2.audio.ontkoppelen')}
                   </button>
                 )}
                 {!eigenAudio && (
                   <p className="muted">
-                    Optioneel: mp3- of wav-bestanden op de telefoon, met de pluscode als bestandsnaam (bijv.
-                    9F37M7RQ+2X.mp3), zoals in EuroPoi. Meerdere tegelijk kiezen mag.
-                    {isNative ? ' Ze worden in WikiPoi bewaard, zodat ze ook zonder internet werken.' : ''}
+                    {t('stap2.audio.uitleg')}
+                    {isNative ? t('stap2.audio.uitlegApp') : ''}
                   </p>
                 )}
-                {audioOpslaan && <p className="muted">Audiobestanden bewaren…</p>}
+                {audioOpslaan && <p className="muted">{t('stap2.audio.bewaren')}</p>}
                 {eigenAudio && (
                   <>
                     <p className={audioKoppeling.gekoppeld > 0 ? 'success' : 'error'}>
-                      {audioKoppeling.gekoppeld === 1
-                        ? '1 audiobestand gekoppeld aan een eigen POI.'
-                        : `${audioKoppeling.gekoppeld} audiobestanden gekoppeld aan eigen POI's.`}
+                      {t('stap2.audio.gekoppeld', { aantal: audioKoppeling.gekoppeld })}
                     </p>
                     {audioKoppeling.nietGekoppeld.length > 0 && (
                       <div className="muted">
-                        {audioKoppeling.nietGekoppeld.length === 1
-                          ? '1 bestand past bij geen enkele eigen POI:'
-                          : `${audioKoppeling.nietGekoppeld.length} bestanden passen bij geen enkele eigen POI:`}
+                        {t('stap2.audio.nietGekoppeld', { aantal: audioKoppeling.nietGekoppeld.length })}
                         <ul className="eigen-redenen">
                           {audioKoppeling.nietGekoppeld.slice(0, AUDIO_MAX_NAMEN).map((naam) => (
                             <li key={naam}>{naam}</li>
                           ))}
                           {audioKoppeling.nietGekoppeld.length > AUDIO_MAX_NAMEN && (
-                            <li>en nog {audioKoppeling.nietGekoppeld.length - AUDIO_MAX_NAMEN} andere</li>
+                            <li>{t('alg.enNogAndere', { aantal: audioKoppeling.nietGekoppeld.length - AUDIO_MAX_NAMEN })}</li>
                           )}
                         </ul>
                       </div>
                     )}
                     {eigenAudio.geenAudio > 0 && (
                       <p className="muted">
-                        {eigenAudio.geenAudio === 1
-                          ? '1 bestand is geen mp3 of wav en is overgeslagen.'
-                          : `${eigenAudio.geenAudio} bestanden zijn geen mp3 of wav en zijn overgeslagen.`}
+                        {t('stap2.audio.geenAudio', { aantal: eigenAudio.geenAudio })}
                       </p>
                     )}
                     {eigenAudio.nietBewaard > 0 && (
                       <p className="error">
-                        {eigenAudio.nietBewaard === 1
-                          ? '1 audiobestand kon niet worden bewaard.'
-                          : `${eigenAudio.nietBewaard} audiobestanden konden niet worden bewaard.`}
+                        {t('stap2.audio.nietBewaard', { aantal: eigenAudio.nietBewaard })}
                       </p>
                     )}
                   </>
                 )}
                 {audioKopie.bezig && (
                   <p className="muted">
-                    Mp3-links offline opslaan: {audioKopie.bezig.klaar} van {audioKopie.bezig.totaal}…
+                    {t('stap2.kopie.bezig', { klaar: audioKopie.bezig.klaar, totaal: audioKopie.bezig.totaal })}
                   </p>
                 )}
                 {audioKopie.resultaat && (
@@ -1857,13 +1862,19 @@ function App() {
                         audioKopie.resultaat.gelukt === audioKopie.resultaat.totaal ? 'success' : 'error'
                       }
                     >
-                      Audio offline: {audioKopie.resultaat.gelukt} van {audioKopie.resultaat.totaal}{' '}
-                      {audioKopie.resultaat.totaal === 1 ? 'mp3-link' : 'mp3-links'} opgeslagen.
-                      {audioKopie.resultaat.melding ? ` ${audioKopie.resultaat.melding}` : ''}
+                      {t('stap2.kopie.resultaat', {
+                        gelukt: audioKopie.resultaat.gelukt,
+                        aantal: audioKopie.resultaat.totaal,
+                      })}
+                      {audioKopie.resultaat.melding === 'offline'
+                        ? ` ${t('stap2.kopie.offline')}`
+                        : audioKopie.resultaat.melding
+                          ? ` ${audioKopie.resultaat.melding}`
+                          : ''}
                     </p>
                     {audioKopie.resultaat.fouten.length > 0 && (
                       <div className="muted">
-                        Niet gelukt (wordt onderweg met internet nog via de link geprobeerd):
+                        {t('stap2.kopie.nietGelukt')}
                         <ul className="eigen-redenen">
                           {audioKopie.resultaat.fouten.slice(0, AUDIO_MAX_NAMEN).map((f) => (
                             <li key={f.link}>
@@ -1871,7 +1882,7 @@ function App() {
                             </li>
                           ))}
                           {audioKopie.resultaat.fouten.length > AUDIO_MAX_NAMEN && (
-                            <li>en nog {audioKopie.resultaat.fouten.length - AUDIO_MAX_NAMEN} andere</li>
+                            <li>{t('alg.enNogAndere', { aantal: audioKopie.resultaat.fouten.length - AUDIO_MAX_NAMEN })}</li>
                           )}
                         </ul>
                       </div>
@@ -1880,8 +1891,7 @@ function App() {
                 )}
                 {isNative && audioTotaal.aantal > 0 && (
                   <p className="muted">
-                    Opgeslagen audio: {audioTotaal.aantal} {audioTotaal.aantal === 1 ? 'bestand' : 'bestanden'},{' '}
-                    {grootteTekst(audioTotaal.bytes)}.
+                    {t('stap2.audio.totaal', { aantal: audioTotaal.aantal, grootte: grootteTekst(audioTotaal.bytes) })}
                   </p>
                 )}
               </div>
@@ -1892,16 +1902,18 @@ function App() {
 
         <Step
           number={3}
-          title="Categorieën"
+          title={t('stap3.titel')}
           disabled={alleenEigen}
-          hint="Niet nodig: je zoekt alleen in je eigen POI's (stap 2)."
+          hint={t('stap3.nietNodig')}
         >
-          {!categoriesAvailable && <p className="error">Fout: poi-categories.js is niet correct geladen.</p>}
+          {!categoriesAvailable && (
+            <p className="error">{t('alg.nietGeladen', { bestand: 'poi-categories.js' })}</p>
+          )}
           {categoriesAvailable && (
             <>
               <ul className="category-list">{coreCategories.map((cat) => renderCategoryItem(cat, false))}</ul>
               <p className="category-group-title">
-                Verzamelcategorieën <span className="muted">(max. {maxExtraCategories} tegelijk)</span>
+                {t('stap3.verzamel')} <span className="muted">{t('stap3.max', { max: maxExtraCategories })}</span>
               </p>
               <ul className="category-list">{extraCategories.map((cat) => renderCategoryItem(cat, true))}</ul>
               <label className={searchLoading || alleenEigen ? 'toggle-row is-disabled' : 'toggle-row'}>
@@ -1912,29 +1924,26 @@ function App() {
                   onChange={toggleOsm}
                 />
                 <span>
-                  Ook OpenStreetMap doorzoeken
+                  {t('stap3.osm')}
                   <br />
-                  <span className="muted">Vindt soms extra punten, maar maakt het zoeken trager.</span>
+                  <span className="muted">{t('stap3.osmUitleg')}</span>
                 </span>
               </label>
             </>
           )}
         </Step>
 
-        <Step number={4} title="Zoeken" disabled={!routeInfo} hint="Kies eerst een route bij stap 1.">
+        <Step number={4} title={t('stap4.titel')} disabled={!routeInfo} hint={t('alg.eerstRoute')}>
           <button
             type="button"
             className="btn btn-yellow btn-wide"
             onClick={runSearch}
             disabled={searchLoading || (!alleenEigen && selectedCategoryKeys.length === 0)}
           >
-            {searchLoading ? 'Bezig met zoeken…' : searchDone ? 'Opnieuw zoeken' : "POI's zoeken"}
+            {searchLoading ? t('stap4.bezig') : searchDone ? t('stap4.opnieuw') : t('stap4.zoeken')}
           </button>
           {!alleenEigen && selectedCategoryKeys.length === 0 && (
-            <p className="muted">
-              Kies minimaal één categorie bij stap 3
-              {eigenImport ? ", of kies bij stap 2 'Alleen eigen POI's'." : '.'}
-            </p>
+            <p className="muted">{eigenImport ? t('stap4.kiesCategorieOf') : t('stap4.kiesCategorie')}</p>
           )}
           {searchProgress && (
             <p className="muted">
@@ -1944,38 +1953,35 @@ function App() {
           )}
           {searchDone && (
             <p>
-              <strong>{routeMeasuredPois.length}</strong> POI's gevonden
-              {eigenCount > 0 && `, inclusief ${eigenCount} eigen`}
-              {eigenVervangen > 0 && `, ${eigenVervangen} vervangen door een eigen POI`}
-              {mergedCount > 0 && `, ${mergedCount} dubbele samengevoegd`}
-              {useOsm && !alleenEigen && `, waarvan ${osmFoundCount} via OpenStreetMap`}.
+              {tr('stap4.gevonden', { aantal: routeMeasuredPois.length })}
+              {eigenCount > 0 && t('stap4.inclusiefEigen', { aantal: eigenCount })}
+              {eigenVervangen > 0 && t('stap4.vervangen', { aantal: eigenVervangen })}
+              {mergedCount > 0 && t('stap4.samengevoegd', { aantal: mergedCount })}
+              {useOsm && !alleenEigen && t('stap4.viaOsm', { aantal: osmFoundCount })}.
             </p>
           )}
           {searchDone && taalInfo && (
             <p className="muted">
-              Taal van de teksten: {volgordeTekst(taalInfo.talen)}
+              {t('stap4.taal', { volgorde: volgordeTekst(taalInfo.talen) })}
               {taalInfo.modus === 'eigen'
-                ? ' (eigen volgorde).'
+                ? t('stap4.taalEigen')
                 : taalInfo.landTaal
-                  ? ` (taal van het land: ${taalNaam(taalInfo.landTaal)}).`
+                  ? t('stap4.taalLand', { taal: taalNaam(taalInfo.landTaal) })
                   : taalInfo.landFout
-                    ? ' (taal van het land niet bepaald).'
+                    ? t('stap4.taalLandFout')
                     : '.'}
             </p>
           )}
           {searchDone && eigenTeVer > 0 && (
-            <p className="muted">
-              {eigenTeVer === 1 ? "1 eigen POI ligt" : `${eigenTeVer} eigen POI's liggen`} verder dan{' '}
-              {kmTekst(eigenMaxM)} van de route: zichtbaar op de kaart, maar {eigenTeVer === 1 ? 'doet' : 'doen'} niet mee.
-            </p>
+            <p className="muted">{t('stap4.teVer', { aantal: eigenTeVer, km: kmTekst(eigenMaxM) })}</p>
           )}
           {osmWarning && <p className="error">{osmWarning}</p>}
           {searchError && <p className="error">{searchError}</p>}
         </Step>
 
-        <Step number={5} title="Kaart" disabled={!routeInfo} hint="Kies eerst een route bij stap 1.">
+        <Step number={5} title={t('stap5.titel')} disabled={!routeInfo} hint={t('alg.eerstRoute')}>
           <button type="button" className="btn btn-indigo btn-small" onClick={() => setShowMap((v) => !v)}>
-            {showMap ? 'Kaart verbergen' : 'Kaart tonen'}
+            {showMap ? t('stap5.verbergen') : t('stap5.tonen')}
           </button>
           {/* Kaart blijft in de pagina staan; alleen de hoogte wisselt, zodat
               Leaflet zijn toestand behoudt. */}
@@ -1987,7 +1993,7 @@ function App() {
             />
           </div>
           <label htmlFor="corridor-slider" className="field-label">
-            Corridor: {corridorMeters} m aan weerszijden van de route
+            {t('stap5.corridor', { meters: corridorMeters })}
           </label>
           <input
             id="corridor-slider"
@@ -1999,20 +2005,18 @@ function App() {
             value={corridorMeters}
             onChange={(e) => setCorridorMeters(Number(e.target.value))}
           />
-          {!searchDone && <p className="muted">Na het zoeken bij stap 4 verschijnen hier de POI's.</p>}
+          {!searchDone && <p className="muted">{t('stap5.naZoeken')}</p>}
           {searchDone && mapPois.length === 0 && (
-            <p className="muted">
-              {alleenEigen
-                ? "Geen eigen POI's gevonden."
-                : "Geen POI's gevonden. Kies andere categorieën bij stap 3."}
-            </p>
+            <p className="muted">{alleenEigen ? t('stap5.geenEigen') : t('stap5.geenPois')}</p>
           )}
           {searchDone && mapPois.length > 0 && (
             <>
               <p>
-                <strong>{meldPois.length}</strong> van {mapPois.length} POI's doen mee
-                {gekozenCount > 0 ? ` (waarvan ${gekozenCount} zelf gekozen)` : ''}
-                {nietOpgenomen.length > 0 ? `; ${nietOpgenomen.length - gekozenCount} niet opgenomen.` : '.'}
+                {tr('stap5.doenMee', { mee: meldPois.length, aantal: mapPois.length })}
+                {gekozenCount > 0 ? t('stap5.waarvanGekozen', { aantal: gekozenCount }) : ''}
+                {nietOpgenomen.length > 0
+                  ? t('stap5.nietOpgenomenAantal', { aantal: nietOpgenomen.length - gekozenCount })
+                  : '.'}
               </p>
               <ul className="poi-list">
                 {meldPois.map((poi) => (
@@ -2024,14 +2028,14 @@ function App() {
                         ({poi.categoryLabel},{' '}
                         {Number.isFinite(poi.distanceToRoute)
                           ? `${Math.round(poi.distanceToRoute)} m`
-                          : 'afstand onbekend'}
+                          : t('alg.afstandOnbekend')}
                         {poi.zelfGekozen
                           ? poi.inCorridor && poi.eigen && poi.distanceToRoute > corridorMeters
-                            ? ', buiten de corridor: bij de POI zelf en bij de route'
-                            : ', zelf gekozen'
+                            ? t('stap5.ookBijRouteRegel')
+                            : t('stap5.zelfGekozen')
                           : poi.alleenBijPoi
-                            ? ', buiten de corridor: alleen bij de POI zelf'
-                            : !poi.eigen && !poi.wikipediaUrl && ', geen artikel'}
+                            ? t('stap5.alleenBijPoi')
+                            : !poi.eigen && !poi.wikipediaUrl && t('stap5.geenArtikel')}
                         )
                       </span>
                       {/* Eigen POI buiten de corridor (0.22.3, V1): ook bij de
@@ -2046,7 +2050,7 @@ function App() {
                               checked={poi.zelfGekozen}
                               onChange={() => wisselGekozen(poi.id)}
                             />{' '}
-                            ook bij de route melden
+                            {t('stap5.ookBijRoute')}
                           </label>
                         )}
                     </span>
@@ -2062,17 +2066,15 @@ function App() {
                     aria-expanded={toonNietOpgenomen}
                     onClick={() => setToonNietOpgenomen((v) => !v)}
                   >
-                    <span aria-hidden="true">{toonNietOpgenomen ? '▾' : '▸'}</span> Niet opgenomen (
-                    {nietOpgenomen.length}
-                    {gekozenCount > 0 ? `, ${gekozenCount} aangevinkt` : ''})
+                    <span aria-hidden="true">{toonNietOpgenomen ? '▾' : '▸'}</span>{' '}
+                    {t('stap5.nietOpgenomen', {
+                      aantal: nietOpgenomen.length,
+                      aangevinkt: gekozenCount > 0 ? t('stap5.aangevinkt', { aantal: gekozenCount }) : '',
+                    })}
                   </button>
                   {toonNietOpgenomen && (
                     <>
-                      <p className="muted">
-                        Vink een POI aan om hem toch mee te nemen. Onderweg wordt hij voorgelezen bij het
-                        dichtstbijzijnde punt van de route; ligt hij verder dan 300 m weg, dan noemt de
-                        aankondiging de afstand.
-                      </p>
+                      <p className="muted">{t('stap5.nietOpgenomenUitleg')}</p>
                       <ul className="poi-list niet-opgenomen-lijst">
                         {nietOpgenomen.map((poi) => (
                           <li key={poi.id} className={poi.zelfGekozen ? '' : 'is-out'}>
@@ -2089,7 +2091,7 @@ function App() {
                                   ({poi.categoryLabel},{' '}
                                   {Number.isFinite(poi.distanceToRoute)
                                     ? `${Math.round(poi.distanceToRoute)} m`
-                                    : 'afstand onbekend'}
+                                    : t('alg.afstandOnbekend')}
                                   , {redenNietOpgenomen(poi)})
                                 </span>
                               </span>
@@ -2106,7 +2108,7 @@ function App() {
                           if (kop && kop.scrollIntoView) kop.scrollIntoView({ block: 'nearest' })
                         }}
                       >
-                        Inklappen
+                        {t('stap5.inklappen')}
                       </button>
                     </>
                   )}
@@ -2118,57 +2120,45 @@ function App() {
 
         <Step
           number={6}
-          title="Samenvattingen"
+          title={t('stap6.titel')}
           disabled={!searchDone || alleenEigen}
-          hint={
-            alleenEigen
-              ? "Niet nodig: eigen POI's hebben hun eigen beschrijving."
-              : "Zoek eerst POI's bij stap 4."
-          }
+          hint={alleenEigen ? t('stap6.nietNodig') : t('alg.eerstZoeken')}
         >
           <p>
-            <strong>{summaryFoundCount}</strong> van {corridorPois.length} POI's binnen de corridor
-            hebben een Wikipedia-samenvatting
-            {wikidataZinCount > 0 ? `; ${wikidataZinCount} kregen een zin uit Wikidata.` : '.'}
+            {tr('stap6.gevonden', { gevonden: summaryFoundCount, aantal: corridorPois.length })}
+            {wikidataZinCount > 0 ? t('stap6.zinUitWikidata', { aantal: wikidataZinCount }) : '.'}
           </p>
           {viaLiggingCount > 0 && viaLiggingPerTaal.length === 1 && (
             <p className="muted">
-              {viaLiggingCount === 1 ? '1 artikel' : `${viaLiggingCount} artikelen`} in het{' '}
-              {taalNaam(viaLiggingPerTaal[0].taal)} gevonden via de ligging (Wikidata had er geen in die taal).
+              {t('stap6.liggingEen', { aantal: viaLiggingCount, taal: taalNaam(viaLiggingPerTaal[0].taal) })}
             </p>
           )}
           {viaLiggingPerTaal.length > 1 && (
             <p className="muted">
-              {viaLiggingCount} artikelen gevonden via de ligging:{' '}
-              {viaLiggingPerTaal.map((v) => `${v.aantal} in het ${taalNaam(v.taal)}`).join(', ')} (Wikidata had
-              er geen in die talen).
+              {t('stap6.liggingMeer', {
+                aantal: viaLiggingCount,
+                lijst: viaLiggingPerTaal
+                  .map((v) => t('stap6.liggingTaal', { aantal: v.aantal, taal: taalNaam(v.taal) }))
+                  .join(', '),
+              })}
             </p>
           )}
           {eigenInCorridorCount > 0 && (
-            <p className="muted">
-              {eigenInCorridorCount} eigen POI's gebruiken hun eigen beschrijving (zonder beschrijving: alleen
-              de naam).
-            </p>
+            <p className="muted">{t('stap6.eigen', { aantal: eigenInCorridorCount })}</p>
           )}
-          <p className="muted">
-            Optioneel: bij opslaan (stap 7) worden ontbrekende samenvattingen automatisch opgehaald.
-          </p>
+          <p className="muted">{t('stap6.optioneel')}</p>
           <label className="toggle-row">
             <input type="checkbox" checked={ookZonderTekst} onChange={() => setOokZonderTekst((v) => !v)} />
             <span>
-              Ook POI's zonder tekst melden
+              {t('stap6.zonderTekst')}
               <br />
-              <span className="muted">
-                Zonder Wikipedia-samenvatting of zin uit Wikidata wordt alleen de naam (of een korte omschrijving)
-                voorgelezen.
-              </span>
+              <span className="muted">{t('stap6.zonderTekstUitleg')}</span>
             </span>
           </label>
           {zonderTekstCount > 0 && !ookZonderTekst && (
             <p className="muted">
-              {zonderTekstCount === 1 ? "1 POI zonder tekst doet" : `${zonderTekstCount} POI's zonder tekst doen`} niet
-              mee in Onderweg en de export
-              {summaryMissingPois.length > 0 ? '; na het ophalen kan dat nog veranderen.' : '.'}
+              {t('stap6.zonderTekstAantal', { aantal: zonderTekstCount })}
+              {summaryMissingPois.length > 0 ? t('stap6.naOphalen') : '.'}
             </p>
           )}
           <button
@@ -2178,10 +2168,10 @@ function App() {
             disabled={summaryLoading || summaryMissingPois.length === 0}
           >
             {summaryLoading
-              ? 'Bezig met ophalen…'
+              ? t('stap6.bezig')
               : summaryMissingPois.length > 0
-                ? `Samenvattingen ophalen (${summaryMissingPois.length})`
-                : 'Alles opgehaald'}
+                ? t('stap6.ophalen', { aantal: summaryMissingPois.length })
+                : t('stap6.allesOpgehaald')}
           </button>
           {summaryError && <p className="error">{summaryError}</p>}
           {corridorPois.some((p) => p.id in summariesById) && (
@@ -2191,9 +2181,8 @@ function App() {
                 .map((poi) => {
                   const entry = summariesById[poi.id]
                   const fotoUrl = fotoUrlVan(entry)
-                  const fotoBron = window.WikiPoiCommonsFoto
-                    ? window.WikiPoiCommonsFoto.bronTekst(entry.foto)
-                    : null
+                  const fotoMaker = entry.foto ? [entry.foto.maker, entry.foto.licentie].filter(Boolean) : []
+                  const fotoBron = fotoMaker.length > 0 ? t('stap6.foto', { bron: fotoMaker.join(', ') }) : null
                   return (
                     <li key={poi.id}>
                       {fotoUrl && <img src={fotoUrl} alt="" />}
@@ -2202,24 +2191,23 @@ function App() {
                         {poi.label}
                       </span>
                       {poi.naamWikidata && !entry.viaLigging && (
-                        <p className="summary-text muted">
-                          Naam uit het artikel; in Wikidata: „{poi.naamWikidata}”.
-                        </p>
+                        <p className="summary-text muted">{t('stap6.naamUitArtikel', { naam: poi.naamWikidata })}</p>
                       )}
                       {entry.summary && entry.summary.viaWikidata ? (
                         <p className="summary-text">
-                          <span className="muted">Geen artikel. Samengesteld uit Wikidata: </span>
+                          <span className="muted">{t('stap6.samengesteld')} </span>
                           „{entry.summary.extractShort}”
                         </p>
                       ) : entry.summary ? (
                         <>
                           {entry.viaLigging && (
                             <p className="summary-text muted">
-                              Gevonden via de ligging
-                              {poi.naamWikidata && poi.naamWikidata !== poi.label
-                                ? `; in Wikidata: „${poi.naamWikidata}”`
-                                : ''}
-                              .
+                              {t('stap6.viaLigging', {
+                                wikidata:
+                                  poi.naamWikidata && poi.naamWikidata !== poi.label
+                                    ? t('stap6.inWikidata', { naam: poi.naamWikidata })
+                                    : '',
+                              })}
                             </p>
                           )}
                           <p className="summary-text">{entry.summary.extractShort}</p>
@@ -2229,17 +2217,17 @@ function App() {
                         </>
                       ) : !poi.wikipediaUrl ? (
                         <p className="summary-text muted">
-                          Geen Wikipedia-artikel.{' '}
+                          {t('stap6.geenArtikel')}{' '}
                           {!meldtMee(poi)
-                            ? 'Geen tekst: doet niet mee.'
+                            ? t('stap6.geenTekstNietMee')
                             : poi.description
-                            ? `De CSV gebruikt de omschrijving: „${poi.description}”.`
-                            : 'Er is ook geen omschrijving; alleen de naam gaat mee.'}
+                            ? t('stap6.omschrijving', { tekst: poi.description })
+                            : t('stap6.geenOmschrijving')}
                         </p>
                       ) : (
                         <p className="summary-text muted">
-                          Geen samenvatting ({entry.summaryError || 'onbekende reden'})
-                          {meldtMee(poi) ? '; de CSV gebruikt de Wikidata-omschrijving.' : '; geen tekst: doet niet mee.'}
+                          {t('stap6.geenSamenvatting', { reden: entry.summaryError || t('stap6.onbekendeReden') })}
+                          {meldtMee(poi) ? t('stap6.wikidataOmschrijving') : t('stap6.geenTekstPuntKomma')}
                         </p>
                       )}
                       {fotoUrl && fotoBron && <p className="summary-text muted foto-bron">{fotoBron}</p>}
@@ -2250,9 +2238,9 @@ function App() {
           )}
         </Step>
 
-        <Step number={7} title="Exporteren" disabled={!searchDone} hint="Zoek eerst POI's bij stap 4.">
+        <Step number={7} title={t('stap7.titel')} disabled={!searchDone} hint={t('alg.eerstZoeken')}>
           <label htmlFor="route-name" className="field-label">
-            Routenaam (categorie in EuroPoi)
+            {t('stap7.routenaam')}
           </label>
           <input
             id="route-name"
@@ -2263,25 +2251,18 @@ function App() {
           />
           {routeNameDiffers && (
             <div style={{ marginBottom: '14px' }}>
-              <p className="muted">
-                Let op: deze naam wijkt af van de GPX-bestandsnaam "{fileRouteName}". In EuroPoi
-                koppelt de categorie de POI's aan de route met dezelfde naam; bij een andere naam
-                worden ze niet aan deze route gekoppeld.
-              </p>
+              <p className="muted">{t('stap7.naamWijktAf', { naam: fileRouteName })}</p>
               <button
                 type="button"
                 className="btn btn-indigo btn-small"
                 onClick={() => setRouteName(fileRouteName)}
               >
-                Bestandsnaam gebruiken
+                {t('stap7.bestandsnaam')}
               </button>
             </div>
           )}
           {summaryMissingPois.length > 0 && (
-            <p className="muted">
-              Voor {summaryMissingPois.length} POI's wordt de samenvatting bij opslaan eerst
-              opgehaald.
-            </p>
+            <p className="muted">{t('stap7.eerstOphalen', { aantal: summaryMissingPois.length })}</p>
           )}
           <button
             type="button"
@@ -2290,10 +2271,10 @@ function App() {
             disabled={corridorPois.length === 0 || summaryLoading}
           >
             {summaryLoading
-              ? 'Samenvattingen ophalen…'
+              ? t('stap7.ophalen')
               : isNative
-                ? `CSV delen of opslaan (${corridorPois.length} POI's)`
-                : `CSV opslaan (${corridorPois.length} POI's)`}
+                ? t('stap7.delen', { aantal: corridorPois.length })
+                : t('stap7.opslaan', { aantal: corridorPois.length })}
           </button>
           {exportMessage && <p className="success">{exportMessage}</p>}
           {exportError && <p className="error">{exportError}</p>}
@@ -2301,9 +2282,9 @@ function App() {
 
         <Step
           number={8}
-          title="Onderweg"
+          title={t('stap8.titel')}
           disabled={corridorPois.length === 0}
-          hint="Zoek eerst POI's bij stap 4; er moet minstens één POI binnen de corridor liggen."
+          hint={t('stap8.hint')}
         >
           <Onderweg
             pois={meldPois}

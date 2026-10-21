@@ -64,6 +64,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { CATEGORY_STYLES, getCategoryStyle, markerHtml } from './poi-icons.js'
+import { t } from '../vertaal.js'
 
 const MAP_TILES = {
   osm: {
@@ -187,7 +188,7 @@ function RouteMap({
     const labelByKey = new Map()
     ;(pois || []).forEach((p) => {
       const key = p.categoryKey || null
-      if (!labelByKey.has(key)) labelByKey.set(key, p.categoryLabel || 'Onbekende categorie')
+      if (!labelByKey.has(key)) labelByKey.set(key, p.categoryLabel || t('alg.onbekendeCategorie'))
     })
     const order = Object.keys(CATEGORY_STYLES)
     const rank = (key) => {
@@ -412,9 +413,6 @@ function RouteMap({
         popupAnchor: [0, -size / 2],
       })
 
-      const distanceText = Number.isFinite(p.distanceToRoute)
-        ? `${Math.round(p.distanceToRoute)} m van de route`
-        : 'Geen route geladen'
       const categoryText = p.categoryLabel ? `${escapeHtml(p.categoryLabel)}<br>` : ''
       L.marker([p.lat, p.lng], {
         icon,
@@ -422,9 +420,13 @@ function RouteMap({
         // POI's binnen de corridor bovenop de vervaagde exemplaren.
         zIndexOffset: p.inCorridor ? 1000 : 0,
       })
-        .bindPopup(
-          `<strong>${escapeHtml(p.label || '(zonder naam)')}</strong><br>${categoryText}${distanceText}`
-        )
+        // Tekst pas bij het openen, in de taal van de bediening (0.23.0).
+        .bindPopup(() => {
+          const distanceText = Number.isFinite(p.distanceToRoute)
+            ? t('kaart.vanRoute', { meters: Math.round(p.distanceToRoute) })
+            : t('kaart.geenRoute')
+          return `<strong>${escapeHtml(p.label || t('alg.zonderNaam'))}</strong><br>${categoryText}${distanceText}`
+        })
         .addTo(layer)
     })
   }, [pois])
@@ -516,7 +518,7 @@ function RouteMap({
             cursor: 'pointer',
           }}
         >
-          Volg mij
+          {t('kaart.volgMij')}
         </button>
       )}
 
@@ -556,7 +558,7 @@ function RouteMap({
               textAlign: 'left',
             }}
           >
-            {legendOpen ? 'Legenda ▾' : 'Legenda ▸'}
+            {legendOpen ? `${t('kaart.legenda')} ▾` : `${t('kaart.legenda')} ▸`}
           </button>
           {legendOpen && (
             <ul style={{ listStyle: 'none', margin: 0, padding: '0 10px 6px' }}>

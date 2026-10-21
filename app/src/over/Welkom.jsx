@@ -5,6 +5,8 @@
  * app heen, met één knop "Begrepen". Wanneer hij verschijnt: welkom.js.
  */
 import { createPortal } from 'react-dom'
+import { t } from '../vertaal.js'
+import { tr } from '../rijk.jsx'
 import './Over.css'
 
 function Welkom({ onBegrepen }) {
@@ -12,34 +14,19 @@ function Welkom({ onBegrepen }) {
     <div className="over-achtergrond" role="dialog" aria-modal="true" aria-labelledby="welkom-titel">
       <div className="over-venster">
         <h2 id="welkom-titel" className="over-titel">
-          Welkom bij WikiPoi
+          {t('welkom.titel')}
         </h2>
-        <p>WikiPoi zoekt bezienswaardigheden langs je route en leest ze onderweg voor.</p>
+        <p>{t('welkom.intro')}</p>
         <ul className="over-lijst">
-          <li>
-            <strong>Let op het verkeer.</strong> Kijk onderweg niet naar het scherm: WikiPoi is gemaakt om
-            te luisteren.
-          </li>
-          <li>
-            <strong>Eco-scherm:</strong> een zwart scherm dat de accu spaart en alleen bij een POI iets toont.{' '}
-            <strong>1× tikken</strong> = fietsbel, <strong>3× snel tikken</strong> = terug naar het gewone
-            scherm.
-          </li>
-          <li>
-            <strong>Locatie:</strong> blijft op je telefoon. Je route, track en logboek gaan alleen weg als je
-            zelf op "Delen" tikt.
-          </li>
-          <li>
-            <strong>Internet</strong> is nodig voor het zoeken en de samenvattingen (Wikidata, Wikipedia,
-            OpenStreetMap).
-          </li>
-          <li>
-            <strong>Bèta:</strong> de teksten komen uit Wikipedia en kunnen fouten bevatten.
-          </li>
+          <li>{tr('welkom.verkeer')}</li>
+          <li>{tr('welkom.eco')}</li>
+          <li>{tr('welkom.locatie')}</li>
+          <li>{tr('welkom.internet')}</li>
+          <li>{tr('welkom.beta')}</li>
         </ul>
-        <p className="over-klein">Meer, zoals licentie en bronnen: tik op ⓘ rechtsboven.</p>
+        <p className="over-klein">{t('welkom.meer')}</p>
         <button type="button" className="btn btn-green btn-wide" onClick={onBegrepen}>
-          Begrepen
+          {t('welkom.begrepen')}
         </button>
       </div>
     </div>,

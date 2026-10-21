@@ -1,7 +1,7 @@
 /**
  * test-instellingen.js
  *
- * Netwerkloze tests voor instellingen.js (0.22.0).
+ * Netwerkloze tests voor instellingen.js (0.22.0; taal sinds 0.23.0).
  * Uitvoeren: node src/test-instellingen.js (vanuit app/)
  */
 import assert from 'node:assert'
@@ -15,6 +15,7 @@ import {
   kmTekst,
 } from './instellingen.js'
 import { grensMeters, EIGEN_MAX_METERS } from './zoekbron.js'
+import { zetTaal } from './vertaal.js'
 
 let geslaagd = 0
 function test(naam, fn) {
@@ -44,7 +45,7 @@ const kapot = {
   },
 }
 
-test('standaard: 2 km, zonder tekst uit, 250 m, fietser, 10 s, update aan', () => {
+test('standaard: 2 km, zonder tekst uit, 250 m, fietser, 10 s, update aan, taal automatisch', () => {
   assert.deepStrictEqual(leesInstellingen(nepOpslag()), {
     eigenMaxM: 2000,
     ookZonderTekst: false,
@@ -52,13 +53,14 @@ test('standaard: 2 km, zonder tekst uit, 250 m, fietser, 10 s, update aan', () =
     vervoer: 'fietser',
     keuzeS: 10,
     updateAuto: true,
+    taal: 'auto',
   })
   assert.strictEqual(STANDAARD_INSTELLINGEN.eigenMaxM, EIGEN_MAX_METERS)
 })
 
 test('bewaren en teruglezen', () => {
   const o = nepOpslag()
-  const inst = { eigenMaxM: 1000, ookZonderTekst: true, corridorM: 150, vervoer: 'wandelaar', keuzeS: 15, updateAuto: false }
+  const inst = { eigenMaxM: 1000, ookZonderTekst: true, corridorM: 150, vervoer: 'wandelaar', keuzeS: 15, updateAuto: false, taal: 'en' }
   assert.deepStrictEqual(bewaarInstellingen(inst, o), inst)
   assert.deepStrictEqual(leesInstellingen(o), inst)
   assert.ok(o.d[INSTELLINGEN_SLEUTEL].includes('"eigenMaxM":1000'))
@@ -70,6 +72,11 @@ test('ongeldige waarden vallen per veld terug op de standaard', () => {
   assert.strictEqual(normaliseer({ corridorM: 25 }).corridorM, 250)
   assert.strictEqual(normaliseer({ corridorM: 525 }).corridorM, 250)
   assert.strictEqual(normaliseer({ corridorM: 500 }).corridorM, 500)
+})
+
+test('taal: auto, nl, en, de, fr; iets anders → auto', () => {
+  for (const taal of ['auto', 'nl', 'en', 'de', 'fr']) assert.strictEqual(normaliseer({ taal }).taal, taal)
+  for (const taal of ['es', 'NL', '', null, 3]) assert.strictEqual(normaliseer({ taal }).taal, 'auto')
 })
 
 test('kapotte JSON of opslag zonder toegang → standaard', () => {
@@ -90,6 +97,9 @@ test('standaardwaarden terugzetten wist de sleutel', () => {
 
 test('kmTekst: 0,5 km / 1 km / 2 km / 5 km', () => {
   assert.deepStrictEqual([500, 1000, 2000, 5000].map(kmTekst), ['0,5 km', '1 km', '2 km', '5 km'])
+  zetTaal('en')
+  assert.strictEqual(kmTekst(500), '0.5 km')
+  zetTaal('nl')
 })
 
 test('grensMeters volgt de ingestelde grens eigen POI\'s', () => {

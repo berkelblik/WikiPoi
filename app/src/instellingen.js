@@ -17,8 +17,11 @@
  *   vervoer        Standaard vervoerwijze stap 8 (B4)
  *   keuzeS         Afteltijd keuzevenster (B5): 5/10/15/20 s
  *   updateAuto     Automatisch op updates controleren (D3)
+ *   taal           Taal van de bediening (0.23.0, onderwerp 6, B1): 'auto'
+ *                  (telefoon) of 'nl'/'en'/'de'/'fr'
  */
 import { EIGEN_MAX_METERS } from './zoekbron.js'
+import { TAAL_INSTELLINGEN, getal } from './vertaal.js'
 
 export const INSTELLINGEN_SLEUTEL = 'wikipoi.instellingen'
 
@@ -39,6 +42,7 @@ export const STANDAARD_INSTELLINGEN = Object.freeze({
   vervoer: 'fietser',
   keuzeS: 10,
   updateAuto: true,
+  taal: 'auto',
 })
 
 function standaardOpslag() {
@@ -69,6 +73,7 @@ export function normaliseer(ruw) {
     vervoer: VERVOER_KEUZES.includes(r.vervoer) ? r.vervoer : s.vervoer,
     keuzeS: KEUZE_S_KEUZES.includes(r.keuzeS) ? r.keuzeS : s.keuzeS,
     updateAuto: typeof r.updateAuto === 'boolean' ? r.updateAuto : s.updateAuto,
+    taal: TAAL_INSTELLINGEN.includes(r.taal) ? r.taal : s.taal,
   }
 }
 
@@ -102,7 +107,7 @@ export function standaardTerug(opslag = standaardOpslag()) {
   return normaliseer(null)
 }
 
-/** 500 → "0,5 km", 2000 → "2 km". */
+/** 500 → "0,5 km" (Engels: "0.5 km"), 2000 → "2 km". */
 export function kmTekst(meters) {
-  return `${String(meters / 1000).replace('.', ',')} km`
+  return `${getal(meters / 1000)} km`
 }

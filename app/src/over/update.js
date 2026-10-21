@@ -125,7 +125,7 @@ export function bewaarLaatste(ms, opslag = standaardOpslag()) {
  * { soort: 'fout', tekst } bij geen verbinding of een fout van GitHub.
  */
 export async function controleer(eigenVersie, { fetchFn = globalThis.fetch, timeoutMs = TIMEOUT_MS } = {}) {
-  if (typeof fetchFn !== 'function') return { soort: 'fout', tekst: 'geen verbinding mogelijk' }
+  if (typeof fetchFn !== 'function') return { soort: 'fout', tekst: 'geen verbinding mogelijk', code: 'geenFetch' }
   const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null
   const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null
   try {
@@ -135,14 +135,18 @@ export async function controleer(eigenVersie, { fetchFn = globalThis.fetch, time
     })
     if (!resp || !resp.ok) {
       const status = resp ? resp.status : '?'
+      const wachten = status === 403 || status === 429
       return {
         soort: 'fout',
-        tekst: status === 403 || status === 429 ? 'GitHub vraagt even te wachten' : `GitHub gaf fout ${status}`,
+        tekst: wachten ? 'GitHub vraagt even te wachten' : `GitHub gaf fout ${status}`,
+        // Voor de vertaling (0.23.0): inst.update.reden.<code>.
+        code: wachten ? 'wachten' : 'status',
+        status,
       }
     }
     return beoordeel(await resp.json(), eigenVersie)
   } catch {
-    return { soort: 'fout', tekst: 'geen verbinding met GitHub' }
+    return { soort: 'fout', tekst: 'geen verbinding met GitHub', code: 'verbinding' }
   } finally {
     if (timer) clearTimeout(timer)
   }
