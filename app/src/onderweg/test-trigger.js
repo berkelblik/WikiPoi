@@ -8,7 +8,15 @@
  * Uitvoeren vanuit app/:  node src/onderweg/test-trigger.js
  */
 import assert from 'node:assert'
-import { alleenBijPoi, poiStraal, triggerAfstand, poiTotRoute, triggerTekst } from './trigger.js'
+import {
+  alleenBijPoi,
+  groteCirkel,
+  poiStraal,
+  triggerAfstand,
+  triggerStraalVan,
+  poiTotRoute,
+  triggerTekst,
+} from './trigger.js'
 
 let geslaagd = 0
 function test(naam, fn) {
@@ -97,6 +105,43 @@ test('triggerAfstand: alleen bij de POI → routepunt telt niet mee', () => {
   assert.strictEqual(
     triggerTekst(p, 'lijst'),
     'Twentekanaal (4 m tot POI, 857 m tot routepunt, straal 100 m, lijst, alleen bij POI)'
+  )
+})
+
+test('Grote cirkel (0.23.1): zelf gekozen → straal = afstand tot route + vervoerwijze', () => {
+  const gekozen = { ...POI, distanceToRoute: 880, zelfGekozen: true }
+  assert.strictEqual(groteCirkel(gekozen), true)
+  assert.deepStrictEqual(triggerStraalVan(gekozen, 100), { straal: 980, soort: 'route' })
+  assert.deepStrictEqual(triggerStraalVan(gekozen, 30), { straal: 910, soort: 'route' })
+  // Grotere radius uit de CSV gaat voor.
+  assert.deepStrictEqual(triggerStraalVan({ ...gekozen, radius: 1200 }, 100), { straal: 1200, soort: 'csv' })
+  // Niet zelf gekozen of alleen bij de POI: gewone straal.
+  assert.strictEqual(groteCirkel({ ...POI, distanceToRoute: 880 }), false)
+  assert.strictEqual(groteCirkel({ ...gekozen, alleenBijPoi: true }), false)
+  assert.deepStrictEqual(triggerStraalVan({ ...POI, distanceToRoute: 880 }, 100), { straal: 100, soort: 'vervoer' })
+  assert.deepStrictEqual(triggerStraalVan({ radius: 200 }, 100), { straal: 200, soort: 'csv' })
+  // Afstand tot de route onbekend: geen grote cirkel.
+  assert.strictEqual(groteCirkel({ zelfGekozen: true, lat: 1, lng: 2 }), false)
+})
+
+test('Grote cirkel: alleen tot de POI meten; tussen route en POI binnen de straal', () => {
+  const gekozen = { ...POI, distanceToRoute: 890, zelfGekozen: true }
+  // Halverwege route en POI (≈ 445 m van beide).
+  const tussen = triggerAfstand({ lat: 52.164, lng: 6.29 }, gekozen)
+  assert.strictEqual(tussen.via, 'poi')
+  assert.ok(tussen.afstand < triggerStraalVan(gekozen, 100).straal)
+  // Op het routepunt: 890 m tot de POI, binnen 990 m.
+  const opRoute = triggerAfstand({ lat: 52.168, lng: 6.29 }, gekozen)
+  assert.strictEqual(opRoute.via, 'poi')
+  assert.ok(dichtbij(opRoute.afstand, 890, 5))
+  assert.ok(dichtbij(opRoute.totRoutepunt, 0))
+  // 50 m aan de andere kant van de route: nog binnen.
+  const overkant = triggerAfstand({ lat: 52.16845, lng: 6.29 }, gekozen)
+  assert.ok(overkant.afstand < 990, overkant.afstand)
+  const p = { label: 'Cammock', afstandPoi: 975, afstandRoutepunt: 412, straal: 990, straalSoort: 'route', zelfGekozen: true }
+  assert.strictEqual(
+    triggerTekst(p, 'lijst'),
+    'Cammock (975 m tot POI, 412 m tot routepunt, straal 990 m (route), lijst, zelf gekozen)'
   )
 })
 

@@ -19,6 +19,15 @@
  *    EuroPoi). Zelf aangevinkt bij stap 5 (0.19.4) of binnen de corridor:
  *    ook bij het routepunt (testrit 19-10: Cammock en Twentekanaal, 860–910 m
  *    van de route, kondigden zich aan bij het routepunt).
+ *
+ * Grote cirkel (0.23.1, keuzes R1 + S1): een zelf gekozen POI (aangevinkt
+ *    bij "Niet opgenomen" of met "ook bij de route melden") krijgt één
+ *    cirkel om de POI zelf, met straal = afstand tot de route + straal van
+ *    de vervoerwijze. Die cirkel overlapt de route bij het dichtstbijzijnde
+ *    punt, zodat de POI ook triggert als je tussen route en POI rijdt of
+ *    iets van de route afwijkt (testrit 21-10). Er wordt dan alleen tot de
+ *    POI gemeten; het triggerpunt op de route vervalt. Een grotere radius
+ *    uit de CSV gaat voor.
  */
 import { afstand } from './geo.js'
 
@@ -26,6 +35,28 @@ import { afstand } from './geo.js'
 export function poiStraal(poi, vervoerStraal) {
   const r = poi && Number(poi.radius)
   return Number.isFinite(r) && r > 0 ? r : vervoerStraal
+}
+
+/**
+ * Krijgt deze POI de grote cirkel om de POI (0.23.1)? Zelf gekozen, niet
+ * "alleen bij de POI", en de afstand tot de route is bekend.
+ */
+export function groteCirkel(poi) {
+  return Boolean(poi && poi.zelfGekozen && !poi.alleenBijPoi && Number.isFinite(poiTotRoute(poi)))
+}
+
+/**
+ * Triggerstraal van een POI met de herkomst:
+ *   { straal, soort }  soort = 'route' (grote cirkel, 0.23.1), 'csv'
+ *   (radius uit de CSV) of 'vervoer' (straal van de vervoerwijze).
+ */
+export function triggerStraalVan(poi, vervoerStraal) {
+  const basis = poiStraal(poi, vervoerStraal)
+  if (groteCirkel(poi)) {
+    const r = Math.round(poiTotRoute(poi) + vervoerStraal)
+    if (r > basis) return { straal: r, soort: 'route' }
+  }
+  return { straal: basis, soort: basis !== vervoerStraal ? 'csv' : 'vervoer' }
 }
 
 /**
@@ -56,8 +87,9 @@ export function triggerAfstand(positie, poi) {
   const totPoi = afstand(positie, poi)
   const sp = poi && poi.snapPoint
   const totRoutepunt = sp && Number.isFinite(sp.lat) && Number.isFinite(sp.lng) ? afstand(positie, sp) : null
-  // Alleen bij de POI zelf (0.19.5): routepunt wel noemen (logboek), niet gebruiken.
-  if (poi && poi.alleenBijPoi) {
+  // Alleen bij de POI zelf (0.19.5) of grote cirkel om de POI (0.23.1):
+  // routepunt wel noemen (logboek), niet gebruiken.
+  if (poi && (poi.alleenBijPoi || groteCirkel(poi))) {
     return { afstand: totPoi, totPoi, totRoutepunt, via: 'poi' }
   }
   if (totRoutepunt === null || !Number.isFinite(totRoutepunt)) {
@@ -90,7 +122,8 @@ export function triggerTekst(p, soort) {
   if (Number.isFinite(p.afstandRoutepunt)) delen.push(`${m(p.afstandRoutepunt)} tot routepunt`)
   const route = poiTotRoute(p)
   if (Number.isFinite(route)) delen.push(`POI ${m(route)} van de route`)
-  delen.push(`straal ${m(p.straal)}${p.eigenStraal ? ' (CSV)' : ''}`)
+  const herkomst = p.straalSoort === 'route' ? ' (route)' : p.eigenStraal ? ' (CSV)' : ''
+  delen.push(`straal ${m(p.straal)}${herkomst}`)
   if (soort) delen.push(soort)
   if (p.zelfGekozen) delen.push('zelf gekozen')
   if (p.alleenBijPoi) delen.push('alleen bij POI')

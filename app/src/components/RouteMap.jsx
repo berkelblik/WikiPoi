@@ -391,8 +391,9 @@ function RouteMap({
       const style = getCategoryStyle(p.categoryKey)
 
       // Geen lijn naar het routepunt bij POI's die alleen bij de POI zelf
-      // triggeren (0.19.5).
-      if (p.inCorridor && p.snapPoint && !p.alleenBijPoi) {
+      // triggeren (0.19.5) of zelf gekozen zijn (0.23.1, K1: grote cirkel
+      // om de POI in stap 8).
+      if (p.inCorridor && p.snapPoint && !p.alleenBijPoi && !p.zelfGekozen) {
         L.polyline(
           [
             [p.lat, p.lng],

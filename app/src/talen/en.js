@@ -190,8 +190,9 @@ export default {
     'stap5.nietOpgenomen': 'Not included ({aantal}{aangevinkt})',
     'stap5.aangevinkt': ', {aantal} ticked',
     'stap5.nietOpgenomenUitleg':
-      'Tick a POI to include it anyway. On the way it is read out at the nearest point of the route; if it ' +
-      'is more than 300 m away, the announcement mentions the distance.',
+      'Tick a POI to include it anyway. On the way it gets a circle that reaches across the route: it is ' +
+      'read out as you approach the nearest point of the route, also if you ride between the route and ' +
+      'the POI; if it is more than 300 m away, the announcement mentions the distance.',
     'stap5.inklappen': 'Collapse',
     'stap5.reden.buiten': 'outside the corridor',
     'stap5.reden.verder': 'further than {km}',

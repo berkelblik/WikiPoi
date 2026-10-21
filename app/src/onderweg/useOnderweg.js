@@ -92,7 +92,7 @@ import { afstandNoemen, audioOpening, voorleesDelen } from './voorleestekst.js'
 import { maakSimulatie, volgendeDoel, SIM_SNELHEID_KMU, SIM_VOORLOOP_M } from './simulatie.js'
 import { maakPositieFilter, MAX_SNELHEID_KMU, tellersTekst } from './positieFilter.js'
 import { track, segmentenVan } from './track.js'
-import { poiStraal, triggerAfstand, triggerTekst } from './trigger.js'
+import { groteCirkel, triggerAfstand, triggerStraalVan, triggerTekst } from './trigger.js'
 import { tIn } from '../vertaal.js'
 import {
   besluitBinnen,
@@ -665,14 +665,17 @@ export function useOnderweg(
     return pois
       .map((p) => {
         const t = triggerAfstand(positie, p)
-        const straal = poiStraal(p, vervoerStraal)
+        // Straal: CSV, vervoerwijze of grote cirkel om de POI (0.23.1).
+        const { straal, soort } = triggerStraalVan(p, vervoerStraal)
         return {
           ...p,
           afstandTriggerpunt: t.afstand,
           afstandPoi: t.totPoi,
           afstandRoutepunt: t.totRoutepunt,
           straal,
-          eigenStraal: straal !== vervoerStraal,
+          straalSoort: soort,
+          eigenStraal: soort === 'csv',
+          groteCirkel: groteCirkel(p),
           klok: rijrichting === null ? null : klokRichting(rijrichting, peiling(positie, p)),
         }
       })

@@ -56,7 +56,7 @@ import { Capacitor } from '@capacitor/core'
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem'
 import { Share } from '@capacitor/share'
 import { useOnderweg, VERVOER, STANDAARD_VERVOER, triggerStraal } from './useOnderweg.js'
-import { poiStraal } from './trigger.js'
+import { triggerStraalVan } from './trigger.js'
 import {
   track as trackOpslag,
   alsGpx,
@@ -234,11 +234,17 @@ function Onderweg({ pois, summariesById, routePunten, haalSamenvattingen, onRit,
   // Triggerstraal per POI voor de kaart: rond het triggerpunt op de route
   // en (T1, 0.19.1) ook rond de POI zelf als die er niet vlakbij ligt.
   // Alleen bij de POI zelf (0.19.5): alleen de cirkel om de POI.
+  // Zelf gekozen (0.23.1, K1): één grote cirkel om de POI die de route
+  // overlapt; geen cirkel op de route.
   const straalCirkels = useMemo(() => {
     const cirkels = []
     pois.forEach((p) => {
-      const straal = poiStraal(p, triggerStraal(vervoer))
+      const { straal, soort } = triggerStraalVan(p, triggerStraal(vervoer))
       const klaar = !!voorgelezen[p.id]
+      if (soort === 'route') {
+        cirkels.push({ id: p.id, lat: p.lat, lng: p.lng, straal, voorgelezen: klaar })
+        return
+      }
       const t = p.alleenBijPoi ? p : p.snapPoint || p
       cirkels.push({ id: p.id, lat: t.lat, lng: t.lng, straal, voorgelezen: klaar })
       if (!p.alleenBijPoi && p.snapPoint && afstand(p, p.snapPoint) > 10) {

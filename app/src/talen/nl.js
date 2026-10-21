@@ -191,8 +191,9 @@ export default {
     'stap5.nietOpgenomen': 'Niet opgenomen ({aantal}{aangevinkt})',
     'stap5.aangevinkt': ', {aantal} aangevinkt',
     'stap5.nietOpgenomenUitleg':
-      'Vink een POI aan om hem toch mee te nemen. Onderweg wordt hij voorgelezen bij het dichtstbijzijnde ' +
-      'punt van de route; ligt hij verder dan 300 m weg, dan noemt de aankondiging de afstand.',
+      'Vink een POI aan om hem toch mee te nemen. Onderweg krijgt hij een cirkel die tot over de route ' +
+      'reikt: hij wordt voorgelezen als je het dichtstbijzijnde punt van de route nadert, ook als je ' +
+      'tussen route en POI rijdt; ligt hij verder dan 300 m weg, dan noemt de aankondiging de afstand.',
     'stap5.inklappen': 'Inklappen',
     'stap5.reden.buiten': 'buiten de corridor',
     'stap5.reden.verder': 'verder dan {km}',
